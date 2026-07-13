@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from thpm import palette, ui
 from thpm import update as updater
+from thpm.cli import main
 from thpm.integrations import apply
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
@@ -200,6 +201,22 @@ class UiTests(Sandbox):
         self.assertIn('command: ["thpm", "--json", "update", "apply"]', qml)
         self.assertIn('text: "Restart shell"', qml)
 
+    def test_qml_is_a_multi_section_control_panel(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertIn('text: "THPM"', qml)
+        self.assertIn('text: "Overview"', qml)
+        self.assertIn('text: "Integrations"', qml)
+        self.assertIn('text: "Doctor"', qml)
+        self.assertIn('text: "System"', qml)
+
+    def test_qml_doctor_and_system_actions_use_json_cli(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertIn('command: ["thpm", "--json", "doctor"]', qml)
+        self.assertIn('command: ["thpm", "--json", "run"]', qml)
+        self.assertIn('command: ["thpm", "--json", "reconcile", "--refresh"]', qml)
+        self.assertIn("doctorInfo.errors || []", qml)
+        self.assertIn("doctorInfo.warnings || []", qml)
+
 
 class ServiceTests(Sandbox):
     def test_json_envelope_and_native_ownership(self):
@@ -234,6 +251,45 @@ class ServiceTests(Sandbox):
         plugin = next(item for item in Service(self.paths).state()["plugins"] if item["id"] == "hermes")
         self.assertTrue(plugin["available"])
         self.assertEqual(plugin["missing"], [])
+
+    def test_missing_optional_application_is_unavailable_not_unhealthy(self):
+        with patch("thpm.snapshot.shutil.which", return_value=None), patch("thpm.service.capabilities") as caps:
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            state = Service(self.paths).state()
+            doctor = Service(self.paths).doctor()
+        self.assertGreater(state["counts"]["unavailable"], 0)
+        self.assertEqual(state["counts"]["attention"], 0)
+        self.assertEqual(doctor["warnings"], [])
+        self.assertEqual(doctor["summary"], "1 errors, 0 warnings")
+
+    def test_theme_hook_preserves_event_context(self):
+        with patch("thpm.service.apply_enabled", return_value={"changed": [], "errors": []}):
+            payload = Service(self.paths).hook_run("theme-set", ["tokyo-night"])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["event"], "theme-set")
+        self.assertEqual(payload["eventArgs"], ["tokyo-night"])
+        self.assertEqual(payload["themeName"], "tokyo-night")
+        self.assertEqual(payload["summary"], "applied theme tokyo-night")
+
+    def test_unknown_hook_event_is_rejected_without_applying_integrations(self):
+        with patch("thpm.service.apply_enabled") as apply_plugins:
+            payload = Service(self.paths).hook_run("unknown", ["argument"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["event"], "unknown")
+        apply_plugins.assert_not_called()
+
+
+class CliTests(unittest.TestCase):
+    def test_hook_command_forwards_event_and_all_arguments(self):
+        response = {"ok": True, "summary": "applied theme tokyo-night"}
+        with patch("thpm.cli.Service") as service_type, patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            service_type.return_value.hook_run.return_value = response
+            exit_code = main(["--json", "hook-run", "theme-set", "tokyo-night", "dark"])
+        self.assertEqual(exit_code, 0)
+        service_type.return_value.hook_run.assert_called_once_with("theme-set", ["tokyo-night", "dark"])
+        self.assertEqual(json.loads(stdout.getvalue()), response)
 
 
 class IntegrationTests(Sandbox):

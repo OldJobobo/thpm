@@ -21,7 +21,7 @@ def build(paths: Paths, enabled: dict[str, bool]) -> list[PluginView]:
             enabled=enabled.get(plugin.id, plugin.default_enabled), available=available,
             commands=list(plugin.commands), missing=missing, themeAssets=assets,
             templates=list(plugin.templates),
-            warnings=[] if available else ["required application commands are unavailable"],
+            warnings=[],
             confirmationRequired=plugin.confirmation))
     result.extend(PluginView(id=p.id, label=p.label, category=p.category,
         description=p.description, kind=p.kind, ownership="native", enabled=True,

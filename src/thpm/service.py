@@ -121,9 +121,15 @@ class Service:
                 pass
         return envelope("uninstall", summary="THPM integration files removed", changed=changed, ui=ui_result, errors=[])
 
-    def hook_run(self, theme_name: str = "") -> dict[str, object]:
+    def hook_run(self, event: str, event_args: list[str] | tuple[str, ...] = ()) -> dict[str, object]:
+        if event != "theme-set":
+            return envelope("hook-run", False, summary=f"unsupported hook event: {event}",
+                event=event, eventArgs=list(event_args), errors=[{"message": "unsupported hook event"}])
         result = apply_enabled(self.paths, load(self.paths))
-        return envelope("hook-run", not result["errors"], summary=f"applied theme {theme_name}".strip(), **result)
+        theme_name = event_args[0] if event_args else ""
+        summary = f"applied theme {theme_name}" if theme_name else "applied active theme"
+        return envelope("hook-run", not result["errors"], summary=summary,
+            event=event, eventArgs=list(event_args), themeName=theme_name or None, **result)
 
     def run_theme(self) -> dict[str, object]:
         completed = run("theme", "refresh", check=False, timeout=180)

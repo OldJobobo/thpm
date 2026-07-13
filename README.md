@@ -44,7 +44,7 @@ thpm update apply
 thpm uninstall
 ```
 
-All commands accept `--json`. The GUI is available at **Omarchy Menu → Style → Theme Hook Plugins** after installation.
+All commands accept `--json`. The GUI is available at **Omarchy Menu → Style → Theme Hook Plugins** after installation. Its Omarchy-styled control panel has an overview dashboard and dedicated Integrations, Doctor, and System sections for toggling plugins, checking health, reapplying or reconciling the active theme, and managing updates.
 
 Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Omarchy-native integrations are shown read-only so ownership stays clear.
 

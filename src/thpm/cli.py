@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "install": payload = service.install(not args.no_ui)
         elif command == "uninstall": payload = service.uninstall()
         elif command == "migrate": payload = service.migrate()
-        elif command == "hook-run": payload = service.hook_run(args.event_args[0] if args.event_args else "")
+        elif command == "hook-run": payload = service.hook_run(args.event, args.event_args)
         elif command == "update":
             payload = service.update_apply() if args.update_command == "apply" else service.update_check(args.update_command == "check" and args.force)
         elif command == "ui":

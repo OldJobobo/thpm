@@ -6,7 +6,6 @@ import subprocess
 from pathlib import Path
 
 from .files import atomic_copy, atomic_text, remove_managed_block
-from .palette import load as load_palette
 from .paths import Paths
 from .registry import BY_ID, PLUGINS
 
@@ -62,7 +61,6 @@ def apply(plugin_id: str, paths: Paths) -> list[str]:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
     paths.current_theme.mkdir(parents=True, exist_ok=True)
-    load_palette(paths.current_theme / "colors.toml")
     changed: list[str] = []
     home, config = paths.home, paths.config_home
     generated = paths.current_theme / GENERATED.get(plugin_id, "")
@@ -92,9 +90,18 @@ def apply(plugin_id: str, paths: Paths) -> list[str]:
                 changed.append(str(target))
     elif plugin_id in {"discord", "discord-system24"}:
         source_names = ("vencord.theme.css", GENERATED.get(plugin_id, "")) if plugin_id == "discord" else ("vencord-system24.theme.css",)
-        for directory in (config / "Vencord/themes", config / "vesktop/themes", config / "Equicord/themes"):
+        directories = (
+            config / "Vencord/themes",
+            config / "vesktop/themes",
+            config / "Equicord/themes",
+            config / "equibop/themes",
+            home / ".var/app/com.discordapp.Discord/config/Vencord/themes",
+            home / ".var/app/dev.vencord.Vesktop/config/vesktop/themes",
+            home / ".var/app/io.github.equicord.equibop/config/equibop/themes",
+        )
+        for directory in directories:
             if directory.is_dir():
-                target = directory / "omarchy.theme.css"
+                target = directory / "vencord.theme.css"
                 if _copy_first(paths, source_names, target):
                     changed.append(str(target))
     elif plugin_id == "typora":

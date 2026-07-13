@@ -50,6 +50,9 @@ class Service:
         with mutation_lock(self.paths):
             enabled = load(self.paths)
             enabled[plugin_id] = value
+            conflict = {"discord": "discord-system24", "discord-system24": "discord"}.get(plugin_id)
+            if value and conflict:
+                enabled[conflict] = False
             save(self.paths, enabled)
             changed = reconcile_templates(self.paths, enabled)
         return envelope("plugin-enable" if value else "plugin-disable", summary=f"{plugin_id} {'enabled' if value else 'disabled'}", changed=changed, plugins=self.views(), errors=[])

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from thpm import palette, ui
+from thpm.integrations import apply
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
 from thpm.registry import PLUGINS
@@ -206,6 +207,28 @@ class ServiceTests(Sandbox):
         self.assertTrue(foreign.exists())
         self.assertFalse(owned.exists())
         self.assertFalse(self.paths.hook_file.exists())
+
+    def test_discord_plugins_remain_mutually_exclusive(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            Service(self.paths).set_enabled("discord", True)
+        state = load(self.paths)
+        self.assertTrue(state["discord"])
+        self.assertFalse(state["discord-system24"])
+
+
+class IntegrationTests(Sandbox):
+    def test_vencord_asset_copy_does_not_require_palette(self):
+        self.paths.current_theme.mkdir(parents=True)
+        source = self.paths.current_theme / "vencord.theme.css"
+        source.write_text("/* current theme */\n")
+        target_dir = self.paths.config_home / "vesktop/themes"
+        target_dir.mkdir(parents=True)
+        changed = apply("discord", self.paths)
+        target = target_dir / "vencord.theme.css"
+        self.assertEqual(target.read_bytes(), source.read_bytes())
+        self.assertIn(str(target), changed)
+        self.assertFalse((target_dir / "omarchy.theme.css").exists())
 
 
 if __name__ == "__main__":

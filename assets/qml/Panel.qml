@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Commons
 
 Item {
@@ -11,12 +12,13 @@ Item {
     property var plugins: []
     property string message: "Loading…"
     property bool closingFromHost: false
+    property bool opened: false
 
-    function open(payloadJson) { closingFromHost = false; window.visible = true; refresh.running = true }
-    function close() { closingFromHost = true; window.visible = false; closingFromHost = false }
+    function open(payloadJson) { closingFromHost = false; opened = true; refresh.running = true }
+    function close() { closingFromHost = true; opened = false; closingFromHost = false }
     function requestClose() {
         if (shell && typeof shell.hide === "function") shell.hide("io.github.oldjobobo.thpm")
-        else window.visible = false
+        else opened = false
     }
     function refreshState() {
         try {
@@ -40,20 +42,35 @@ Item {
         stdout: StdioCollector { onStreamFinished: refresh.running = true }
     }
 
-    FloatingWindow {
-        id: window
-        visible: false
-        title: "Theme Hook Plugins"
-        implicitWidth: 720
-        implicitHeight: 680
-        color: Color.background
-        onVisibleChanged: if (!visible && !root.closingFromHost) root.requestClose()
+    PanelWindow {
+        id: surface
+        visible: root.opened
+        color: "transparent"
+        exclusionMode: ExclusionMode.Ignore
+        WlrLayershell.namespace: "thpm-manager"
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+        anchors { top: true; right: true; bottom: true; left: true }
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: root.requestClose()
+        }
 
         Rectangle {
-            anchors.fill: parent
+            id: card
+            anchors.centerIn: parent
+            width: Math.min(760, surface.width - 48)
+            height: Math.min(720, surface.height - 64)
+            radius: 12
             color: Color.background
             border.color: Color.accent
             border.width: 1
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: function(mouse) { mouse.accepted = true }
+            }
 
             ColumnLayout {
                 anchors.fill: parent
@@ -61,7 +78,11 @@ Item {
                 spacing: 12
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { text: "Theme Hook Plugins"; color: Color.foreground; font.pixelSize: 22; font.bold: true }
+                    ColumnLayout {
+                        spacing: 2
+                        Label { text: "Theme Hook Plugins"; color: Color.foreground; font.pixelSize: 22; font.bold: true }
+                        Label { text: "External theme integrations"; color: Color.foreground; opacity: 0.55 }
+                    }
                     Item { Layout.fillWidth: true }
                     Button { text: "Refresh"; onClicked: refresh.running = true }
                     Button { text: "Close"; onClicked: root.requestClose() }

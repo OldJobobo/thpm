@@ -170,6 +170,12 @@ class UiTests(Sandbox):
         self.assertIn("panel", manifest["kinds"])
         self.assertTrue(manifest["keepLoaded"])
 
+    def test_qml_uses_layer_shell_surface_not_desktop_window(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertIn("PanelWindow {", qml)
+        self.assertIn("WlrLayershell.layer: WlrLayer.Overlay", qml)
+        self.assertNotIn("FloatingWindow {", qml)
+
 
 class ServiceTests(Sandbox):
     def test_json_envelope_and_native_ownership(self):

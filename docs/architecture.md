@@ -12,3 +12,5 @@ The canonical palette is the active Omarchy 4 `colors.toml`. THPM requires the Q
 State is stored in `$XDG_STATE_HOME/thpm/state.toml`. Mutations use an advisory runtime lock and atomic replacement. Each hook adapter runs behind an error boundary so an optional application cannot abort the remaining plugins.
 
 Omarchy-native behavior is outside THPM. Foot, tmux, GNOME, VS Code/Cursor, general Obsidian theming, keyboard theming, and Omarchy terminal reload behavior are displayed as native read-only records.
+
+Source updates use stable GitHub release assets with a mandatory SHA-256 companion file. A new runtime is staged and validated before atomic activation; the previous runtime and THPM-owned integration files are restored if reconciliation fails. Pacman-owned installations are never overwritten and instead hand off to AUR in an interactive Omarchy terminal.

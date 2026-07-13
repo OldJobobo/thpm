@@ -39,6 +39,8 @@ thpm disable firefox
 thpm doctor
 thpm run
 thpm ui open
+thpm update check
+thpm update apply
 thpm uninstall
 ```
 
@@ -55,6 +57,8 @@ bash -n install.sh uninstall.sh assets/hooks/90-thpm
 ```
 
 See [docs/architecture.md](docs/architecture.md) and [docs/plugins.md](docs/plugins.md) for the contracts.
+
+Source updates follow stable GitHub releases and require matching `thpm-<version>.tar.gz` and `thpm-<version>.tar.gz.sha256` assets. Build both from committed content with `scripts/release-assets.sh`. Package-managed installations hand updates back to AUR rather than overwriting pacman-owned files.
 
 The stable and VCS AUR submission trees are under `packaging/aur/thpm` and `packaging/aur/thpm-git`. Replace the stable package's `SKIP` checksum with the tagged archive's SHA-256 before submission, then regenerate `.SRCINFO` with `makepkg --printsrcinfo`.
 

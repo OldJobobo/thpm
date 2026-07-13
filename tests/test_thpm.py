@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import io
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from thpm import palette, ui
+from thpm import update as updater
 from thpm.integrations import apply
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
@@ -187,6 +190,13 @@ class UiTests(Sandbox):
         self.assertNotIn("Switch {", qml)
         self.assertNotIn('text: "Refresh"', qml)
 
+    def test_qml_update_flow_requires_confirmation(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertIn('["thpm", "--json", "update", "status"]', qml)
+        self.assertIn('id: updateConfirm', qml)
+        self.assertIn('command: ["thpm", "--json", "update", "apply"]', qml)
+        self.assertIn('text: "Restart shell"', qml)
+
 
 class ServiceTests(Sandbox):
     def test_json_envelope_and_native_ownership(self):
@@ -229,6 +239,105 @@ class IntegrationTests(Sandbox):
         self.assertEqual(target.read_bytes(), source.read_bytes())
         self.assertIn(str(target), changed)
         self.assertFalse((target_dir / "omarchy.theme.css").exists())
+
+
+class UpdateTests(Sandbox):
+    def setUp(self):
+        super().setUp()
+        self.paths.install_metadata.parent.mkdir(parents=True)
+        self.paths.install_metadata.write_text('origin = "source"\nrepository = "oldjobobo/thpm"\n')
+
+    def release(self, version="1.0.1"):
+        archive = f"thpm-{version}.tar.gz"
+        return {"tag_name": f"v{version}", "html_url": "https://example/release", "assets": [
+            {"name": archive, "browser_download_url": "https://example/archive"},
+            {"name": archive + ".sha256", "browser_download_url": "https://example/checksum"},
+        ]}
+
+    def test_source_check_reports_new_stable_release_and_caches_it(self):
+        with patch("thpm.update._read_json", return_value=self.release()) as read:
+            first = updater.check(self.paths, force=True)
+            second = updater.check(self.paths)
+        self.assertEqual(first["status"], "available")
+        self.assertEqual(first["availableVersion"], "1.0.1")
+        self.assertTrue(second["cached"])
+        self.assertEqual(read.call_count, 1)
+
+    def test_release_without_checksum_is_rejected(self):
+        release = self.release(); release["assets"] = release["assets"][:1]
+        with patch("thpm.update._read_json", return_value=release):
+            result = updater.check(self.paths, force=True)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("SHA-256", result["error"])
+
+    def test_older_release_is_not_offered(self):
+        with patch("thpm.update._read_json", return_value=self.release("0.9.0")):
+            result = updater.check(self.paths, force=True)
+        self.assertEqual(result["status"], "current")
+
+    def test_archive_path_traversal_is_rejected(self):
+        archive = self.paths.home / "bad.tar.gz"
+        with tarfile.open(archive, "w:gz") as bundle:
+            info = tarfile.TarInfo("../escape")
+            payload = b"bad"
+            info.size = len(payload)
+            bundle.addfile(info, io.BytesIO(payload))
+        with self.assertRaisesRegex(ValueError, "unsafe path"):
+            updater._safe_extract(archive, self.paths.home / "extract")
+
+    def test_install_script_records_source_origin_without_changing_version(self):
+        script = (Path(__file__).parents[1] / "install.sh").read_text()
+        self.assertIn('origin = "source"', script)
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0")
+
+    def test_checksum_mismatch_stops_before_runtime_staging(self):
+        result = {"status": "available", "origin": "source", "currentVersion": "1.0.0", "availableVersion": "1.0.1",
+            "archiveUrl": "https://example/archive", "checksumUrl": "https://example/checksum"}
+        def download(url, destination):
+            destination.write_text("0" * 64 if "checksum" in url else "archive")
+        with patch("thpm.update.check", return_value=result), patch("thpm.update._download", side_effect=download), \
+             patch("thpm.update._stage_runtime") as stage:
+            with self.assertRaisesRegex(RuntimeError, "checksum"):
+                updater.apply(self.paths)
+        stage.assert_not_called()
+
+    def test_failed_activation_restores_previous_runtime(self):
+        fake_root = self.paths.home / "runtime"
+        (fake_root / "bin").mkdir(parents=True)
+        fake_python = fake_root / "bin/python"
+        fake_python.write_text("runtime")
+        source = self.paths.home / "source-tree"
+        source.mkdir()
+        (source / "VERSION").write_text("1.0.1")
+        self.paths.hook_file.parent.mkdir(parents=True)
+        self.paths.hook_file.write_text("original hook")
+        result = {"status": "available", "origin": "source", "currentVersion": "1.0.0", "availableVersion": "1.0.1",
+            "archiveUrl": "archive", "checksumUrl": "checksum"}
+        archive_bytes = b"archive"
+        digest = __import__("hashlib").sha256(archive_bytes).hexdigest()
+        def download(url, destination): destination.write_bytes((digest + "  thpm.tar.gz\n").encode() if url == "checksum" else archive_bytes)
+        def stage(_source, destination):
+            (destination / "bin").mkdir(parents=True)
+            (destination / "bin/thpm").write_text("new")
+        def fail_install(*_args, **_kwargs):
+            self.paths.hook_file.write_text("partial update")
+            raise RuntimeError("install failed")
+        with patch("thpm.update.check", return_value=result), patch("thpm.update._download", side_effect=download), \
+             patch("thpm.update._safe_extract", return_value=source), patch("thpm.update._stage_runtime", side_effect=stage), \
+             patch("thpm.update.sys.executable", str(fake_python)), patch("thpm.update.subprocess.run", side_effect=fail_install):
+            with self.assertRaisesRegex(RuntimeError, "install failed"):
+                updater.apply(self.paths)
+        self.assertEqual(fake_python.read_text(), "runtime")
+        self.assertEqual(self.paths.hook_file.read_text(), "original hook")
+        self.assertFalse(fake_root.with_name("runtime.previous").exists())
+
+    def test_aur_apply_hands_control_to_floating_terminal(self):
+        result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0", "availableVersion": "1.0.1-1"}
+        with patch("thpm.update.check", return_value=result), patch("thpm.update.shutil.which", return_value="/usr/bin/omarchy-launch-floating-terminal-with-presentation"), \
+             patch("thpm.update.subprocess.Popen") as launch:
+            applied = updater.apply(self.paths)
+        self.assertEqual(applied["status"], "started")
+        launch.assert_called_once_with(["/usr/bin/omarchy-launch-floating-terminal-with-presentation", "yay -S thpm"], start_new_session=True)
 
 
 if __name__ == "__main__":

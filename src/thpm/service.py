@@ -17,6 +17,7 @@ from .resources import asset
 from .snapshot import build as build_snapshot
 from .state import load, mutation_lock, save
 from .templates import reconcile as reconcile_templates
+from .update import apply as apply_update, check as check_update
 from . import ui
 
 SCHEMA_VERSION = 1
@@ -111,6 +112,13 @@ class Service:
                 self.paths.legacy_compat_file.unlink()
                 changed.append(str(self.paths.legacy_compat_file))
         ui_result = ui.remove(self.paths)
+        self.paths.update_cache_file.unlink(missing_ok=True)
+        if self.paths.install_metadata.is_file():
+            try:
+                if 'origin = "source"' in self.paths.install_metadata.read_text():
+                    self.paths.install_metadata.unlink()
+            except OSError:
+                pass
         return envelope("uninstall", summary="THPM integration files removed", changed=changed, ui=ui_result, errors=[])
 
     def hook_run(self, theme_name: str = "") -> dict[str, object]:
@@ -132,3 +140,16 @@ class Service:
                 atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
                 changed.append(str(self.paths.legacy_compat_file))
         return envelope("migrate", summary=f"migrated {len(files)} legacy hooks", archive=str(destination) if destination else None, changed=changed, errors=[])
+
+    def update_check(self, force: bool = False) -> dict[str, object]:
+        result = check_update(self.paths, force)
+        ok = result.get("status") != "error"
+        summary = {"available": "THPM update available", "current": "THPM is current", "unsupported": "installation origin is unsupported", "error": "update check failed"}.get(str(result.get("status")), "update status")
+        errors = [{"message": str(result["error"])}] if result.get("error") else []
+        return envelope("update-check", ok, summary=summary, result=result, errors=errors)
+
+    def update_apply(self) -> dict[str, object]:
+        result = apply_update(self.paths)
+        ok = result.get("status") in {"updated", "started", "current"}
+        summary = {"updated": "THPM updated", "started": "package update started", "current": "THPM is current"}.get(str(result.get("status")), "THPM update not applied")
+        return envelope("update-apply", ok, summary=summary, result=result, errors=[] if ok else [{"message": str(result.get("error", result.get("status")))}])

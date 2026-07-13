@@ -14,6 +14,10 @@ Item {
     property var counts: ({ enabled: 0, native: 0, attention: 0 })
     property string message: "Loading integrations…"
     property string query: ""
+    property var updateInfo: ({ status: "idle", currentVersion: "1.0.0", availableVersion: null })
+    property string updateMessage: ""
+    property bool manualUpdateCheck: false
+    property bool updateActionActive: false
     property bool closingFromHost: false
     property bool opened: false
     readonly property var visiblePlugins: plugins.filter(function(plugin) {
@@ -26,6 +30,8 @@ Item {
         closingFromHost = false
         opened = true
         refresh.running = true
+        updateCheck.command = ["thpm", "--json", "update", "status"]
+        updateCheck.running = true
         Qt.callLater(function() { search.forceActiveFocus() })
     }
     function close() { closingFromHost = true; opened = false; closingFromHost = false }
@@ -45,6 +51,22 @@ Item {
         mutate.command = ["thpm", "--json", "plugin", enabled ? "enable" : "disable", id]
         mutate.running = true
     }
+    function readUpdateState(text) {
+        var reportErrors = manualUpdateCheck || updateActionActive
+        try {
+            var payload = JSON.parse(text)
+            updateInfo = payload.result || ({ status: "error" })
+            if (updateInfo.status === "updated") updateMessage = "Updated to " + updateInfo.availableVersion + ". Restart the shell to load the new panel."
+            else if (updateInfo.status === "started") updateMessage = "Package update opened in a terminal."
+            else if (updateInfo.status === "error" && reportErrors) updateMessage = payload.errors && payload.errors.length ? payload.errors[0].message : "Update check failed"
+            else updateMessage = ""
+        } catch (error) {
+            updateInfo = ({ status: "error" })
+            updateMessage = "Unable to read update status"
+        }
+        manualUpdateCheck = false
+        updateActionActive = false
+    }
 
     Process {
         id: refresh
@@ -55,6 +77,16 @@ Item {
         id: mutate
         stdout: StdioCollector { onStreamFinished: refresh.running = true }
     }
+    Process {
+        id: updateCheck
+        stdout: StdioCollector { id: updateCheckOutput; onStreamFinished: root.readUpdateState(text) }
+    }
+    Process {
+        id: updateApply
+        command: ["thpm", "--json", "update", "apply"]
+        stdout: StdioCollector { id: updateApplyOutput; onStreamFinished: root.readUpdateState(text) }
+    }
+    Process { id: restartShell; command: ["omarchy", "restart", "shell"] }
 
     PanelWindow {
         id: surface
@@ -124,6 +156,23 @@ Item {
                         onClicked: refresh.running = true
                     }
                     Button {
+                        iconText: updateCheck.running || updateApply.running ? "󰑐" : (root.updateInfo.status === "available" ? "󰁪" : (root.updateInfo.status === "error" ? "󰅚" : "󰏖"))
+                        tooltipText: root.updateInfo.status === "available"
+                            ? "Update to " + root.updateInfo.availableVersion
+                            : (root.updateInfo.status === "error" ? "Update check failed · Retry" : "Check for updates")
+                        selected: root.updateInfo.status === "available"
+                        focusable: true
+                        enabled: !updateCheck.running && !updateApply.running
+                        onClicked: {
+                            if (root.updateInfo.status === "available") updateConfirm.opened = true
+                            else {
+                                root.manualUpdateCheck = true
+                                updateCheck.command = ["thpm", "--json", "update", "check", "--force"]
+                                updateCheck.running = true
+                            }
+                        }
+                    }
+                    Button {
                         iconText: "󰅖"
                         tooltipText: "Close"
                         focusable: true
@@ -150,6 +199,26 @@ Item {
                         font.pixelSize: Style.font.caption
                     }
                     Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: root.updateMessage !== ""
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.updateMessage
+                        wrapMode: Text.WordWrap
+                        color: root.updateInfo.status === "error" ? Color.urgent : Color.foreground
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                    }
+                    Button {
+                        visible: root.updateInfo.status === "updated"
+                        text: "Restart shell"
+                        bordered: true
+                        focusable: true
+                        onClicked: restartShell.running = true
+                    }
                 }
 
                 QQC.ScrollView {
@@ -195,7 +264,27 @@ Item {
                     font.pixelSize: Style.font.caption
                 }
             }
+
+            ConfirmDialog {
+                id: updateConfirm
+                anchors.fill: parent
+                message: "Update THPM from " + root.updateInfo.currentVersion + " to " + root.updateInfo.availableVersion + "?"
+                confirmText: "Update"
+                onCanceled: opened = false
+                onConfirmed: {
+                    opened = false
+                    root.updateMessage = "Downloading and verifying update…"
+                    root.updateActionActive = true
+                    updateApply.running = true
+                }
+            }
         }
-        Shortcut { sequence: "Escape"; onActivated: root.requestClose() }
+        Shortcut {
+            sequence: "Escape"
+            onActivated: {
+                if (updateConfirm.opened) updateConfirm.opened = false
+                else root.requestClose()
+            }
+        }
     }
 }

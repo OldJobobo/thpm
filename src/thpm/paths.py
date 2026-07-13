@@ -16,6 +16,7 @@ class Paths:
     data_home: Path
     state_home: Path
     runtime_dir: Path
+    cache_root: Path | None = None
 
     @classmethod
     def discover(cls) -> "Paths":
@@ -26,6 +27,7 @@ class Paths:
             data_home=_expand(os.environ.get("XDG_DATA_HOME", "~/.local/share")),
             state_home=_expand(os.environ.get("XDG_STATE_HOME", "~/.local/state")),
             runtime_dir=_expand(os.environ.get("XDG_RUNTIME_DIR", "/tmp")),
+            cache_root=_expand(os.environ.get("XDG_CACHE_HOME", "~/.cache")),
         )
 
     @property
@@ -47,6 +49,18 @@ class Paths:
     @property
     def lock_file(self) -> Path:
         return self.runtime_dir / "thpm.lock"
+
+    @property
+    def update_lock_file(self) -> Path:
+        return self.runtime_dir / "thpm-update.lock"
+
+    @property
+    def update_cache_file(self) -> Path:
+        return (self.cache_root or self.home / ".cache") / "thpm/update.json"
+
+    @property
+    def install_metadata(self) -> Path:
+        return self.data_home / "thpm/install.toml"
 
     @property
     def current_theme(self) -> Path:

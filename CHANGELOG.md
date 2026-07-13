@@ -7,3 +7,4 @@
 - Add the Omarchy Shell QML plugin manager and menu entry.
 - Design the manager with native Omarchy controls, search, concise state counts, and compact integration rows.
 - Add migration, diagnostics, JSON output, Arch packaging, and tests.
+- Add confirmed, origin-aware updates from the panel with SHA-256 verification and transactional rollback.

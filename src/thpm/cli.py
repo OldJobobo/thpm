@@ -28,6 +28,10 @@ def parser() -> argparse.ArgumentParser:
     ui_cmd = commands.add_parser("ui"); ui_sub = ui_cmd.add_subparsers(dest="ui_command", required=True)
     for name in ("state", "install", "remove", "status", "open"):
         sub = ui_sub.add_parser(name); sub.add_argument("--json", action="store_true")
+    update = commands.add_parser("update"); update_sub = update.add_subparsers(dest="update_command", required=True)
+    check = update_sub.add_parser("check"); check.add_argument("--force", action="store_true"); check.add_argument("--json", action="store_true")
+    status = update_sub.add_parser("status"); status.add_argument("--json", action="store_true")
+    apply = update_sub.add_parser("apply"); apply.add_argument("--json", action="store_true")
     return root
 
 
@@ -57,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "uninstall": payload = service.uninstall()
         elif command == "migrate": payload = service.migrate()
         elif command == "hook-run": payload = service.hook_run(args.event_args[0] if args.event_args else "")
+        elif command == "update":
+            payload = service.update_apply() if args.update_command == "apply" else service.update_check(args.update_command == "check" and args.force)
         elif command == "ui":
             if args.ui_command == "state": payload = service.state()
             elif args.ui_command == "install": payload = envelope("ui-install", summary="QML manager installed", result=ui.install(paths), errors=[])

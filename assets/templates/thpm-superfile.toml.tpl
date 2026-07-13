@@ -1,0 +1,8 @@
+code_syntax_highlight = "{{ blue }}"
+directory_icon = "{{ blue }}"
+file_panel_border = "{{ muted }}"
+file_panel_border_active = "{{ bright_blue }}"
+footer = "{{ fg }}"
+full_screen_bg = "{{ bg }}"
+metadata = "{{ muted }}"
+sidebar_border = "{{ dark_fg }}"

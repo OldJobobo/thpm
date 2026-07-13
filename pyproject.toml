@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thpm"
+dynamic = ["version"]
+description = "Omarchy 4-native manager for external theme integrations"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "OldJobobo"}]
+dependencies = []
+
+[project.scripts]
+thpm = "thpm.cli:main"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/thpm/templates" = ["assets/templates/*"]
+"share/thpm/qml" = ["assets/qml/*"]
+"share/thpm/hooks" = ["assets/hooks/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

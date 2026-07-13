@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.oldjobobo.thpm",
+  "name": "Theme Hook Plugins",
+  "version": "1.0.0",
+  "author": "OldJobobo",
+  "license": "MIT",
+  "description": "Manage THPM integrations from Omarchy Shell",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {"panel": "Panel.qml"}
+}

@@ -1,0 +1,4 @@
+[ColorScheme]
+active_colors={{ fg }}, {{ darker_bg }}, {{ lighter_bg }}, {{ muted }}, {{ dark_bg }}, {{ fg }}, {{ fg }}, {{ fg }}, {{ fg }}, {{ bg }}, {{ darker_bg }}, {{ muted }}, {{ blue }}, {{ bg }}, {{ blue }}, {{ red }}, {{ dark_bg }}, {{ fg }}, {{ bg }}, {{ fg }}, {{ muted }}
+disabled_colors={{ muted }}, {{ darker_bg }}, {{ dark_bg }}, {{ muted }}, {{ dark_bg }}, {{ muted }}, {{ muted }}, {{ muted }}, {{ muted }}, {{ bg }}, {{ darker_bg }}, {{ muted }}, {{ muted }}, {{ bg }}, {{ muted }}, {{ muted }}, {{ dark_bg }}, {{ muted }}, {{ bg }}, {{ muted }}, {{ muted }}
+inactive_colors={{ fg }}, {{ darker_bg }}, {{ lighter_bg }}, {{ muted }}, {{ dark_bg }}, {{ fg }}, {{ fg }}, {{ fg }}, {{ fg }}, {{ bg }}, {{ darker_bg }}, {{ muted }}, {{ blue }}, {{ bg }}, {{ blue }}, {{ red }}, {{ dark_bg }}, {{ fg }}, {{ bg }}, {{ fg }}, {{ muted }}

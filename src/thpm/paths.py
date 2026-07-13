@@ -41,6 +41,10 @@ class Paths:
         return self.thpm_state_dir / "state.toml"
 
     @property
+    def legacy_compat_file(self) -> Path:
+        return self.data_home / "thpm/lib/theme-env.sh"
+
+    @property
     def lock_file(self) -> Path:
         return self.runtime_dir / "thpm.lock"
 

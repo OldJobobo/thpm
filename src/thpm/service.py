@@ -8,7 +8,7 @@ from pathlib import Path
 from . import __version__
 from .files import atomic_copy
 from .integrations import apply_enabled
-from .migrate import archive as archive_legacy, inspect as inspect_legacy
+from .migrate import archive as archive_legacy, artifacts as legacy_artifacts, inspect as inspect_legacy, needs_compat
 from .omarchy import capabilities, run, shell_running
 from .palette import load as load_palette
 from .paths import Paths
@@ -80,6 +80,7 @@ class Service:
         caps = capabilities()
         if not caps.available: return envelope("install", False, summary="Omarchy 4 is required", errors=[{"message": item} for item in caps.missing])
         migrated, legacy_files = inspect_legacy(self.paths)
+        compat_required = needs_compat(self.paths, legacy_files)
         with mutation_lock(self.paths):
             enabled = load(self.paths)
             enabled.update(migrated)
@@ -87,7 +88,10 @@ class Service:
             changed = reconcile_templates(self.paths, enabled)
             atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
             changed.append(str(self.paths.hook_file))
-            legacy_archive = archive_legacy(self.paths, legacy_files)
+            legacy_archive = archive_legacy(self.paths, legacy_files, legacy_artifacts(self.paths))
+            if compat_required:
+                atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
+                changed.append(str(self.paths.legacy_compat_file))
         ui_result: dict[str, object] = {"installed": False, "skipped": True}
         if with_ui and shell_running(): ui_result = ui.install(self.paths)
         return envelope("install", summary="THPM installed", changed=changed, migratedTo=str(legacy_archive) if legacy_archive else None, ui=ui_result, errors=[])
@@ -99,6 +103,10 @@ class Service:
             if self.paths.hook_file.exists():
                 self.paths.hook_file.unlink()
                 changed.append(str(self.paths.hook_file))
+            compat_asset = asset("compat", "theme-env.sh")
+            if self.paths.legacy_compat_file.is_file() and compat_asset.is_file() and self.paths.legacy_compat_file.read_bytes() == compat_asset.read_bytes():
+                self.paths.legacy_compat_file.unlink()
+                changed.append(str(self.paths.legacy_compat_file))
         ui_result = ui.remove(self.paths)
         return envelope("uninstall", summary="THPM integration files removed", changed=changed, ui=ui_result, errors=[])
 
@@ -112,8 +120,12 @@ class Service:
 
     def migrate(self) -> dict[str, object]:
         enabled_updates, files = inspect_legacy(self.paths)
+        compat_required = needs_compat(self.paths, files)
         with mutation_lock(self.paths):
             enabled = load(self.paths); enabled.update(enabled_updates); save(self.paths, enabled)
-            destination = archive_legacy(self.paths, files)
             changed = reconcile_templates(self.paths, enabled)
+            destination = archive_legacy(self.paths, files, legacy_artifacts(self.paths))
+            if compat_required:
+                atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
+                changed.append(str(self.paths.legacy_compat_file))
         return envelope("migrate", summary=f"migrated {len(files)} legacy hooks", archive=str(destination) if destination else None, changed=changed, errors=[])

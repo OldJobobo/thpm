@@ -12,7 +12,10 @@ pkgbase = thpm-git
 	depends = python>=3.11
 	depends = omarchy>=4
 	provides = thpm
+	provides = theme-hook-plugin-manager
 	conflicts = thpm
+	conflicts = theme-hook-plugin-manager
+	replaces = theme-hook-plugin-manager
 	source = git+https://github.com/oldjobobo/thpm.git
 	sha256sums = SKIP
 

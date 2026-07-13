@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from thpm import palette, ui
-from thpm.migrate import inspect
+from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
 from thpm.registry import PLUGINS
 from thpm.service import Service
@@ -86,6 +86,62 @@ class MigrationTests(Sandbox):
         updates, files = inspect(self.paths)
         self.assertTrue(updates["firefox"])
         self.assertEqual(files, [legacy])
+
+    def test_upgrade_archives_known_install_and_preserves_unknown_files(self):
+        launcher = self.paths.home / ".local/bin/thpm"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text('#!/bin/bash\nTHPM_CONTROL_LIB_DIR="$HOME/.local/share/thpm/lib"\n')
+        control = self.paths.data_home / "thpm/lib/config.sh"
+        control.parent.mkdir(parents=True)
+        control.write_text("legacy")
+        unknown = self.paths.data_home / "thpm/restart-notified-app"
+        unknown.write_text("keep")
+        old_config = self.paths.thpm_config_dir / "config.toml"
+        old_config.parent.mkdir(parents=True)
+        old_config.write_text("legacy")
+        found = artifacts(self.paths)
+        destination = archive(self.paths, [], found)
+        self.assertIsNotNone(destination)
+        self.assertFalse(launcher.exists())
+        self.assertFalse(control.exists())
+        self.assertFalse(old_config.exists())
+        self.assertTrue(unknown.exists())
+        self.assertTrue((destination / launcher.relative_to(self.paths.home)).exists())
+
+    def test_upgrade_does_not_remove_unrecognized_thpm_launcher(self):
+        launcher = self.paths.home / ".local/bin/thpm"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\necho unrelated\n")
+        self.assertNotIn(launcher, artifacts(self.paths))
+
+    def test_upgrade_detects_old_monolithic_launcher(self):
+        launcher = self.paths.home / ".local/bin/thpm"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text('#!/bin/bash\nTHPM_VERSION_FILE="$HOME/.local/share/thpm/version"\n')
+        self.assertIn(launcher, artifacts(self.paths))
+
+    def test_custom_hook_requesting_old_helper_gets_compatibility_bridge(self):
+        self.paths.hook_dir.mkdir(parents=True)
+        custom = self.paths.hook_dir / "10-custom.sh"
+        custom.write_text('source "$HOME/.local/share/thpm/lib/theme-env.sh"\nsuccess done\n')
+        self.assertTrue(needs_compat(self.paths, []))
+
+    def test_service_migration_preserves_custom_hook_and_replaces_old_helper(self):
+        self.paths.hook_dir.mkdir(parents=True)
+        old_hook = self.paths.hook_dir / "40-firefox.sh"
+        old_hook.write_text("legacy")
+        custom = self.paths.hook_dir / "10-custom.sh"
+        custom.write_text('source "$HOME/.local/share/thpm/lib/theme-env.sh"\n')
+        old_helper = self.paths.legacy_compat_file
+        old_helper.parent.mkdir(parents=True)
+        old_helper.write_text("old copyrighted implementation")
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).migrate()
+        self.assertTrue(payload["ok"])
+        self.assertFalse(old_hook.exists())
+        self.assertTrue(custom.exists())
+        self.assertEqual(old_helper.read_bytes(), (assets / "compat/theme-env.sh").read_bytes())
 
 
 class UiTests(Sandbox):

@@ -10,6 +10,9 @@ pkgbase = thpm
 	makedepends = python-wheel
 	depends = python>=3.11
 	depends = omarchy>=4
+	provides = theme-hook-plugin-manager
+	conflicts = theme-hook-plugin-manager
+	replaces = theme-hook-plugin-manager
 	source = thpm-1.0.0.tar.gz::https://github.com/oldjobobo/thpm/archive/refs/tags/v1.0.0.tar.gz
 	sha256sums = SKIP
 

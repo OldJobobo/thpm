@@ -6,6 +6,9 @@ arch=('any')
 url='https://github.com/oldjobobo/thpm'
 license=('MIT')
 depends=('python>=3.11' 'omarchy>=4')
+provides=('theme-hook-plugin-manager')
+conflicts=('theme-hook-plugin-manager')
+replaces=('theme-hook-plugin-manager')
 makedepends=('python-build' 'python-installer' 'python-wheel')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
@@ -21,5 +24,6 @@ package() {
     install -Dm644 -t "$pkgdir/usr/share/thpm/templates" assets/templates/*
     install -Dm644 -t "$pkgdir/usr/share/thpm/qml" assets/qml/*
     install -Dm755 assets/hooks/90-thpm "$pkgdir/usr/share/thpm/hooks/90-thpm"
+    install -Dm644 assets/compat/theme-env.sh "$pkgdir/usr/share/thpm/compat/theme-env.sh"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

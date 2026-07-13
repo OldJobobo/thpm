@@ -26,6 +26,7 @@ where = ["src"]
 "share/thpm/templates" = ["assets/templates/*"]
 "share/thpm/qml" = ["assets/qml/*"]
 "share/thpm/hooks" = ["assets/hooks/*"]
+"share/thpm/compat" = ["assets/compat/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

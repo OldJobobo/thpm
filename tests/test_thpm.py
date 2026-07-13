@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import os
 import io
-import json
+import asyncio
 import re
+import subprocess
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from textual.widgets import Link
 
 from thpm import palette, ui
 from thpm import update as updater
@@ -21,6 +24,7 @@ from thpm.registry import PLUGINS
 from thpm.service import Service
 from thpm.state import load, save
 from thpm.templates import reconcile
+from thpm.tui import PluginRow, ThpmTui, omarchy_theme
 
 
 COLORS = {
@@ -166,7 +170,21 @@ class UiTests(Sandbox):
             ui.install(self.paths)
             installed = self.paths.menu_extension.read_text()
             self.assertIn('"foreign"', installed)
-            self.assertIn("style.theme-hooks", installed)
+            self.assertEqual(installed.count('"style.theme-hooks"'), 1)
+            self.assertNotIn("style.theme-hooks-terminal", installed)
+            self.assertIn("omarchy shell shell summon", installed)
+            selected = ui.surface(self.paths, "tui")
+            self.assertEqual(selected["surface"], "tui")
+            installed = self.paths.menu_extension.read_text()
+            self.assertEqual(installed.count('"style.theme-hooks"'), 1)
+            self.assertIn("omarchy-launch-floating-terminal-with-presentation 'thpm tui'", installed)
+            self.assertNotIn("style.theme-hooks-terminal", installed)
+            self.assertEqual(ui.status(self.paths)["menuSurface"], "tui")
+            ui.install(self.paths)
+            self.assertIn("'thpm tui'", self.paths.menu_extension.read_text())
+            toggled = ui.surface(self.paths, "toggle")
+            self.assertEqual(toggled["surface"], "gui")
+            self.assertIn("omarchy shell shell summon", self.paths.menu_extension.read_text())
             ui.remove(self.paths)
         self.assertIn('"foreign"', self.paths.menu_extension.read_text())
         self.assertNotIn("style.theme-hooks", self.paths.menu_extension.read_text())
@@ -216,6 +234,11 @@ class UiTests(Sandbox):
         self.assertIn('command: ["thpm", "--json", "reconcile", "--refresh"]', qml)
         self.assertIn("doctorInfo.errors || []", qml)
         self.assertIn("doctorInfo.warnings || []", qml)
+
+    def test_qml_donation_action_opens_kofi(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertIn('text: "Donate on Ko-fi"', qml)
+        self.assertIn('command: ["xdg-open", "https://ko-fi.com/oldjobobo"]', qml)
 
 
 class ServiceTests(Sandbox):
@@ -291,6 +314,135 @@ class CliTests(unittest.TestCase):
         service_type.return_value.hook_run.assert_called_once_with("theme-set", ["tokyo-night", "dark"])
         self.assertEqual(json.loads(stdout.getvalue()), response)
 
+    def test_tui_command_launches_alternate_frontend(self):
+        with patch("thpm.tui.run_tui") as run_tui:
+            exit_code = main(["tui"])
+        self.assertEqual(exit_code, 0)
+        run_tui.assert_called_once()
+
+    def test_ui_surface_command_sets_menu_target(self):
+        result = {"surface": "tui", "changed": True}
+        with patch("thpm.cli.ui.surface", return_value=result) as set_surface, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            exit_code = main(["--json", "ui", "surface", "tui"])
+        self.assertEqual(exit_code, 0)
+        set_surface.assert_called_once()
+        self.assertEqual(set_surface.call_args.args[1], "tui")
+        self.assertEqual(json.loads(stdout.getvalue())["result"], result)
+
+
+class FakeTuiService:
+    def __init__(self):
+        self.mutations: list[tuple[str, bool]] = []
+        self.doctor_calls = 0
+        self.update_available = False
+        self.update_apply_calls = 0
+
+    def state(self):
+        return {"ok": True, "counts": {"enabled": 1, "disabled": 0, "native": 1, "unavailable": 0, "attention": 0}, "plugins": [
+            {"id": "fish", "label": "Fish", "category": "Terminal", "description": "Synchronize Fish colors.", "ownership": "thpm", "enabled": True, "available": True, "warnings": []},
+            {"id": "native-foot", "label": "Foot live colors", "category": "Native", "description": "Owned by Omarchy.", "ownership": "native", "enabled": True, "available": True, "warnings": []},
+        ]}
+
+    def set_enabled(self, plugin_id, enabled):
+        self.mutations.append((plugin_id, enabled))
+        return {"ok": True, "summary": "changed"}
+
+    def doctor(self):
+        self.doctor_calls += 1
+        return {"ok": True, "summary": "0 errors, 0 warnings", "errors": [], "warnings": [], "capabilities": {"routes": ["theme refresh"], "missing": []}}
+
+    def run_theme(self): return {"ok": True}
+    def reconcile(self, refresh=False): return {"ok": True}
+    def update_check(self, force=False):
+        return {"ok": True, "result": {"status": "available" if self.update_available else "current", "currentVersion": "1.0.0", "availableVersion": "1.1.0" if self.update_available else None}}
+
+    def update_apply(self):
+        self.update_apply_calls += 1
+        return {"ok": True, "result": {"status": "updated", "currentVersion": "1.0.0", "availableVersion": "1.1.0"}}
+
+
+class TuiTests(Sandbox):
+    def test_active_palette_and_missing_palette_fallback(self):
+        self.write_palette()
+        theme, warning = omarchy_theme(self.paths)
+        self.assertEqual(theme.name, "thpm-omarchy")
+        self.assertEqual(theme.variables["thpm-border"], COLORS["lighter_bg"])
+        self.assertIsNone(warning)
+        (self.paths.current_theme / "colors.toml").unlink()
+        theme, warning = omarchy_theme(self.paths)
+        self.assertEqual(theme.name, "thpm-fallback")
+        self.assertIn("using fallback", warning)
+
+    def test_headless_navigation_search_toggle_and_doctor(self):
+        async def exercise():
+            self.write_palette()
+            service = FakeTuiService()
+            app = ThpmTui(service, self.paths)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause(0.2)
+                self.assertEqual(app.theme, "thpm-omarchy")
+                self.assertEqual(len(app.query("#plugin-list PluginRow")), 2)
+                await pilot.press("2")
+                search = app.query_one("#integration-search")
+                search.value = "fish"
+                await pilot.pause()
+                self.assertEqual(len(app.query("#plugin-list PluginRow")), 1)
+                search.value = ""
+                await pilot.pause()
+                plugin_list = app.query_one("#plugin-list")
+                plugin_list.index = 0
+                plugin_list.focus()
+                await pilot.press("space")
+                await pilot.pause(0.2)
+                self.assertEqual(service.mutations, [("fish", False)])
+                await pilot.press("3")
+                await pilot.pause(0.2)
+                self.assertGreaterEqual(service.doctor_calls, 1)
+                self.assertIn("No issues found", str(app.query_one(".healthy-result").render()))
+        asyncio.run(exercise())
+
+    def test_small_terminal_uses_resize_guard(self):
+        async def exercise():
+            app = ThpmTui(FakeTuiService(), self.paths)
+            async with app.run_test(size=(79, 23)) as pilot:
+                await pilot.pause()
+                self.assertTrue(app.has_class("too-small"))
+        asyncio.run(exercise())
+
+    def test_update_requires_confirmation_before_apply(self):
+        async def exercise():
+            service = FakeTuiService()
+            service.update_available = True
+            app = ThpmTui(service, self.paths)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause(0.2)
+                await pilot.press("4")
+                await pilot.click("#update-action")
+                await pilot.pause()
+                self.assertEqual(service.update_apply_calls, 0)
+                await pilot.click("#confirm-update")
+                await pilot.pause(0.2)
+                self.assertEqual(service.update_apply_calls, 1)
+                self.assertTrue(app.query_one("#restart-shell").display)
+        asyncio.run(exercise())
+
+    def test_donation_action_opens_kofi(self):
+        async def exercise():
+            app = ThpmTui(FakeTuiService(), self.paths)
+            with patch.object(app, "open_url") as launch:
+                async with app.run_test(size=(120, 40)) as pilot:
+                    await pilot.pause(0.2)
+                    link = app.query_one("#donate-link", Link)
+                    self.assertEqual(link.url, "https://ko-fi.com/oldjobobo")
+                    await pilot.press("1")
+                    self.assertTrue(link.display)
+                    await pilot.click("#donate-link")
+                    await pilot.pause()
+            launch.assert_called_once_with("https://ko-fi.com/oldjobobo")
+        asyncio.run(exercise())
+
 
 class IntegrationTests(Sandbox):
     def test_vencord_asset_copy_does_not_require_palette(self):
@@ -364,7 +516,13 @@ class UpdateTests(Sandbox):
     def test_install_script_records_source_origin_without_changing_version(self):
         script = (Path(__file__).parents[1] / "install.sh").read_text()
         self.assertIn('origin = "source"', script)
+        self.assertIn("textual>=8.2.8,<9", script)
         self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0")
+
+    def test_staged_runtime_installs_and_smoke_tests_textual(self):
+        source = __import__("inspect").getsource(updater._stage_runtime)
+        self.assertIn('"textual>=8.2.8,<9"', source)
+        self.assertIn("from thpm.tui import ThpmTui", source)
 
     def test_checksum_mismatch_stops_before_runtime_staging(self):
         result = {"status": "available", "origin": "source", "currentVersion": "1.0.0", "availableVersion": "1.0.1",

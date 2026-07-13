@@ -43,6 +43,10 @@ class Paths:
         return self.thpm_state_dir / "state.toml"
 
     @property
+    def ui_state_file(self) -> Path:
+        return self.thpm_state_dir / "ui.toml"
+
+    @property
     def legacy_compat_file(self) -> Path:
         return self.data_home / "thpm/lib/theme-env.sh"
 

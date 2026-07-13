@@ -1,0 +1,261 @@
+Screen {
+    background: $background;
+    color: $foreground;
+}
+
+#too-small {
+    display: none;
+    width: 100%;
+    height: 100%;
+    content-align: center middle;
+    text-align: center;
+    padding: 2;
+    color: $warning;
+}
+
+.too-small #too-small { display: block; }
+.too-small #app-shell, .too-small #footer-bar { display: none; }
+
+#app-shell {
+    width: 100%;
+    height: 1fr;
+    margin: 1 2;
+    padding: 1;
+    border: round $thpm-border;
+}
+
+#sidebar {
+    width: 24;
+    min-width: 24;
+    height: 100%;
+    padding: 1;
+    margin-right: 2;
+    background: transparent;
+    border: solid $thpm-border;
+}
+
+#brand {
+    height: 2;
+    color: $accent;
+    text-style: bold;
+}
+
+#brand-subtitle {
+    height: 2;
+    color: $thpm-muted;
+    margin-bottom: 1;
+}
+
+.nav {
+    width: 100%;
+    min-width: 0;
+    height: 3;
+    margin-bottom: 1;
+    background: transparent;
+    color: $foreground;
+    border: none;
+    content-align: left middle;
+    padding-left: 1;
+    text-align: left;
+}
+
+.nav:hover, .nav:focus {
+    background: $surface;
+    color: $thpm-bright;
+    text-style: bold;
+}
+
+.nav.selected, .nav.selected:focus {
+    background: $primary 12%;
+    color: $thpm-bright;
+    border-left: solid $primary;
+    text-style: bold;
+}
+
+#sidebar-spacer { height: 1fr; }
+
+#sidebar-health {
+    height: 3;
+    color: $success;
+    border-top: solid $thpm-border;
+    padding-top: 1;
+}
+
+#sidebar-version {
+    height: 2;
+    color: $thpm-muted;
+}
+
+#main {
+    width: 1fr;
+    height: 100%;
+    padding: 0 1;
+}
+
+#topbar {
+    height: 5;
+    width: 100%;
+    align-vertical: middle;
+}
+
+#heading { width: 1fr; }
+#section-title { height: 2; text-style: bold; color: $thpm-bright; }
+#section-subtitle { height: 2; color: $thpm-muted; }
+
+.top-action {
+    width: auto;
+    min-width: 10;
+    height: 3;
+    margin-left: 1;
+    background: transparent;
+    border: solid $thpm-border;
+}
+
+.top-action:hover, .top-action:focus,
+.action-row Button:hover, .action-row Button:focus,
+.system-row Button:hover, .system-row Button:focus {
+    border: solid $primary;
+}
+
+#message {
+    display: none;
+    height: auto;
+    min-height: 1;
+    margin-bottom: 1;
+    color: $warning;
+}
+
+#message.error { color: $error; }
+#sections { width: 100%; height: 1fr; }
+#overview, #integrations, #doctor, #system { width: 100%; height: 100%; }
+
+#metrics {
+    width: 100%;
+    height: 18;
+    grid-size: 2 2;
+    grid-columns: 1fr 1fr;
+    grid-rows: 8 8;
+    grid-gutter: 1 2;
+    margin-bottom: 1;
+}
+
+.metric {
+    padding: 1 2;
+    background: transparent;
+    border: solid $thpm-border;
+}
+
+.metric-title { height: 1; color: $thpm-muted; text-style: bold; }
+.metric-value { height: 2; color: $thpm-bright; text-style: bold; }
+.metric-detail { height: 1; color: $thpm-muted; }
+.section-label { height: 2; text-style: bold; color: $thpm-bright; }
+
+.action-row {
+    width: 100%;
+    height: 4;
+}
+
+.action-row Button {
+    width: auto;
+    min-width: 18;
+    margin-right: 1;
+    background: transparent;
+    border: solid $thpm-border;
+}
+
+#integration-search { width: 100%; margin-bottom: 1; padding-top: 1; border: none; border-bottom: solid $thpm-border; }
+#integration-summary { height: 2; color: $thpm-muted; }
+#plugin-list { width: 100%; height: 1fr; background: transparent; }
+#no-integrations { display: none; width: 100%; height: 1fr; content-align: center middle; color: $thpm-muted; }
+
+PluginRow {
+    width: 100%;
+    height: 5;
+    margin-bottom: 1;
+    padding: 0;
+    background: transparent;
+    border: solid $thpm-border;
+}
+
+PluginRow:hover, PluginRow:focus {
+    background: transparent;
+    border: solid $primary;
+}
+
+.plugin-row-inner { width: 100%; height: 100%; align-vertical: middle; padding: 0 1; }
+.plugin-copy { width: 1fr; height: 3; }
+.plugin-label { height: 1; text-style: bold; color: $thpm-bright; }
+.plugin-description { height: 2; color: $thpm-muted; text-overflow: ellipsis; }
+.ownership { width: 15; height: 1; color: $thpm-muted; text-align: right; margin-right: 1; }
+PluginRow Switch { width: 8; }
+
+.section-toolbar {
+    width: 100%;
+    height: 5;
+    align-vertical: middle;
+    margin-bottom: 1;
+}
+
+.toolbar-copy { width: 1fr; height: auto; }
+#doctor-summary { height: 2; text-style: bold; }
+#doctor-detail { height: 2; color: $thpm-muted; }
+#doctor-results { width: 100%; height: 1fr; }
+
+.doctor-item, .healthy-result {
+    width: 100%;
+    height: auto;
+    min-height: 3;
+    margin-bottom: 1;
+    padding: 1 2;
+    background: transparent;
+    border: solid $thpm-border;
+}
+
+.doctor-item.error { color: $error; }
+.doctor-item.warning { color: $warning; }
+.healthy-result { color: $success; }
+
+#system { padding-right: 1; }
+#system-message, #update-message { height: auto; min-height: 1; color: $thpm-muted; margin-bottom: 1; }
+.rule { width: 100%; height: 1; border-top: solid $thpm-border; margin: 1 0; }
+.system-row { width: 100%; height: 5; align-vertical: middle; }
+.system-row Button { width: auto; min-width: 12; margin-left: 1; background: transparent; border: solid $thpm-border; }
+#update-detail { color: $thpm-muted; }
+#about { width: 100%; height: auto; color: $thpm-muted; }
+
+#footer-bar { width: 100%; height: 1; }
+#footer-bar Footer { width: 1fr; height: 1; dock: none; background: transparent; color: $thpm-muted; }
+#donate-link {
+    width: auto;
+    height: 1;
+    margin-right: 2;
+    color: $thpm-muted;
+    text-align: right;
+    text-style: underline;
+}
+#donate-link:hover, #donate-link:focus { color: $primary; }
+
+ConfirmUpdate {
+    align: center middle;
+    background: $background 70%;
+}
+
+#confirm-card {
+    width: 58;
+    height: 12;
+    padding: 1 2;
+    background: $panel;
+    border: solid $primary;
+}
+
+#confirm-title { height: 2; text-style: bold; color: $thpm-bright; }
+#confirm-actions { dock: bottom; height: 4; align-horizontal: right; }
+#confirm-actions Button { width: auto; min-width: 12; margin-left: 1; }
+
+.compact #app-shell { margin: 0 1; padding: 0; }
+.compact #sidebar { width: 18; min-width: 18; margin-right: 1; }
+.compact #brand-subtitle { display: none; }
+.compact .nav { padding: 0 1; }
+.compact .ownership { display: none; }
+.compact .top-action { min-width: 8; }
+.compact .action-row Button { min-width: 14; }

@@ -9,7 +9,8 @@ data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 runtime_dir="${THPM_RUNTIME_DIR:-$data_home/thpm/runtime}"
 user_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
 
-python3 -m venv --without-pip "$runtime_dir"
+python3 -m venv "$runtime_dir"
+"$runtime_dir/bin/python" -m pip install --disable-pip-version-check --no-input 'textual>=8.2.8,<9'
 site_packages="$("$runtime_dir/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 rm -rf "$site_packages/thpm"
 cp -R "$repo_dir/src/thpm" "$site_packages/thpm"

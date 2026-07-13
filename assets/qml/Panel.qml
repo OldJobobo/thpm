@@ -257,6 +257,12 @@ Item {
         command: ["omarchy", "restart", "shell"]
     }
 
+    Process {
+        id: openDonate
+
+        command: ["xdg-open", "https://ko-fi.com/oldjobobo"]
+    }
+
     PanelWindow {
         id: surface
 
@@ -1082,6 +1088,14 @@ Item {
                             wrapMode: Text.WordWrap
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption
+                        }
+
+                        Button {
+                            text: "Donate on Ko-fi"
+                            iconText: "󰋑"
+                            bordered: true
+                            focusable: true
+                            onClicked: openDonate.running = true
                         }
 
                         Item {

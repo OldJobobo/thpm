@@ -14,7 +14,7 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--json", action="store_true", dest="global_json")
     root.add_argument("--version", action="version", version=f"thpm {__version__}")
     commands = root.add_subparsers(dest="command")
-    for name in ("list", "status", "native-status", "reconcile", "run", "install", "uninstall", "migrate", "version"):
+    for name in ("list", "status", "native-status", "reconcile", "run", "install", "uninstall", "migrate", "version", "tui"):
         sub = commands.add_parser(name); sub.add_argument("--json", action="store_true")
         if name == "reconcile": sub.add_argument("--refresh", action="store_true")
         if name == "install": sub.add_argument("--no-ui", action="store_true")
@@ -28,6 +28,7 @@ def parser() -> argparse.ArgumentParser:
     ui_cmd = commands.add_parser("ui"); ui_sub = ui_cmd.add_subparsers(dest="ui_command", required=True)
     for name in ("state", "install", "remove", "status", "open"):
         sub = ui_sub.add_parser(name); sub.add_argument("--json", action="store_true")
+    surface = ui_sub.add_parser("surface"); surface.add_argument("surface", nargs="?", choices=("gui", "tui", "toggle")); surface.add_argument("--json", action="store_true")
     update = commands.add_parser("update"); update_sub = update.add_subparsers(dest="update_command", required=True)
     check = update_sub.add_parser("check"); check.add_argument("--force", action="store_true"); check.add_argument("--json", action="store_true")
     status = update_sub.add_parser("status"); status.add_argument("--json", action="store_true")
@@ -60,6 +61,10 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "install": payload = service.install(not args.no_ui)
         elif command == "uninstall": payload = service.uninstall()
         elif command == "migrate": payload = service.migrate()
+        elif command == "tui":
+            from .tui import run_tui
+            run_tui(service=service, paths=paths)
+            return 0
         elif command == "hook-run": payload = service.hook_run(args.event, args.event_args)
         elif command == "update":
             payload = service.update_apply() if args.update_command == "apply" else service.update_check(args.update_command == "check" and args.force)
@@ -68,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
             elif args.ui_command == "install": payload = envelope("ui-install", summary="QML manager installed", result=ui.install(paths), errors=[])
             elif args.ui_command == "remove": payload = envelope("ui-remove", summary="QML manager removed", result=ui.remove(paths), errors=[])
             elif args.ui_command == "status": payload = envelope("ui-status", summary="QML manager status", result=ui.status(paths), errors=[])
+            elif args.ui_command == "surface":
+                result = ui.surface(paths, args.surface)
+                payload = envelope("ui-surface", summary=f"Omarchy menu opens the {str(result['surface']).upper()}", result=result, errors=[])
             else:
                 from .omarchy import run
                 completed = run("shell", "shell", "summon", "io.github.oldjobobo.thpm", "{}", check=False)

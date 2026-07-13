@@ -141,13 +141,15 @@ def _safe_extract(archive: Path, destination: Path) -> Path:
 
 
 def _stage_runtime(source: Path, runtime: Path) -> None:
-    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(runtime)], check=True)
+    subprocess.run([sys.executable, "-m", "venv", str(runtime)], check=True)
+    subprocess.run([str(runtime / "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "textual>=8.2.8,<9"], check=True)
     purelib = subprocess.run([str(runtime / "bin/python"), "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True, capture_output=True, check=True).stdout.strip()
     shutil.copytree(source / "src/thpm", Path(purelib) / "thpm")
     shutil.copytree(source / "assets", runtime / "share/thpm")
     shutil.copy2(source / "assets/bin/thpm", runtime / "bin/thpm")
     os.chmod(runtime / "bin/thpm", 0o755)
     subprocess.run([str(runtime / "bin/thpm"), "--version"], check=True, capture_output=True, text=True)
+    subprocess.run([str(runtime / "bin/python"), "-c", "from thpm.tui import ThpmTui"], check=True, capture_output=True, text=True)
 
 
 def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | None]:

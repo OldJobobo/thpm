@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -163,27 +164,17 @@ class UiTests(Sandbox):
         self.assertIn('"foreign"', self.paths.menu_extension.read_text())
         self.assertNotIn("style.theme-hooks", self.paths.menu_extension.read_text())
 
-    def test_menu_manager_has_native_checked_toggle_rows(self):
-        with patch("thpm.ui.shell_running", return_value=False):
-            ui.install(self.paths)
-        menu = self.paths.menu_extension.read_text()
-        self.assertIn('"style.theme-hooks.terminal.fish"', menu)
-        self.assertIn('"checked":"thpm plugin enabled fish"', menu)
-        self.assertIn('"action":"thpm plugin toggle fish && omarchy menu summon style.theme-hooks.terminal"', menu)
-        self.assertNotIn("io.github.oldjobobo.thpm", menu)
+    def test_qml_manifest_contract(self):
+        manifest = json.loads((Path(__file__).parents[1] / "assets/qml/manifest.json").read_text())
+        self.assertEqual(manifest["id"], "io.github.oldjobobo.thpm")
+        self.assertIn("panel", manifest["kinds"])
+        self.assertTrue(manifest["keepLoaded"])
 
-    def test_ui_upgrade_removes_obsolete_surface_plugin(self):
-        self.paths.shell_plugin_dir.mkdir(parents=True)
-        assets = Path(__file__).parents[1] / "assets"
-        calls = []
-        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), \
-             patch("thpm.ui.shell_running", return_value=True), \
-             patch("thpm.ui.run", side_effect=lambda *args, **kwargs: calls.append(args)):
-            ui.install(self.paths)
-        self.assertEqual(calls[0], ("plugin", "disable", "io.github.oldjobobo.thpm"))
-        self.assertIn(("plugin", "rescan"), calls)
-        self.assertNotIn(("plugin", "enable", "io.github.oldjobobo.thpm"), calls)
-        self.assertFalse(self.paths.shell_plugin_dir.exists())
+    def test_qml_uses_layer_shell_surface_not_desktop_window(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertIn("PanelWindow {", qml)
+        self.assertIn("WlrLayershell.layer: WlrLayer.Overlay", qml)
+        self.assertNotIn("FloatingWindow {", qml)
 
 
 class ServiceTests(Sandbox):

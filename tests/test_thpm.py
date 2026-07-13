@@ -191,6 +191,7 @@ class UiTests(Sandbox):
         self.assertIn("delegate: Toggle {", qml)
         self.assertNotIn("Switch {", qml)
         self.assertNotIn('text: "Refresh"', qml)
+        self.assertIn("rightPadding: pluginScrollBar.visible ? pluginScrollBar.width", qml)
 
     def test_qml_update_flow_requires_confirmation(self):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()

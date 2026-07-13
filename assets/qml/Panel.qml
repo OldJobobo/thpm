@@ -225,6 +225,12 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
+                    rightPadding: pluginScrollBar.visible ? pluginScrollBar.width + Style.space(6) : 0
+
+                    QQC.ScrollBar.vertical: QQC.ScrollBar {
+                        id: pluginScrollBar
+                        policy: QQC.ScrollBar.AsNeeded
+                    }
 
                     ListView {
                         id: pluginList

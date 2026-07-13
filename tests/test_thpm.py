@@ -176,6 +176,16 @@ class UiTests(Sandbox):
         self.assertIn("WlrLayershell.layer: WlrLayer.Overlay", qml)
         self.assertNotIn("FloatingWindow {", qml)
 
+    def test_qml_design_stays_single_panel_and_uses_omarchy_controls(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertEqual(qml.count("PanelWindow {"), 1)
+        self.assertIn("import qs.Ui", qml)
+        self.assertIn("BorderSurface {", qml)
+        self.assertIn("TextField {", qml)
+        self.assertIn("delegate: Toggle {", qml)
+        self.assertNotIn("Switch {", qml)
+        self.assertNotIn('text: "Refresh"', qml)
+
 
 class ServiceTests(Sandbox):
     def test_json_envelope_and_native_ownership(self):

@@ -24,7 +24,6 @@ where = ["src"]
 
 [tool.setuptools.data-files]
 "share/thpm/templates" = ["assets/templates/*"]
-"share/thpm/qml" = ["assets/qml/*"]
 "share/thpm/hooks" = ["assets/hooks/*"]
 "share/thpm/compat" = ["assets/compat/*"]
 

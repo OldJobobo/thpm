@@ -1,6 +1,6 @@
 # thpm
 
-`thpm` is an Omarchy 4.x-native manager for theme integrations that Omarchy does not own. It installs one theme hook, lets Omarchy render semantic-color templates, and exposes the same plugin state through a CLI and an Omarchy Shell QML panel.
+`thpm` is an Omarchy 4.x-native manager for theme integrations that Omarchy does not own. It installs one theme hook, lets Omarchy render semantic-color templates, and exposes the same plugin state through its CLI and the native Omarchy menu.
 
 This is a new MIT-licensed implementation. It is not a continuation or relicensing of `imbypass/omarchy-theme-hook`; no source, tests, documentation, comments, or Git history from that project are included. See [PROVENANCE.md](PROVENANCE.md).
 
@@ -8,7 +8,7 @@ This is a new MIT-licensed implementation. It is not a continuation or relicensi
 
 - Omarchy 4.x (Quattro)
 - Python 3.11 or newer
-- Optional: Omarchy Shell for the graphical manager
+- Optional: Omarchy Shell for the native menu manager
 
 Pre-4.0 Omarchy layouts and legacy palette aliases are intentionally unsupported.
 
@@ -26,9 +26,9 @@ For Arch Linux, build either package from `packaging/aur`:
 (cd packaging/aur/thpm && makepkg -si)
 ```
 
-The source installer first migrates an existing `theme-hook-plugin-manager` installation, then installs the new package into a private, dependency-free Python runtime at `~/.local/share/thpm/runtime`. It does not invoke pip and respects Arch Linux's externally-managed Python environment. It preserves enabled plugin state, archives recognized legacy files under `~/.local/state/thpm/legacy-backups/`, removes obsolete legacy launchers and control files, and installs the new hook and QML manager. Unrecognized user files are left in place. If a custom hook still sources the former helper path, THPM installs a small independently authored transition shim for its status helpers instead of retaining the old library.
+The source installer first migrates an existing `theme-hook-plugin-manager` installation, then installs the new package into a private, dependency-free Python runtime at `~/.local/share/thpm/runtime`. It does not invoke pip and respects Arch Linux's externally-managed Python environment. It preserves enabled plugin state, archives recognized legacy files under `~/.local/state/thpm/legacy-backups/`, removes obsolete legacy launchers and control files, and installs the new hook and Omarchy menu extension. Unrecognized user files are left in place. If a custom hook still sources the former helper path, THPM installs a small independently authored transition shim for its status helpers instead of retaining the old library.
 
-The AUR packages declare the former package name as replaced/conflicting, so pacman handles the package-level transition. After installation, `thpm install` performs the per-user migration and discovers Omarchy capabilities, installs the single hook, reconciles templates, and installs the QML manager when Omarchy Shell is running.
+The AUR packages declare the former package name as replaced/conflicting, so pacman handles the package-level transition. After installation, `thpm install` performs the per-user migration, discovers Omarchy capabilities, installs the single hook, reconciles templates, and installs the native menu extension.
 
 ## Use
 

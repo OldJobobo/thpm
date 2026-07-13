@@ -54,6 +54,18 @@ class Service:
             changed = reconcile_templates(self.paths, enabled)
         return envelope("plugin-enable" if value else "plugin-disable", summary=f"{plugin_id} {'enabled' if value else 'disabled'}", changed=changed, plugins=self.views(), errors=[])
 
+    def toggle(self, plugin_id: str) -> dict[str, object]:
+        enabled = load(self.paths)
+        if plugin_id not in BY_ID:
+            return envelope("plugin-toggle", False, summary=f"unknown plugin: {plugin_id}", errors=[{"message": "unknown plugin"}])
+        return self.set_enabled(plugin_id, not enabled[plugin_id])
+
+    def enabled(self, plugin_id: str) -> dict[str, object]:
+        if plugin_id not in BY_ID:
+            return envelope("plugin-enabled", False, summary=f"unknown plugin: {plugin_id}", errors=[{"message": "unknown plugin"}])
+        value = load(self.paths)[plugin_id]
+        return envelope("plugin-enabled", value, summary=f"{plugin_id} is {'enabled' if value else 'disabled'}", enabled=value, errors=[])
+
     def doctor(self, plugin_id: str | None = None) -> dict[str, object]:
         errors: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []

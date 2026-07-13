@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+launcher="$(readlink -f -- "${BASH_SOURCE[0]}")"
+runtime_bin="$(cd -- "$(dirname -- "$launcher")" && pwd)"
+exec "$runtime_bin/python" -m thpm "$@"

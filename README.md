@@ -26,7 +26,7 @@ For Arch Linux, build either package from `packaging/aur`:
 (cd packaging/aur/thpm && makepkg -si)
 ```
 
-The source installer first migrates an existing `theme-hook-plugin-manager` installation, then installs the new package. It preserves enabled plugin state, archives recognized legacy files under `~/.local/state/thpm/legacy-backups/`, removes obsolete legacy launchers and control files, and installs the new hook and QML manager. Unrecognized user files are left in place. If a custom hook still sources the former helper path, THPM installs a small independently authored transition shim for its status helpers instead of retaining the old library.
+The source installer first migrates an existing `theme-hook-plugin-manager` installation, then installs the new package into a private, dependency-free Python runtime at `~/.local/share/thpm/runtime`. It does not invoke pip and respects Arch Linux's externally-managed Python environment. It preserves enabled plugin state, archives recognized legacy files under `~/.local/state/thpm/legacy-backups/`, removes obsolete legacy launchers and control files, and installs the new hook and QML manager. Unrecognized user files are left in place. If a custom hook still sources the former helper path, THPM installs a small independently authored transition shim for its status helpers instead of retaining the old library.
 
 The AUR packages declare the former package name as replaced/conflicting, so pacman handles the package-level transition. After installation, `thpm install` performs the per-user migration and discovers Omarchy capabilities, installs the single hook, reconciles templates, and installs the QML manager when Omarchy Shell is running.
 

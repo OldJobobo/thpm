@@ -54,7 +54,13 @@ def artifacts(paths: Paths) -> list[Path]:
     legacy_share = paths.data_home / "thpm"
     for relative in LEGACY_CONTROL_FILES:
         candidate = legacy_share / relative
-        if candidate.exists(): result.append(candidate)
+        if not candidate.exists(): continue
+        if relative == "lib/theme-env.sh":
+            try: content = candidate.read_text(errors="ignore")
+            except OSError: content = ""
+            if "Transitional helpers for independently authored hooks" in content:
+                continue
+        result.append(candidate)
     skills = legacy_share / "skills"
     if skills.is_dir(): result.append(skills)
     config = paths.thpm_config_dir / "config.toml"

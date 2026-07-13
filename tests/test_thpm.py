@@ -120,6 +120,12 @@ class MigrationTests(Sandbox):
         launcher.write_text('#!/bin/bash\nTHPM_VERSION_FILE="$HOME/.local/share/thpm/version"\n')
         self.assertIn(launcher, artifacts(self.paths))
 
+    def test_upgrade_does_not_rearchive_new_transition_helper(self):
+        helper = self.paths.legacy_compat_file
+        helper.parent.mkdir(parents=True)
+        helper.write_text("#!/usr/bin/env bash\n# Transitional helpers for independently authored hooks that used THPM's old helper path.\n")
+        self.assertNotIn(helper, artifacts(self.paths))
+
     def test_custom_hook_requesting_old_helper_gets_compatibility_bridge(self):
         self.paths.hook_dir.mkdir(parents=True)
         custom = self.paths.hook_dir / "10-custom.sh"

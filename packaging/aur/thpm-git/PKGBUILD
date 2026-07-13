@@ -1,5 +1,5 @@
 pkgname=thpm-git
-pkgver=1.1.0.r0.g0000000
+pkgver=1.0.0.r0.g0000000
 pkgrel=1
 pkgdesc='Omarchy 4-native manager for external theme integrations (git)'
 arch=('any')

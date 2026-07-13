@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.oldjobobo.thpm",
   "name": "Theme Hook Plugins",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "author": "OldJobobo",
   "license": "MIT",
   "description": "Manage THPM integrations from Omarchy Shell",

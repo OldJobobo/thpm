@@ -1,6 +1,6 @@
 # thpm
 
-`thpm` is an Omarchy 4.x-native manager for theme integrations that Omarchy does not own. It installs one theme hook, lets Omarchy render semantic-color templates, and exposes the same plugin state through a CLI and an Omarchy Shell QML panel.
+`thpm` is an Omarchy 4.x-native manager for theme integrations that Omarchy does not own. It installs one theme hook, lets Omarchy render semantic-color templates, and exposes the same plugin state through a CLI, an Omarchy Shell QML panel, and a full-screen terminal UI.
 
 This is a new MIT-licensed implementation. It is not a continuation or relicensing of `imbypass/omarchy-theme-hook`; no source, tests, documentation, comments, or Git history from that project are included. See [PROVENANCE.md](PROVENANCE.md).
 
@@ -8,7 +8,8 @@ This is a new MIT-licensed implementation. It is not a continuation or relicensi
 
 - Omarchy 4.x (Quattro)
 - Python 3.11 or newer
-- Optional: Omarchy Shell for the graphical manager
+- Textual 8.2.8 or newer within the supported 8.x series (installed automatically by source installs; packaged as `python-textual` on Arch)
+- Optional: Omarchy Shell for the graphical manager and menu launchers
 
 Pre-4.0 Omarchy layouts and legacy palette aliases are intentionally unsupported.
 
@@ -26,7 +27,7 @@ For Arch Linux, build either package from `packaging/aur`:
 (cd packaging/aur/thpm && makepkg -si)
 ```
 
-The source installer first migrates an existing `theme-hook-plugin-manager` installation, then installs the new package into a private, dependency-free Python runtime at `~/.local/share/thpm/runtime`. It does not invoke pip and respects Arch Linux's externally-managed Python environment. It preserves enabled plugin state, archives recognized legacy files under `~/.local/state/thpm/legacy-backups/`, removes obsolete legacy launchers and control files, and installs the new hook and QML manager. Unrecognized user files are left in place. If a custom hook still sources the former helper path, THPM installs a small independently authored transition shim for its status helpers instead of retaining the old library.
+The source installer first migrates an existing `theme-hook-plugin-manager` installation, then installs THPM and its pinned Textual dependency range into a private Python runtime at `~/.local/share/thpm/runtime`. Pip runs only inside that isolated virtual environment, preserving Arch Linux's externally-managed system Python. The installer preserves enabled plugin state, archives recognized legacy files under `~/.local/state/thpm/legacy-backups/`, removes obsolete legacy launchers and control files, and installs the hook plus both control-panel launchers. Unrecognized user files are left in place. If a custom hook still sources the former helper path, THPM installs a small independently authored transition shim for its status helpers instead of retaining the old library.
 
 The AUR packages declare the former package name as replaced/conflicting, so pacman handles the package-level transition. After installation, `thpm install` performs the per-user migration and discovers Omarchy capabilities, installs the single hook, reconciles templates, and installs the QML manager when Omarchy Shell is running.
 
@@ -39,12 +40,15 @@ thpm disable firefox
 thpm doctor
 thpm run
 thpm ui open
+thpm tui
 thpm update check
 thpm update apply
 thpm uninstall
 ```
 
-All commands accept `--json`. The GUI is available at **Omarchy Menu → Style → Theme Hook Plugins** after installation. Its Omarchy-styled control panel has an overview dashboard and dedicated Integrations, Doctor, and System sections for toggling plugins, checking health, reapplying or reconciling the active theme, and managing updates.
+All service commands accept `--json`. The graphical panel is available directly with `thpm ui open`, and the alternate terminal application with `thpm tui`. Omarchy Menu contains one **Theme Hook Plugins** entry; choose which frontend it opens with `thpm ui surface gui`, `thpm ui surface tui`, or flip it with `thpm ui surface toggle`. Run `thpm ui surface` without an argument to inspect the current target. Both frontends have an overview dashboard and dedicated Integrations, Doctor, and System sections for toggling plugins, checking health, reapplying or reconciling the active theme, and managing updates.
+
+The TUI uses the active Omarchy semantic palette and falls back to a readable built-in dark theme if the palette is unavailable. Use `1`–`4` to change sections, `/` to search integrations, `Space` or `Enter` to toggle the selected integration, `r` to refresh, and `q` to quit. Mouse controls and normal Tab navigation are also supported. Terminals smaller than 80×24 show a resize prompt instead of a damaged layout.
 
 Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Omarchy-native integrations are shown read-only so ownership stays clear.
 

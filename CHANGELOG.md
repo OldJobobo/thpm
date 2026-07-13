@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add a Textual terminal control panel with Overview, Integrations, Doctor, and System sections.
+- Add `thpm tui`, active Omarchy palette theming, keyboard shortcuts, and a separate Omarchy terminal menu entry.
+- Install and validate Textual in private source runtimes and declare it for Arch packages.
+- Add a Ko-fi donation action to the TUI and QML control panels.
+- Replace duplicate Omarchy menu entries with one persisted GUI/TUI-selectable entry.
+
 ## 1.0.0 - 2026-07-12
 
 - Introduce an independent Omarchy 4.x-native Python control plane.

@@ -11,6 +11,8 @@ def build(paths: Paths, enabled: dict[str, bool]) -> list[PluginView]:
     result: list[PluginView] = []
     for plugin in PLUGINS:
         missing = [command for command in plugin.commands if shutil.which(command) is None]
+        if plugin.id == "hermes" and ((paths.config_home / "Hermes").is_dir() or shutil.which("hermes-desktop-remote") or shutil.which("Hermes")):
+            missing = []
         assets = [name for name in plugin.theme_assets if (paths.current_theme / name).is_file()]
         available = not missing or bool(assets) or not plugin.commands
         result.append(PluginView(id=plugin.id, label=plugin.label, category=plugin.category,

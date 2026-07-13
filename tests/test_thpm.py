@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import io
+import json
+import re
 import tarfile
 import tempfile
 import unittest
@@ -226,6 +228,12 @@ class ServiceTests(Sandbox):
         self.assertTrue(state["discord"])
         self.assertFalse(state["discord-system24"])
 
+    def test_hermes_desktop_config_makes_plugin_available(self):
+        (self.paths.config_home / "Hermes").mkdir(parents=True)
+        plugin = next(item for item in Service(self.paths).state()["plugins"] if item["id"] == "hermes")
+        self.assertTrue(plugin["available"])
+        self.assertEqual(plugin["missing"], [])
+
 
 class IntegrationTests(Sandbox):
     def test_vencord_asset_copy_does_not_require_palette(self):
@@ -239,6 +247,17 @@ class IntegrationTests(Sandbox):
         self.assertEqual(target.read_bytes(), source.read_bytes())
         self.assertIn(str(target), changed)
         self.assertFalse((target_dir / "omarchy.theme.css").exists())
+
+    def test_hermes_template_matches_desktop_theme_contract(self):
+        template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()
+        rendered = re.sub(r"\{\{ ([a-z_]+) \}\}", lambda match: COLORS.get(match.group(1), "dark"), template)
+        document = json.loads(rendered)
+        self.assertEqual(document["schemaVersion"], 1)
+        self.assertEqual(document["source"], "thpm")
+        for key in ("colors", "darkColors", "terminal", "darkTerminal"):
+            self.assertIn(key, document["theme"])
+        self.assertIn("composerRing", document["theme"]["colors"])
+        self.assertIn("brightWhite", document["theme"]["darkTerminal"])
 
 
 class UpdateTests(Sandbox):

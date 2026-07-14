@@ -12,3 +12,7 @@ Rules:
 - Add behavioral tests for paths, generated files, and preservation behavior.
 
 Template names start with `thpm-` and end in `.tpl`. Omarchy renders each into the active theme without the `.tpl` suffix. An adapter then atomically installs that generated output where the application expects it.
+
+The Discord integrations are mutually exclusive. `discord` prefers a theme-provided `vencord.theme.css` and otherwise uses the semantic-palette template. `discord-system24` follows the same pattern with `vencord-system24.theme.css` and its generated System24 fallback. Both install the selected output as `vencord.theme.css` in existing supported client theme directories.
+
+The Zellij adapter installs the generated `thpm-current` theme in `~/.config/zellij/themes/thpm.kdl`, selects it in `config.kdl`, and removes the delimited inline block used by pre-1.0 THPM. Content outside that legacy block is preserved.

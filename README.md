@@ -52,6 +52,8 @@ The TUI uses the active Omarchy semantic palette and falls back to a readable bu
 
 Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Omarchy-native integrations are shown read-only so ownership stays clear.
 
+The two Discord choices are mutually exclusive: `discord` provides the compact palette mapping, while `discord-system24` provides the full System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template.
+
 ## Development
 
 ```bash

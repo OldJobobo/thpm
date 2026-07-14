@@ -7,7 +7,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("fzf", "fzf", "Terminal", "Provide an Omarchy-colored fzf palette.", "hybrid", ("fzf",), templates=("thpm-fzf.fish.tpl",)),
     Plugin("branding", "Branding extras", "Desktop", "Synchronize optional theme branding text.", "action", theme_assets=("about.txt", "screensaver.txt"), default_enabled=False),
     Plugin("discord", "Discord / Vencord", "Messaging", "Install a theme-provided or generated Vencord theme.", "hybrid", theme_assets=("vencord.theme.css",), templates=("thpm-vencord.theme.css.tpl",)),
-    Plugin("discord-system24", "Discord System24", "Messaging", "Install the System24-flavored Vencord surface.", "apply", theme_assets=("vencord-system24.theme.css",), default_enabled=False),
+    Plugin("discord-system24", "Discord System24", "Messaging", "Install the System24-flavored Vencord surface.", "hybrid", theme_assets=("vencord-system24.theme.css",), templates=("thpm-vencord-system24.theme.css.tpl",), default_enabled=False),
     Plugin("qt6ct", "Qt6ct", "Desktop", "Generate a Qt6 color scheme.", "hybrid", ("qt6ct",), templates=("thpm-qt6ct.conf.tpl",)),
     Plugin("spotify", "Spotify / Spicetify", "Media", "Update Spicetify colors and apply them.", "hybrid", ("spicetify",), templates=("thpm-spicetify.ini.tpl",)),
     Plugin("superfile", "Superfile", "Terminal", "Install a semantic Superfile theme.", "hybrid", ("spf",), theme_assets=("superfile.toml",), templates=("thpm-superfile.toml.tpl",)),

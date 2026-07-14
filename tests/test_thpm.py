@@ -457,6 +457,29 @@ class IntegrationTests(Sandbox):
         self.assertIn(str(target), changed)
         self.assertFalse((target_dir / "omarchy.theme.css").exists())
 
+    def test_system24_uses_generated_fallback_when_theme_has_no_asset(self):
+        generated = self.paths.current_theme / "thpm-vencord-system24.theme.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text('@import url("system24.css");\n')
+        target_dir = self.paths.config_home / "vesktop/themes"
+        target_dir.mkdir(parents=True)
+        changed = apply("discord-system24", self.paths)
+        target = target_dir / "vencord.theme.css"
+        self.assertEqual(target.read_bytes(), generated.read_bytes())
+        self.assertIn(str(target), changed)
+
+    def test_zellij_selects_generated_theme_and_removes_legacy_block(self):
+        generated = self.paths.current_theme / "thpm-zellij.kdl"
+        generated.parent.mkdir(parents=True)
+        generated.write_text('themes { thpm-current { fg "#ffffff" } }\n')
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme "current"\n\n// thpm-zellij-theme-start\nthemes { current {} }\n// thpm-zellij-theme-end\n')
+        changed = apply("zellij", self.paths)
+        self.assertEqual((self.paths.config_home / "zellij/themes/thpm.kdl").read_bytes(), generated.read_bytes())
+        self.assertEqual(config.read_text(), 'theme "thpm-current"\n')
+        self.assertIn(str(config), changed)
+
     def test_hermes_template_matches_desktop_theme_contract(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()
         rendered = re.sub(r"\{\{ ([a-z_]+) \}\}", lambda match: COLORS.get(match.group(1), "dark"), template)

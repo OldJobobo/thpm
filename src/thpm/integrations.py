@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,11 +12,15 @@ from .registry import BY_ID, PLUGINS
 
 GENERATED = {
     "fish": "thpm-fish.fish", "fzf": "thpm-fzf.fish", "discord": "thpm-vencord.theme.css",
+    "discord-system24": "thpm-vencord-system24.theme.css",
     "qt6ct": "thpm-qt6ct.conf", "spotify": "thpm-spicetify.ini", "superfile": "thpm-superfile.toml",
     "vicinae": "thpm-vicinae.toml", "zellij": "thpm-zellij.kdl", "nwg-dock": "thpm-nwg-dock.css",
     "cava": "thpm-cava.ini", "firefox": "thpm-firefox.css", "zen": "thpm-zen.css",
     "hermes": "thpm-hermes.json", "qutebrowser": "thpm-qutebrowser.py", "heroic": "thpm-heroic.css",
 }
+
+ZELLIJ_MANAGED_START = "// thpm-zellij-theme-start"
+ZELLIJ_MANAGED_END = "// thpm-zellij-theme-end"
 
 
 def _copy_first(paths: Paths, candidates: tuple[str, ...], target: Path) -> bool:
@@ -57,6 +62,23 @@ def _browser_import(paths: Paths, plugin_id: str, base: Path) -> None:
     atomic_text(user_chrome, block + existing.lstrip())
 
 
+def _select_zellij_theme(paths: Paths) -> Path:
+    config = paths.config_home / "zellij/config.kdl"
+    existing = config.read_text() if config.is_file() else ""
+    if ZELLIJ_MANAGED_START in existing or ZELLIJ_MANAGED_END in existing:
+        existing = remove_managed_block(existing, ZELLIJ_MANAGED_START, ZELLIJ_MANAGED_END)
+    theme = re.compile(r'^(?P<indent>\s*)theme\s+"[^"]*".*$', re.MULTILINE)
+    if theme.search(existing):
+        updated = theme.sub(lambda match: f'{match.group("indent")}theme "thpm-current"', existing, count=1)
+    else:
+        updated = 'theme "thpm-current"\n' + ("\n" + existing.lstrip() if existing.strip() else "")
+    if not updated.endswith("\n"):
+        updated += "\n"
+    if updated != (config.read_text() if config.is_file() else ""):
+        atomic_text(config, updated)
+    return config
+
+
 def apply(plugin_id: str, paths: Paths) -> list[str]:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
@@ -81,6 +103,9 @@ def apply(plugin_id: str, paths: Paths) -> list[str]:
     if plugin_id in targets and generated.is_file():
         atomic_copy(generated, targets[plugin_id])
         changed.append(str(targets[plugin_id]))
+        if plugin_id == "zellij":
+            config_file = _select_zellij_theme(paths)
+            changed.append(str(config_file))
     elif plugin_id == "branding":
         for source_name, target_name in (("about.txt", "about.txt"), ("screensaver.txt", "screensaver.txt")):
             source = paths.current_theme / source_name
@@ -89,7 +114,8 @@ def apply(plugin_id: str, paths: Paths) -> list[str]:
                 atomic_copy(source, target)
                 changed.append(str(target))
     elif plugin_id in {"discord", "discord-system24"}:
-        source_names = ("vencord.theme.css", GENERATED.get(plugin_id, "")) if plugin_id == "discord" else ("vencord-system24.theme.css",)
+        source_names = (("vencord.theme.css", GENERATED[plugin_id]) if plugin_id == "discord"
+            else ("vencord-system24.theme.css", GENERATED[plugin_id]))
         directories = (
             config / "Vencord/themes",
             config / "vesktop/themes",

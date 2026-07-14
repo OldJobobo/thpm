@@ -3,7 +3,6 @@ import QtQuick.Controls as QQC
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
-import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 
@@ -72,6 +71,7 @@ Item {
     function open(payloadJson) {
         closingFromHost = false;
         opened = true;
+        surface.visible = true;
         refresh.running = true;
         updateCheck.command = ["thpm", "--json", "update", "status"];
         updateCheck.running = true;
@@ -83,6 +83,7 @@ Item {
     function close() {
         closingFromHost = true;
         opened = false;
+        surface.visible = false;
         closingFromHost = false;
     }
 
@@ -90,7 +91,7 @@ Item {
         if (shell && typeof shell.hide === "function")
             shell.hide("io.github.oldjobobo.thpm");
         else
-            opened = false;
+            close();
     }
 
     function refreshState() {
@@ -263,49 +264,29 @@ Item {
         command: ["xdg-open", "https://ko-fi.com/oldjobobo"]
     }
 
-    PanelWindow {
+    FloatingWindow {
         id: surface
 
-        visible: root.opened
+        title: "THPM Theme Hook Plugins"
+        visible: false
         color: "transparent"
-        exclusionMode: ExclusionMode.Ignore
-        WlrLayershell.namespace: "thpm-control-panel"
-        WlrLayershell.layer: WlrLayer.Overlay
-        WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+        implicitWidth: 940
+        implicitHeight: 760
+        minimumSize: Qt.size(760, 560)
 
-        anchors {
-            top: true
-            right: true
-            bottom: true
-            left: true
-        }
-
-        Rectangle {
-            anchors.fill: parent
-            color: Qt.rgba(0, 0, 0, 0.32)
-        }
-
-        MouseArea {
-            anchors.fill: parent
-            onClicked: root.requestClose()
+        onVisibleChanged: {
+            root.opened = visible;
+            if (!visible && !root.closingFromHost && root.shell && typeof root.shell.hide === "function")
+                root.shell.hide("io.github.oldjobobo.thpm");
         }
 
         BorderSurface {
             id: card
 
-            anchors.centerIn: parent
-            width: Math.min(940, surface.width - Style.space(32))
-            height: Math.min(760, surface.height - Style.space(40))
+            anchors.fill: parent
             radius: Style.cornerRadius
             color: Color.popups.background
             borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.normalBorderWidth))
-
-            MouseArea {
-                anchors.fill: parent
-                onClicked: function(mouse) {
-                    mouse.accepted = true;
-                }
-            }
 
             RowLayout {
                 anchors.fill: parent

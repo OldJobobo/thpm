@@ -5,7 +5,7 @@ THPM has four deliberately narrow layers:
 1. `thpm` owns registry state, capability checks, locking, migration, and JSON responses.
 2. Omarchy owns palette parsing and template rendering. THPM places opted-in `.tpl` files in `~/.config/omarchy/themed`; Omarchy emits their generated files into the active theme.
 3. One hook at `~/.config/omarchy/hooks/theme-set.d/90-thpm` invokes the integration adapters after a theme switch.
-4. The QML panel is a client of `thpm --json`; it does not duplicate registry or persistence logic.
+4. The QML control panel is a normal compositor-managed `FloatingWindow` and a client of `thpm --json`; it does not duplicate registry or persistence logic or implement its own window-management gestures.
 5. The Textual TUI runs through `thpm tui` and calls the same Python `Service` in background workers, keeping the interface responsive without creating a second state or mutation path.
 
 The canonical palette is the active Omarchy 4 `colors.toml`. THPM requires the Quattro semantic keys and never derives state from generated application files.

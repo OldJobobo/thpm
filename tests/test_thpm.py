@@ -195,15 +195,16 @@ class UiTests(Sandbox):
         self.assertIn("panel", manifest["kinds"])
         self.assertTrue(manifest["keepLoaded"])
 
-    def test_qml_uses_layer_shell_surface_not_desktop_window(self):
+    def test_qml_uses_native_floating_window_surface(self):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
-        self.assertIn("PanelWindow {", qml)
-        self.assertIn("WlrLayershell.layer: WlrLayer.Overlay", qml)
-        self.assertNotIn("FloatingWindow {", qml)
+        self.assertIn("FloatingWindow {", qml)
+        self.assertIn('title: "THPM Theme Hook Plugins"', qml)
+        self.assertNotIn("PanelWindow {", qml)
+        self.assertNotIn("WlrLayershell.", qml)
 
     def test_qml_design_stays_single_panel_and_uses_omarchy_controls(self):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
-        self.assertEqual(qml.count("PanelWindow {"), 1)
+        self.assertEqual(qml.count("FloatingWindow {"), 1)
         self.assertIn("import qs.Ui", qml)
         self.assertIn("BorderSurface {", qml)
         self.assertIn("TextField {", qml)

@@ -8,9 +8,11 @@ pkgbase = thpm-git
 	makedepends = git
 	makedepends = python-build
 	makedepends = python-installer
+	makedepends = python-setuptools
 	makedepends = python-wheel
 	depends = python>=3.11
-	depends = omarchy>=4
+	depends = python-textual>=8.2.8
+	depends = omarchy
 	provides = thpm
 	provides = theme-hook-plugin-manager
 	conflicts = thpm

@@ -5,8 +5,8 @@ pkgdesc='Omarchy 4-native manager for external theme integrations (git)'
 arch=('any')
 url='https://github.com/oldjobobo/thpm'
 license=('MIT')
-depends=('python>=3.11' 'python-textual>=8.2.8' 'omarchy>=4')
-makedepends=('git' 'python-build' 'python-installer' 'python-wheel')
+depends=('python>=3.11' 'python-textual>=8.2.8' 'omarchy')
+makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 provides=('thpm' 'theme-hook-plugin-manager')
 conflicts=('thpm' 'theme-hook-plugin-manager')
 replaces=('theme-hook-plugin-manager')

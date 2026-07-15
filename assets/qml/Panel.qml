@@ -34,6 +34,8 @@ Item {
     property bool doctorHasRun: false
     property string actionMessage: ""
     property bool actionError: false
+    property string menuSurface: "gui"
+    property string menuSurfaceMessage: ""
     property var updateInfo: ({
         "status": "idle",
         "currentVersion": "1.0.0",
@@ -99,6 +101,7 @@ Item {
             var state = JSON.parse(stateOutput.text);
             plugins = state.plugins || [];
             counts = state.counts || counts;
+            menuSurface = state.menuSurface || menuSurface;
             message = state.ok ? "" : (state.summary || "Unable to read THPM state");
         } catch (error) {
             message = "Unable to read THPM state";
@@ -142,6 +145,29 @@ Item {
         } catch (error) {
             actionError = true;
             actionMessage = "Unable to read THPM response";
+        }
+        refresh.running = true;
+    }
+
+    function chooseMenuSurface(surfaceName) {
+        if (surfaceName === menuSurface || setMenuSurface.running)
+            return;
+
+        menuSurfaceMessage = "Switching Omarchy Menu to the " + surfaceName.toUpperCase() + "…";
+        setMenuSurface.command = ["thpm", "--json", "ui", "surface", surfaceName];
+        setMenuSurface.running = true;
+    }
+
+    function readMenuSurface(text) {
+        try {
+            var payload = JSON.parse(text);
+            if (!payload.ok)
+                throw new Error(payload.summary || "Unable to change menu launcher");
+
+            menuSurface = payload.result.surface;
+            menuSurfaceMessage = "Omarchy Menu now opens the " + menuSurface.toUpperCase() + ".";
+        } catch (error) {
+            menuSurfaceMessage = error.message || "Unable to change menu launcher";
         }
         refresh.running = true;
     }
@@ -224,6 +250,15 @@ Item {
 
         stdout: StdioCollector {
             onStreamFinished: root.readAction(text, "Templates reconciled and theme refreshed.")
+        }
+
+    }
+
+    Process {
+        id: setMenuSurface
+
+        stdout: StdioCollector {
+            onStreamFinished: root.readMenuSurface(text)
         }
 
     }
@@ -1008,6 +1043,67 @@ Item {
 
                             ColumnLayout {
                                 Text {
+                                    text: "Menu launcher"
+                                    color: Color.foreground
+                                    font.family: Style.font.family
+                                    font.pixelSize: Style.font.body
+                                    font.bold: true
+                                }
+
+                                Text {
+                                    text: root.menuSurface === "gui" ? "Omarchy Menu opens the graphical window" : "Omarchy Menu opens the terminal interface"
+                                    color: Qt.darker(Color.foreground, 1.35)
+                                    font.family: Style.font.family
+                                    font.pixelSize: Style.font.caption
+                                }
+
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            Button {
+                                text: "GUI"
+                                bordered: true
+                                selected: root.menuSurface === "gui"
+                                focusable: true
+                                enabled: !setMenuSurface.running
+                                onClicked: root.chooseMenuSurface("gui")
+                            }
+
+                            Button {
+                                text: "TUI"
+                                bordered: true
+                                selected: root.menuSurface === "tui"
+                                focusable: true
+                                enabled: !setMenuSurface.running
+                                onClicked: root.chooseMenuSurface("tui")
+                            }
+
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            visible: root.menuSurfaceMessage !== ""
+                            text: root.menuSurfaceMessage
+                            color: Color.foreground
+                            wrapMode: Text.WordWrap
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            height: Math.max(1, Style.normalBorderWidth)
+                            color: Color.popups.border
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Text {
                                     text: "Updates"
                                     color: Color.foreground
                                     font.family: Style.font.family
@@ -1071,26 +1167,40 @@ Item {
                             font.pixelSize: Style.font.caption
                         }
 
-                        Button {
-                            text: "Donate on Ko-fi"
-                            iconText: "󰋑"
-                            bordered: true
-                            focusable: true
-                            onClicked: openDonate.running = true
-                        }
-
                         Item {
                             Layout.fillHeight: true
                         }
 
                     }
 
-                    Text {
-                        Layout.alignment: Qt.AlignHCenter
-                        text: "Esc to close"
-                        color: Qt.darker(Color.foreground, 1.6)
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
+                    Item {
+                        id: persistentFooter
+
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Math.max(footerHint.implicitHeight, footerDonate.implicitHeight)
+
+                        Text {
+                            id: footerHint
+
+                            anchors.centerIn: parent
+                            text: "Esc to close"
+                            color: Qt.darker(Color.foreground, 1.6)
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption
+                        }
+
+                        Button {
+                            id: footerDonate
+
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Donate on Ko-fi"
+                            iconText: "󰋑"
+                            bordered: false
+                            focusable: true
+                            onClicked: openDonate.running = true
+                        }
+
                     }
 
                 }

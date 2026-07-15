@@ -73,9 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             elif args.ui_command == "install": payload = envelope("ui-install", summary="QML manager installed", result=ui.install(paths), errors=[])
             elif args.ui_command == "remove": payload = envelope("ui-remove", summary="QML manager removed", result=ui.remove(paths), errors=[])
             elif args.ui_command == "status": payload = envelope("ui-status", summary="QML manager status", result=ui.status(paths), errors=[])
-            elif args.ui_command == "surface":
-                result = ui.surface(paths, args.surface)
-                payload = envelope("ui-surface", summary=f"Omarchy menu opens the {str(result['surface']).upper()}", result=result, errors=[])
+            elif args.ui_command == "surface": payload = service.ui_surface(args.surface)
             else:
                 from .omarchy import run
                 completed = run("shell", "shell", "summon", "io.github.oldjobobo.thpm", "{}", check=False)

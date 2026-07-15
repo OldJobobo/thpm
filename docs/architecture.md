@@ -20,4 +20,4 @@ Source runtimes are private virtual environments containing THPM and the support
 
 The TUI reads the active semantic `colors.toml` when it starts and on manual refresh. Palette errors select a bundled fallback theme and are reported as degraded presentation, not as a fatal application error.
 
-Omarchy Menu owns one THPM entry. Its target is selected by `thpm ui surface` and persisted in `$XDG_STATE_HOME/thpm/ui.toml`; installation and self-update re-render the entry from that preference without changing the availability of either frontend.
+Omarchy Menu owns one THPM entry. Its target is selected by `thpm ui surface` or the Menu launcher control in either frontend and persisted in `$XDG_STATE_HOME/thpm/ui.toml`; the CLI, GUI, and TUI all use the same service operation. Installation and self-update re-render the entry from that preference without changing the availability of either frontend.

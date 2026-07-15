@@ -174,6 +174,7 @@ class ThpmTui(App[None]):
         self.counts: dict[str, int] = {key: 0 for key in ("enabled", "disabled", "native", "unavailable", "attention")}
         self.doctor_has_run = False
         self.update_info: dict[str, object] = {"status": "idle", "currentVersion": __version__, "availableVersion": None}
+        self.menu_surface = "gui"
         self.palette_warning = palette_warning
 
     def compose(self) -> ComposeResult:
@@ -228,6 +229,14 @@ class ThpmTui(App[None]):
                             yield Button("Apply active theme", id="system-apply")
                             yield Button("Reconcile integrations", id="system-reconcile")
                         yield Static("", id="system-message")
+                        yield Static("", classes="rule")
+                        with Horizontal(classes="system-row"):
+                            with Vertical(classes="toolbar-copy"):
+                                yield Label("Menu launcher", classes="section-label")
+                                yield Static("Omarchy Menu opens the graphical window", id="menu-surface-detail")
+                            yield Button("GUI", id="menu-surface-gui", classes="surface-choice selected")
+                            yield Button("TUI", id="menu-surface-tui", classes="surface-choice")
+                        yield Static("", id="menu-surface-message")
                         yield Static("", classes="rule")
                         with Horizontal(classes="system-row"):
                             with Vertical(classes="toolbar-copy"):
@@ -358,6 +367,8 @@ class ThpmTui(App[None]):
                 self.check_update(True)
         elif button_id == "restart-shell":
             self.restart_shell()
+        elif button_id.startswith("menu-surface-"):
+            self.set_menu_surface(button_id.removeprefix("menu-surface-"))
 
     @on(Input.Changed, "#integration-search")
     async def search_changed(self, event: Input.Changed) -> None:
@@ -390,7 +401,9 @@ class ThpmTui(App[None]):
                 raise RuntimeError(str(payload.get("summary", "Unable to read THPM state")))
             self.plugins = list(payload.get("plugins", []))  # type: ignore[arg-type]
             self.counts = {key: int(value) for key, value in dict(payload.get("counts", {})).items()}
+            self.menu_surface = str(payload.get("menuSurface", "gui"))
             self.render_counts()
+            self.render_menu_surface()
             await self.render_plugins(self.query_one("#integration-search", Input).value)
             self.set_message(self.palette_warning or "")
         except Exception as exc:
@@ -444,6 +457,35 @@ class ThpmTui(App[None]):
         finally:
             self.set_busy(False)
             self.load_state()
+
+    @work(exclusive=True, group="menu-surface", exit_on_error=False)
+    async def set_menu_surface(self, surface: str) -> None:
+        if surface == self.menu_surface:
+            return
+        self.set_busy(True)
+        message = self.query_one("#menu-surface-message", Static)
+        message.update(f"Switching Omarchy Menu to the {surface.upper()}…")
+        try:
+            payload = await asyncio.to_thread(self.service.ui_surface, surface)
+            if not payload.get("ok"):
+                raise RuntimeError(str(payload.get("summary", "Unable to change menu launcher")))
+            result = dict(payload.get("result", {}))
+            self.menu_surface = str(result.get("surface", surface))
+            self.render_menu_surface()
+            message.update(f"Omarchy Menu now opens the {self.menu_surface.upper()}.")
+        except Exception as exc:
+            message.update(str(exc))
+            self.notify(str(exc), severity="error")
+        finally:
+            self.set_busy(False)
+
+    def render_menu_surface(self) -> None:
+        gui = self.menu_surface == "gui"
+        self.query_one("#menu-surface-detail", Static).update(
+            "Omarchy Menu opens the graphical window" if gui else "Omarchy Menu opens the terminal interface"
+        )
+        self.query_one("#menu-surface-gui", Button).set_class(gui, "selected")
+        self.query_one("#menu-surface-tui", Button).set_class(not gui, "selected")
 
     @work(exclusive=True, group="doctor", exit_on_error=False)
     async def run_doctor(self) -> None:
@@ -578,7 +620,7 @@ class ThpmTui(App[None]):
 
     def set_busy(self, busy: bool) -> None:
         self.set_class(busy, "busy")
-        for selector in ("#overview-apply", "#system-apply", "#system-reconcile", "#update-action", "#header-update", "#restart-shell"):
+        for selector in ("#overview-apply", "#system-apply", "#system-reconcile", "#menu-surface-gui", "#menu-surface-tui", "#update-action", "#header-update", "#restart-shell"):
             self.query_one(selector, Button).disabled = busy
 
     def set_message(self, message: str, error: bool = False) -> None:

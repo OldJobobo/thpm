@@ -43,7 +43,25 @@ class Service:
             "unavailable": lambda p: not p["available"],
             "attention": lambda p: bool(p["warnings"]),
         }.items()}
-        return envelope("ui-state", summary="THPM plugin state", version=__version__, counts=counts, plugins=plugins, errors=[])
+        menu_surface = str(ui.surface(self.paths)["surface"])
+        return envelope(
+            "ui-state",
+            summary="THPM plugin state",
+            version=__version__,
+            counts=counts,
+            plugins=plugins,
+            menuSurface=menu_surface,
+            errors=[],
+        )
+
+    def ui_surface(self, requested: str | None = None) -> dict[str, object]:
+        result = ui.surface(self.paths, requested)
+        return envelope(
+            "ui-surface",
+            summary=f"Omarchy menu opens the {str(result['surface']).upper()}",
+            result=result,
+            errors=[],
+        )
 
     def set_enabled(self, plugin_id: str, value: bool) -> dict[str, object]:
         if plugin_id not in BY_ID:

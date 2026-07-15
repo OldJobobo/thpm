@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from textual.widgets import Link
+from textual.widgets import Button, Link
 
 from thpm import palette, ui
 from thpm import update as updater
@@ -236,8 +236,20 @@ class UiTests(Sandbox):
         self.assertIn("doctorInfo.errors || []", qml)
         self.assertIn("doctorInfo.warnings || []", qml)
 
+    def test_qml_menu_launcher_uses_shared_surface_command(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertIn('property string menuSurface: "gui"', qml)
+        self.assertIn('["thpm", "--json", "ui", "surface", surfaceName]', qml)
+        self.assertIn('onClicked: root.chooseMenuSurface("gui")', qml)
+        self.assertIn('onClicked: root.chooseMenuSurface("tui")', qml)
+
     def test_qml_donation_action_opens_kofi(self):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        self.assertEqual(qml.count('text: "Donate on Ko-fi"'), 1)
+        self.assertIn("id: persistentFooter", qml)
+        self.assertIn("id: footerDonate", qml)
+        self.assertIn("anchors.right: parent.right", qml)
+        self.assertIn("bordered: false", qml)
         self.assertIn('text: "Donate on Ko-fi"', qml)
         self.assertIn('command: ["xdg-open", "https://ko-fi.com/oldjobobo"]', qml)
 
@@ -247,6 +259,15 @@ class ServiceTests(Sandbox):
         payload = Service(self.paths).state()
         self.assertEqual(payload["schemaVersion"], 1)
         self.assertTrue(any(p["ownership"] == "native" for p in payload["plugins"]))
+        self.assertEqual(payload["menuSurface"], "gui")
+
+    def test_ui_surface_uses_shared_service_envelope(self):
+        result = {"surface": "tui", "changed": True}
+        with patch("thpm.service.ui.surface", return_value=result) as set_surface:
+            payload = Service(self.paths).ui_surface("tui")
+        set_surface.assert_called_once_with(self.paths, "tui")
+        self.assertEqual(payload["result"], result)
+        self.assertEqual(payload["summary"], "Omarchy menu opens the TUI")
 
     def test_uninstall_removes_only_thpm_integration_files(self):
         foreign = self.paths.themed_dir / "foreign.tpl"
@@ -322,15 +343,15 @@ class CliTests(unittest.TestCase):
         run_tui.assert_called_once()
 
     def test_ui_surface_command_sets_menu_target(self):
-        result = {"surface": "tui", "changed": True}
-        with patch("thpm.cli.ui.surface", return_value=result) as set_surface, patch(
+        response = {"ok": True, "summary": "Omarchy menu opens the TUI", "result": {"surface": "tui", "changed": True}}
+        with patch("thpm.cli.Service") as service_type, patch(
             "sys.stdout", new_callable=io.StringIO
         ) as stdout:
+            service_type.return_value.ui_surface.return_value = response
             exit_code = main(["--json", "ui", "surface", "tui"])
         self.assertEqual(exit_code, 0)
-        set_surface.assert_called_once()
-        self.assertEqual(set_surface.call_args.args[1], "tui")
-        self.assertEqual(json.loads(stdout.getvalue())["result"], result)
+        service_type.return_value.ui_surface.assert_called_once_with("tui")
+        self.assertEqual(json.loads(stdout.getvalue()), response)
 
 
 class FakeTuiService:
@@ -339,9 +360,11 @@ class FakeTuiService:
         self.doctor_calls = 0
         self.update_available = False
         self.update_apply_calls = 0
+        self.menu_surface = "gui"
+        self.surface_calls: list[str] = []
 
     def state(self):
-        return {"ok": True, "counts": {"enabled": 1, "disabled": 0, "native": 1, "unavailable": 0, "attention": 0}, "plugins": [
+        return {"ok": True, "menuSurface": self.menu_surface, "counts": {"enabled": 1, "disabled": 0, "native": 1, "unavailable": 0, "attention": 0}, "plugins": [
             {"id": "fish", "label": "Fish", "category": "Terminal", "description": "Synchronize Fish colors.", "ownership": "thpm", "enabled": True, "available": True, "warnings": []},
             {"id": "native-foot", "label": "Foot live colors", "category": "Native", "description": "Owned by Omarchy.", "ownership": "native", "enabled": True, "available": True, "warnings": []},
         ]}
@@ -362,6 +385,12 @@ class FakeTuiService:
     def update_apply(self):
         self.update_apply_calls += 1
         return {"ok": True, "result": {"status": "updated", "currentVersion": "1.0.0", "availableVersion": "1.1.0"}}
+
+    def ui_surface(self, requested=None):
+        if requested is not None:
+            self.menu_surface = requested
+            self.surface_calls.append(requested)
+        return {"ok": True, "result": {"surface": self.menu_surface, "changed": requested is not None}}
 
 
 class TuiTests(Sandbox):
@@ -427,6 +456,24 @@ class TuiTests(Sandbox):
                 await pilot.pause(0.2)
                 self.assertEqual(service.update_apply_calls, 1)
                 self.assertTrue(app.query_one("#restart-shell").display)
+        asyncio.run(exercise())
+
+    def test_system_menu_launcher_toggles_gui_and_tui(self):
+        async def exercise():
+            service = FakeTuiService()
+            app = ThpmTui(service, self.paths)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause(0.2)
+                await pilot.press("4")
+                self.assertTrue(app.query_one("#menu-surface-gui", Button).has_class("selected"))
+                await pilot.click("#menu-surface-tui")
+                await pilot.pause(0.2)
+                self.assertEqual(service.surface_calls, ["tui"])
+                self.assertTrue(app.query_one("#menu-surface-tui", Button).has_class("selected"))
+                self.assertIn("terminal interface", str(app.query_one("#menu-surface-detail").render()))
+                await pilot.click("#menu-surface-gui")
+                await pilot.pause(0.2)
+                self.assertEqual(service.surface_calls, ["tui", "gui"])
         asyncio.run(exercise())
 
     def test_donation_action_opens_kofi(self):

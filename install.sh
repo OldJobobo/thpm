@@ -13,6 +13,7 @@ python3 -m venv "$runtime_dir"
 "$runtime_dir/bin/python" -m pip install --disable-pip-version-check --no-input 'textual>=8.2.8,<9'
 site_packages="$("$runtime_dir/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 rm -rf "$site_packages/thpm"
+rm -rf "$site_packages"/thpm-*.dist-info "$site_packages"/thpm-*.egg-info
 cp -R "$repo_dir/src/thpm" "$site_packages/thpm"
 rm -rf "$runtime_dir/share/thpm"
 mkdir -p "$runtime_dir/share/thpm"

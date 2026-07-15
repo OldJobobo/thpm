@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 1.0.0 - 2026-07-14
+## 1.0.0rc1 - 2026-07-14
 
 - Introduce an independent Omarchy 4.x-native Python control plane.
 - Add Quattro semantic templates and one theme hook.

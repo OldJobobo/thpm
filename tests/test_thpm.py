@@ -380,11 +380,11 @@ class FakeTuiService:
     def run_theme(self): return {"ok": True}
     def reconcile(self, refresh=False): return {"ok": True}
     def update_check(self, force=False):
-        return {"ok": True, "result": {"status": "available" if self.update_available else "current", "currentVersion": "1.0.0", "availableVersion": "1.1.0" if self.update_available else None}}
+        return {"ok": True, "result": {"status": "available" if self.update_available else "current", "currentVersion": "1.0.0rc1", "availableVersion": "1.1.0" if self.update_available else None}}
 
     def update_apply(self):
         self.update_apply_calls += 1
-        return {"ok": True, "result": {"status": "updated", "currentVersion": "1.0.0", "availableVersion": "1.1.0"}}
+        return {"ok": True, "result": {"status": "updated", "currentVersion": "1.0.0rc1", "availableVersion": "1.1.0"}}
 
     def ui_surface(self, requested=None):
         if requested is not None:
@@ -627,6 +627,15 @@ class UpdateTests(Sandbox):
             result = updater.check(self.paths, force=True)
         self.assertEqual(result["status"], "current")
 
+    def test_release_candidate_versions_sort_before_the_final_release(self):
+        self.assertLess(updater._version("v1.0.0rc1"), updater._version("1.0.0rc2"))
+        self.assertLess(updater._version("1.0.0rc2"), updater._version("1.0.0"))
+
+    def test_current_release_candidate_is_not_offered_again(self):
+        with patch("thpm.update._read_json", return_value=self.release("1.0.0rc1")):
+            result = updater.check(self.paths, force=True)
+        self.assertEqual(result["status"], "current")
+
     def test_archive_path_traversal_is_rejected(self):
         archive = self.paths.home / "bad.tar.gz"
         with tarfile.open(archive, "w:gz") as bundle:
@@ -641,7 +650,8 @@ class UpdateTests(Sandbox):
         script = (Path(__file__).parents[1] / "install.sh").read_text()
         self.assertIn('origin = "source"', script)
         self.assertIn("textual>=8.2.8,<9", script)
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0")
+        self.assertIn('thpm-*.dist-info', script)
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc1")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)
@@ -649,7 +659,7 @@ class UpdateTests(Sandbox):
         self.assertIn("from thpm.tui import ThpmTui", source)
 
     def test_checksum_mismatch_stops_before_runtime_staging(self):
-        result = {"status": "available", "origin": "source", "currentVersion": "1.0.0", "availableVersion": "1.0.1",
+        result = {"status": "available", "origin": "source", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1",
             "archiveUrl": "https://example/archive", "checksumUrl": "https://example/checksum"}
         def download(url, destination):
             destination.write_text("0" * 64 if "checksum" in url else "archive")
@@ -669,7 +679,7 @@ class UpdateTests(Sandbox):
         (source / "VERSION").write_text("1.0.1")
         self.paths.hook_file.parent.mkdir(parents=True)
         self.paths.hook_file.write_text("original hook")
-        result = {"status": "available", "origin": "source", "currentVersion": "1.0.0", "availableVersion": "1.0.1",
+        result = {"status": "available", "origin": "source", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1",
             "archiveUrl": "archive", "checksumUrl": "checksum"}
         archive_bytes = b"archive"
         digest = __import__("hashlib").sha256(archive_bytes).hexdigest()
@@ -690,7 +700,7 @@ class UpdateTests(Sandbox):
         self.assertFalse(fake_root.with_name("runtime.previous").exists())
 
     def test_aur_apply_hands_control_to_floating_terminal(self):
-        result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0", "availableVersion": "1.0.1-1"}
+        result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
         with patch("thpm.update.check", return_value=result), patch("thpm.update.shutil.which", return_value="/usr/bin/omarchy-launch-floating-terminal-with-presentation"), \
              patch("thpm.update.subprocess.Popen") as launch:
             applied = updater.apply(self.paths)

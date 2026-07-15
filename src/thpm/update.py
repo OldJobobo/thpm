@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,12 +27,13 @@ API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 CACHE_SECONDS = 86_400
 
 
-def _version(value: str) -> tuple[int, int, int]:
-    text = value.removeprefix("v")
-    parts = text.split(".")
-    if len(parts) != 3 or not all(part.isdigit() for part in parts):
-        raise ValueError(f"invalid semantic version: {value}")
-    return tuple(int(part) for part in parts)  # type: ignore[return-value]
+def _version(value: str) -> tuple[int, int, int, int, int]:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:rc(\d+))?", value)
+    if not match:
+        raise ValueError(f"invalid release version: {value}")
+    major, minor, patch = (int(part) for part in match.group(1, 2, 3))
+    candidate = match.group(4)
+    return major, minor, patch, 0 if candidate else 1, int(candidate or 0)
 
 
 def _read_json(url: str) -> dict[str, object]:

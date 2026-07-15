@@ -38,7 +38,7 @@ Item {
     property string menuSurfaceMessage: ""
     property var updateInfo: ({
         "status": "idle",
-        "currentVersion": "1.0.0",
+        "currentVersion": "1.0.0rc1",
         "availableVersion": null
     })
     property string updateMessage: ""
@@ -460,7 +460,7 @@ Item {
                         }
 
                         Text {
-                            text: "Version " + (root.updateInfo.currentVersion || "1.0.0")
+                            text: "Version " + (root.updateInfo.currentVersion || "1.0.0rc1")
                             color: Qt.darker(Color.foreground, 1.55)
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption
@@ -1112,7 +1112,7 @@ Item {
                                 }
 
                                 Text {
-                                    text: root.updateInfo.status === "available" ? "Version " + root.updateInfo.availableVersion + " is available" : "Installed version " + (root.updateInfo.currentVersion || "1.0.0")
+                                    text: root.updateInfo.status === "available" ? "Version " + root.updateInfo.availableVersion + " is available" : "Installed version " + (root.updateInfo.currentVersion || "1.0.0rc1")
                                     color: Qt.darker(Color.foreground, 1.35)
                                     font.family: Style.font.family
                                     font.pixelSize: Style.font.caption

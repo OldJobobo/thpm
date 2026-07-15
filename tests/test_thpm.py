@@ -173,6 +173,11 @@ class UiTests(Sandbox):
             self.assertEqual(installed.count('"style.theme-hooks"'), 1)
             self.assertNotIn("style.theme-hooks-terminal", installed)
             self.assertIn("omarchy shell shell summon", installed)
+            self.assertEqual(
+                (self.paths.shell_plugin_dir / "Panel.qml").read_bytes(),
+                (assets / "qml/Panel.qml.in").read_bytes(),
+            )
+            self.assertFalse((self.paths.shell_plugin_dir / "Panel.qml.in").exists())
             selected = ui.surface(self.paths, "tui")
             self.assertEqual(selected["surface"], "tui")
             installed = self.paths.menu_extension.read_text()
@@ -196,14 +201,14 @@ class UiTests(Sandbox):
         self.assertTrue(manifest["keepLoaded"])
 
     def test_qml_uses_native_floating_window_surface(self):
-        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertIn("FloatingWindow {", qml)
         self.assertIn('title: "THPM Theme Hook Plugins"', qml)
         self.assertNotIn("PanelWindow {", qml)
         self.assertNotIn("WlrLayershell.", qml)
 
     def test_qml_design_stays_single_panel_and_uses_omarchy_controls(self):
-        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertEqual(qml.count("FloatingWindow {"), 1)
         self.assertIn("import qs.Ui", qml)
         self.assertIn("BorderSurface {", qml)
@@ -214,14 +219,14 @@ class UiTests(Sandbox):
         self.assertIn("rightPadding: pluginScrollBar.visible ? pluginScrollBar.width", qml)
 
     def test_qml_update_flow_requires_confirmation(self):
-        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertIn('["thpm", "--json", "update", "status"]', qml)
         self.assertIn('id: updateConfirm', qml)
         self.assertIn('command: ["thpm", "--json", "update", "apply"]', qml)
         self.assertIn('text: "Restart shell"', qml)
 
     def test_qml_is_a_multi_section_control_panel(self):
-        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertIn('text: "THPM"', qml)
         self.assertIn('text: "Overview"', qml)
         self.assertIn('text: "Integrations"', qml)
@@ -229,7 +234,7 @@ class UiTests(Sandbox):
         self.assertIn('text: "System"', qml)
 
     def test_qml_doctor_and_system_actions_use_json_cli(self):
-        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertIn('command: ["thpm", "--json", "doctor"]', qml)
         self.assertIn('command: ["thpm", "--json", "run"]', qml)
         self.assertIn('command: ["thpm", "--json", "reconcile", "--refresh"]', qml)
@@ -237,14 +242,14 @@ class UiTests(Sandbox):
         self.assertIn("doctorInfo.warnings || []", qml)
 
     def test_qml_menu_launcher_uses_shared_surface_command(self):
-        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertIn('property string menuSurface: "gui"', qml)
         self.assertIn('["thpm", "--json", "ui", "surface", surfaceName]', qml)
         self.assertIn('onClicked: root.chooseMenuSurface("gui")', qml)
         self.assertIn('onClicked: root.chooseMenuSurface("tui")', qml)
 
     def test_qml_donation_action_opens_kofi(self):
-        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml").read_text()
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertEqual(qml.count('text: "Donate on Ko-fi"'), 1)
         self.assertIn("id: persistentFooter", qml)
         self.assertIn("id: footerDonate", qml)

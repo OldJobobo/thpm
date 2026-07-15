@@ -60,7 +60,9 @@ def install(paths: Paths) -> dict[str, object]:
         raise FileNotFoundError("packaged QML plugin is missing")
     paths.shell_plugin_dir.mkdir(parents=True, exist_ok=True)
     for item in source.iterdir():
-        if item.is_file(): atomic_copy(item, paths.shell_plugin_dir / item.name)
+        if item.is_file():
+            target_name = "Panel.qml" if item.name == "Panel.qml.in" else item.name
+            atomic_copy(item, paths.shell_plugin_dir / target_name)
     selected = _surface(paths)
     _write_menu(paths, selected)
     if shell_running():

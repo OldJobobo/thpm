@@ -1,3 +1,4 @@
+# Maintainer: OldJobobo <aur at oldjobobo dot com>
 pkgname=thpm
 pkgver=1.0.0rc1
 pkgrel=1
@@ -10,8 +11,8 @@ provides=('theme-hook-plugin-manager')
 conflicts=('theme-hook-plugin-manager')
 replaces=('theme-hook-plugin-manager')
 makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
+sha256sums=('3509d7f449f533d49ea40be18c56afcafcc52d62206d91ca17df370f7f4bbb73')
 
 build() {
     cd "$pkgname-$pkgver"

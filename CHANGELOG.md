@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.0.0rc2 - 2026-07-15
+
+- Stage the Omarchy Shell panel as a `.qml.in` payload and install it as `Panel.qml`, preventing package linters from treating shell-private QML imports as system dependencies.
+- Correct AUR dependency metadata so clean Arch chroots do not resolve the unrelated `omarchy` placeholder package.
+
 ## 1.0.0rc1 - 2026-07-14
 
 - Introduce an independent Omarchy 4.x-native Python control plane.

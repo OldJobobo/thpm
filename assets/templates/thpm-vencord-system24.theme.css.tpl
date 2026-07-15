@@ -2,7 +2,7 @@
  * @name Omarchy System24
  * @description System24 using the active Omarchy semantic palette.
  * @author OldJobobo, refact0r
- * @version 1.0.0rc1
+ * @version 1.0.0rc2
  * @website https://github.com/refact0r/system24
  * @source https://github.com/refact0r/system24
  */

@@ -7,6 +7,7 @@
 - Install and validate Textual in private source runtimes and declare it for Arch packages.
 - Add a Ko-fi donation action to the TUI and QML control panels.
 - Replace duplicate Omarchy menu entries with one persisted GUI/TUI-selectable entry.
+- Prefer complete theme-provided Zellij assets, normalize their installed theme name, and bound app reload helpers so theme hooks cannot stall.
 
 ## 1.0.0 - 2026-07-12
 

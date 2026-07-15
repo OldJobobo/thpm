@@ -15,4 +15,4 @@ Template names start with `thpm-` and end in `.tpl`. Omarchy renders each into t
 
 The Discord integrations are mutually exclusive. `discord` prefers a theme-provided `vencord.theme.css` and otherwise uses the semantic-palette template. `discord-system24` follows the same pattern with `vencord-system24.theme.css` and its generated System24 fallback. Both install the selected output as `vencord.theme.css` in existing supported client theme directories.
 
-The Zellij adapter installs the generated `thpm-current` theme in `~/.config/zellij/themes/thpm.kdl`, selects it in `config.kdl`, and removes the delimited inline block used by pre-1.0 THPM. Content outside that legacy block is preserved.
+The Zellij adapter prefers a theme-provided `zellij.kdl` and otherwise uses the generated semantic-palette fallback. It normalizes the installed theme declaration to `thpm-current`, writes it to `~/.config/zellij/themes/thpm.kdl`, selects it in `config.kdl`, and removes the delimited inline block used by pre-1.0 THPM. Content outside that legacy block is preserved.

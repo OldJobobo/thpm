@@ -21,6 +21,9 @@ GENERATED = {
 
 ZELLIJ_MANAGED_START = "// thpm-zellij-theme-start"
 ZELLIJ_MANAGED_END = "// thpm-zellij-theme-end"
+ZELLIJ_THEME_DECLARATION = re.compile(
+    r'(?m)^(?P<prefix>[ \t]*themes[ \t]*\{\s*)(?P<name>"(?:\\.|[^"\\])*"|[^\s{}]+)(?P<suffix>[ \t]*\{)'
+)
 
 
 def _copy_first(paths: Paths, candidates: tuple[str, ...], target: Path) -> bool:
@@ -79,6 +82,18 @@ def _select_zellij_theme(paths: Paths) -> Path:
     return config
 
 
+def _install_zellij_theme(source: Path, target: Path) -> None:
+    content = source.read_text()
+    if not ZELLIJ_THEME_DECLARATION.search(content):
+        raise ValueError(f"Zellij theme has no theme declaration: {source}")
+    normalized = ZELLIJ_THEME_DECLARATION.sub(
+        lambda match: f'{match.group("prefix")}thpm-current{match.group("suffix")}',
+        content,
+        count=1,
+    )
+    atomic_text(target, normalized)
+
+
 def apply(plugin_id: str, paths: Paths) -> list[str]:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
@@ -100,12 +115,19 @@ def apply(plugin_id: str, paths: Paths) -> list[str]:
         "qutebrowser": config / "qutebrowser/thpm_theme.py",
         "heroic": config / "heroic/themes/thpm.css",
     }
-    if plugin_id in targets and generated.is_file():
+    if plugin_id == "zellij":
+        source = paths.current_theme / "zellij.kdl"
+        if not source.is_file():
+            source = generated
+        if not source.is_file():
+            return changed
+        _install_zellij_theme(source, targets[plugin_id])
+        changed.append(str(targets[plugin_id]))
+        config_file = _select_zellij_theme(paths)
+        changed.append(str(config_file))
+    elif plugin_id in targets and generated.is_file():
         atomic_copy(generated, targets[plugin_id])
         changed.append(str(targets[plugin_id]))
-        if plugin_id == "zellij":
-            config_file = _select_zellij_theme(paths)
-            changed.append(str(config_file))
     elif plugin_id == "branding":
         for source_name, target_name in (("about.txt", "about.txt"), ("screensaver.txt", "screensaver.txt")):
             source = paths.current_theme / source_name
@@ -148,7 +170,18 @@ def apply(plugin_id: str, paths: Paths) -> list[str]:
         _browser_import(paths, plugin_id, home / ".zen")
     elif plugin_id == "steam":
         script = home / ".local/share/steam-adwaita/install.py"
-        if script.is_file(): subprocess.run([str(script), "--color-theme", "omarchy"], cwd=script.parent, check=False)
+        if script.is_file():
+            try:
+                subprocess.run(
+                    [str(script), "--color-theme", "omarchy"],
+                    cwd=script.parent,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                pass
     elif plugin_id == "cliamp":
         target = config / "cliamp/themes/omarchy.toml"
         if _copy_first(paths, ("cliamp.toml",), target): changed.append(str(target))
@@ -166,7 +199,16 @@ def _reload(plugin_id: str) -> None:
     }
     command = commands.get(plugin_id)
     if command and shutil.which(command[0]):
-        subprocess.run(command, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def apply_enabled(paths: Paths, enabled: dict[str, bool]) -> dict[str, object]:

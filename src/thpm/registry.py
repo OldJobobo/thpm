@@ -12,7 +12,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("spotify", "Spotify / Spicetify", "Media", "Update Spicetify colors and apply them.", "hybrid", ("spicetify",), templates=("thpm-spicetify.ini.tpl",)),
     Plugin("superfile", "Superfile", "Terminal", "Install a semantic Superfile theme.", "hybrid", ("spf",), theme_assets=("superfile.toml",), templates=("thpm-superfile.toml.tpl",)),
     Plugin("vicinae", "Vicinae", "Desktop", "Install and select an Omarchy Vicinae theme.", "hybrid", ("vicinae",), templates=("thpm-vicinae.toml.tpl",)),
-    Plugin("zellij", "Zellij", "Terminal", "Manage a current Zellij theme block.", "hybrid", ("zellij",), theme_assets=("zellij.kdl",), templates=("thpm-zellij.kdl.tpl",), default_enabled=False),
+    Plugin("zellij", "Zellij", "Terminal", "Install a theme-provided or generated Zellij theme.", "hybrid", ("zellij",), theme_assets=("zellij.kdl",), templates=("thpm-zellij.kdl.tpl",), default_enabled=False),
     Plugin("typora", "Typora", "Writing", "Install Typora theme CSS.", "apply", ("typora",), theme_assets=("typora.css",)),
     Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Retint and reload the dock.", "hybrid", ("nwg-dock-hyprland",), templates=("thpm-nwg-dock.css.tpl",)),
     Plugin("zed-extra", "Zed extras", "Editors", "Apply only Zed behavior not provided by Omarchy.", "apply", ("zeditor",), theme_assets=("zed.json",), default_enabled=False),

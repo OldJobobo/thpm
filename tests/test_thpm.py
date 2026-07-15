@@ -17,7 +17,7 @@ from textual.widgets import Button, Link
 from thpm import palette, ui
 from thpm import update as updater
 from thpm.cli import main
-from thpm.integrations import apply
+from thpm.integrations import _reload, apply
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
 from thpm.registry import PLUGINS
@@ -527,6 +527,59 @@ class IntegrationTests(Sandbox):
         self.assertEqual((self.paths.config_home / "zellij/themes/thpm.kdl").read_bytes(), generated.read_bytes())
         self.assertEqual(config.read_text(), 'theme "thpm-current"\n')
         self.assertIn(str(config), changed)
+
+    def test_zellij_prefers_theme_asset_over_generated_fallback(self):
+        generated = self.paths.current_theme / "thpm-zellij.kdl"
+        generated.parent.mkdir(parents=True)
+        generated.write_text('themes { thpm-current { fg "#ffffff" } }\n')
+        theme_asset = self.paths.current_theme / "zellij.kdl"
+        theme_asset.write_text(
+            'themes { current { text_selected { background 36 55 46 } } }\n'
+        )
+        changed = apply("zellij", self.paths)
+        installed = self.paths.config_home / "zellij/themes/thpm.kdl"
+        self.assertEqual(
+            installed.read_text(),
+            'themes { thpm-current { text_selected { background 36 55 46 } } }\n',
+        )
+        self.assertIn(str(installed), changed)
+
+    def test_zellij_preserves_an_already_normalized_theme_asset(self):
+        theme_asset = self.paths.current_theme / "zellij.kdl"
+        theme_asset.parent.mkdir(parents=True)
+        theme_asset.write_text('themes { thpm-current { fg "#ffffff" } }\n')
+        apply("zellij", self.paths)
+        installed = self.paths.config_home / "zellij/themes/thpm.kdl"
+        self.assertEqual(installed.read_bytes(), theme_asset.read_bytes())
+
+    def test_app_reload_timeout_does_not_stall_theme_hook(self):
+        with patch("thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"), patch(
+            "thpm.integrations.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["swaync-client", "--reload-css"], 5),
+        ) as run:
+            _reload("swaync")
+        run.assert_called_once_with(
+            ["swaync-client", "--reload-css"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+
+    def test_steam_helper_is_bounded_and_quiet(self):
+        script = self.paths.home / ".local/share/steam-adwaita/install.py"
+        script.parent.mkdir(parents=True)
+        script.touch()
+        with patch("thpm.integrations.subprocess.run") as run:
+            apply("steam", self.paths)
+        run.assert_called_once_with(
+            [str(script), "--color-theme", "omarchy"],
+            cwd=script.parent,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
 
     def test_hermes_template_matches_desktop_theme_contract(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()

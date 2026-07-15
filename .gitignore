@@ -6,3 +6,10 @@ build/
 dist/
 graphify-out/
 pkg/
+/packaging/aur/*/src/
+/packaging/aur/*/pkg/
+/packaging/aur/thpm-git/thpm/
+/packaging/aur/*/*.pkg.tar.*
+/packaging/aur/*/*.src.tar.*
+/packaging/aur/*/*.log
+/packaging/aur/thpm/thpm-*.tar.gz

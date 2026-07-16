@@ -100,7 +100,8 @@ def check(paths: Paths, force: bool = False) -> dict[str, object]:
             rpc = _read_json(f"https://aur.archlinux.org/rpc/v5/info/{package}")
             results = rpc.get("results", [])
             available = str(results[0].get("Version", "")) if isinstance(results, list) and results else ""
-            status = "available" if available and available != install.get("installedVersion", __version__) else "current"
+            installed = str(install.get("installedVersion", __version__))
+            status = "available" if available and _arch_version_is_newer(available, installed) else "current"
             result = {"status": status, "origin": install["origin"], "currentVersion": __version__, "availableVersion": available or None,
                 "releaseUrl": f"https://aur.archlinux.org/packages/{package}", "requiresInteractive": True}
         result["checkedAtEpoch"] = int(time.time())
@@ -108,7 +109,7 @@ def check(paths: Paths, force: bool = False) -> dict[str, object]:
         result["cached"] = False
         _save_cache(paths, result)
         return result
-    except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError, urllib.error.URLError, json.JSONDecodeError) as exc:
         return {"status": "error", "origin": install["origin"], "currentVersion": __version__, "availableVersion": None, "cached": False, "error": str(exc)}
 
 
@@ -119,6 +120,16 @@ def _lock(paths: Paths) -> Iterator[None]:
         try: fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc: raise RuntimeError("another THPM update is already running") from exc
         yield
+
+
+def _arch_version_is_newer(available: str, installed: str) -> bool:
+    completed = subprocess.run(
+        ["vercmp", available, installed],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return int(completed.stdout.strip()) > 0
 
 
 def _download(url: str, destination: Path) -> None:
@@ -155,7 +166,9 @@ def _stage_runtime(source: Path, runtime: Path) -> None:
 
 
 def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | None]:
-    targets = [paths.hook_file, paths.shell_plugin_dir, paths.menu_extension, *paths.themed_dir.glob("thpm-*")]
+    # Snapshot complete managed surfaces so rollback also removes files that did
+    # not exist before the update (for example templates added by a new release).
+    targets = [paths.hook_file, paths.shell_plugin_dir, paths.menu_extension, paths.themed_dir]
     backups: dict[Path, Path | None] = {}
     for index, target in enumerate(targets):
         if not target.exists():
@@ -206,7 +219,9 @@ def apply(paths: Paths) -> dict[str, object]:
         runtime.rename(previous)
         try:
             staged.rename(runtime)
-            subprocess.run([str(runtime / "bin/thpm"), "install", "--no-ui"], check=True, capture_output=True, text=True)
+            # Updates must not rerun legacy migration or rewrite persisted plugin
+            # state. Reconcile only the managed hook/templates, then refresh QML.
+            subprocess.run([str(runtime / "bin/thpm"), "reconcile"], check=True, capture_output=True, text=True)
             subprocess.run([str(runtime / "bin/thpm"), "ui", "install"], check=True, capture_output=True, text=True)
         except Exception:
             shutil.rmtree(runtime, ignore_errors=True); previous.rename(runtime); _restore_integrations(integration_backups); raise

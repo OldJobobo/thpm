@@ -2,9 +2,6 @@
 set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PYTHONPATH="$repo_dir/src${PYTHONPATH:+:$PYTHONPATH}" \
-    THPM_ASSET_DIR="$repo_dir/assets" \
-    python3 -m thpm migrate
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 runtime_dir="${THPM_RUNTIME_DIR:-$data_home/thpm/runtime}"
 user_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
@@ -19,6 +16,12 @@ rm -rf "$runtime_dir/share/thpm"
 mkdir -p "$runtime_dir/share/thpm"
 cp -R "$repo_dir/assets/." "$runtime_dir/share/thpm/"
 install -Dm755 "$repo_dir/assets/bin/thpm" "$runtime_dir/bin/thpm"
+
+# Validate the prepared runtime and complete the capability-checked core install
+# before replacing an existing launcher. Service.install performs migration only
+# after confirming that the required Omarchy routes are available.
+"$runtime_dir/bin/thpm" install --no-ui "$@"
+
 mkdir -p "$user_bin"
 ln -sfn "$runtime_dir/bin/thpm" "$user_bin/thpm"
 install_metadata="$data_home/thpm/install.toml"

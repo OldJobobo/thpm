@@ -18,7 +18,6 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("zed-extra", "Zed extras", "Editors", "Apply only Zed behavior not provided by Omarchy.", "apply", ("zeditor",), theme_assets=("zed.json",), default_enabled=False),
     Plugin("swaync", "SwayNC", "Desktop", "Install SwayNC theme files and reload.", "apply", ("swaync-client",), theme_assets=("colors.css",)),
     Plugin("windsurf", "Windsurf", "Editors", "Install the generated Omarchy editor theme.", "apply", ("windsurf",), theme_assets=("vscode-theme.json",)),
-    Plugin("obsidian-terminal", "Obsidian Terminal", "Editors", "Synchronize Obsidian Terminal plugin colors.", "apply", ("python3",)),
     Plugin("cava", "Cava", "Media", "Install and reload a Cava gradient.", "hybrid", ("cava",), theme_assets=("cava_theme",), templates=("thpm-cava.ini.tpl",)),
     Plugin("firefox", "Firefox", "Browsers", "Manage Firefox userChrome imports and generated CSS.", "hybrid", ("firefox",), theme_assets=("firefox.css",), templates=("thpm-firefox.css.tpl",), confirmation=True),
     Plugin("zen", "Zen Browser", "Browsers", "Manage Zen userChrome imports and generated CSS.", "hybrid", ("zen-browser",), theme_assets=("zen.css",), templates=("thpm-zen.css.tpl",), confirmation=True),

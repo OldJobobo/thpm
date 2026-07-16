@@ -161,9 +161,6 @@ def apply(plugin_id: str, paths: Paths) -> list[str]:
     elif plugin_id == "windsurf":
         target = home / ".windsurf/extensions/local.omarchy-theme/themes/omarchy.json"
         if _copy_first(paths, ("vscode-theme.json",), target): changed.append(str(target))
-    elif plugin_id == "obsidian-terminal":
-        # Discovery and JSON preservation are deliberately handled by a dedicated adapter later.
-        return changed
     elif plugin_id == "firefox":
         _browser_import(paths, plugin_id, home / ".mozilla/firefox")
     elif plugin_id == "zen":

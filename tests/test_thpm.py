@@ -88,6 +88,9 @@ class StateTests(Sandbox):
         missing = [name for plugin in PLUGINS for name in plugin.templates if not (templates / name).is_file()]
         self.assertEqual(missing, [])
 
+    def test_unimplemented_plugins_are_not_exposed(self):
+        self.assertNotIn("obsidian-terminal", {plugin.id for plugin in PLUGINS})
+
 
 class MigrationTests(Sandbox):
     def test_migration_reads_names_not_legacy_contents(self):
@@ -97,6 +100,14 @@ class MigrationTests(Sandbox):
         updates, files = inspect(self.paths)
         self.assertTrue(updates["firefox"])
         self.assertEqual(files, [legacy])
+
+    def test_migration_preserves_hooks_without_a_replacement_adapter(self):
+        self.paths.hook_dir.mkdir(parents=True)
+        legacy = self.paths.hook_dir / "40-obsidian-terminal.sh"
+        legacy.write_text("legacy integration\n")
+        updates, files = inspect(self.paths)
+        self.assertNotIn("obsidian-terminal", updates)
+        self.assertNotIn(legacy, files)
 
     def test_upgrade_archives_known_install_and_preserves_unknown_files(self):
         launcher = self.paths.home / ".local/bin/thpm"
@@ -651,8 +662,12 @@ class UpdateTests(Sandbox):
         with self.assertRaisesRegex(ValueError, "unsafe path"):
             updater._safe_extract(archive, self.paths.home / "extract")
 
-    def test_install_script_records_source_origin_without_changing_version(self):
+    def test_install_script_validates_before_migration_or_launcher_replacement(self):
         script = (Path(__file__).parents[1] / "install.sh").read_text()
+        validated_install = '"$runtime_dir/bin/thpm" install --no-ui "$@"'
+        launcher_replace = 'ln -sfn "$runtime_dir/bin/thpm" "$user_bin/thpm"'
+        self.assertNotIn("python3 -m thpm migrate", script)
+        self.assertLess(script.index(validated_install), script.index(launcher_replace))
         self.assertIn('origin = "source"', script)
         self.assertIn("textual>=8.2.8,<9", script)
         self.assertIn('thpm-*.dist-info', script)
@@ -703,6 +718,30 @@ class UpdateTests(Sandbox):
         self.assertEqual(fake_python.read_text(), "runtime")
         self.assertEqual(self.paths.hook_file.read_text(), "original hook")
         self.assertFalse(fake_root.with_name("runtime.previous").exists())
+
+    def test_aur_check_does_not_offer_an_older_repository_version(self):
+        install = {"origin": "thpm", "package": "thpm", "repository": "oldjobobo/thpm", "installedVersion": "1.1.0-1"}
+        response = {"results": [{"Version": "1.0.0-1"}]}
+        with patch("thpm.update.origin", return_value=install), patch("thpm.update._read_json", return_value=response), \
+             patch("thpm.update._arch_version_is_newer", return_value=False) as newer:
+            result = updater.check(self.paths, force=True)
+        self.assertEqual(result["status"], "current")
+        newer.assert_called_once_with("1.0.0-1", "1.1.0-1")
+
+    def test_update_rollback_removes_new_managed_templates(self):
+        self.paths.themed_dir.mkdir(parents=True)
+        existing = self.paths.themed_dir / "thpm-existing.tpl"
+        foreign = self.paths.themed_dir / "foreign.tpl"
+        existing.write_text("old")
+        foreign.write_text("keep")
+        backup_root = self.paths.home / "backup"
+        backups = updater._backup_integrations(self.paths, backup_root)
+        existing.write_text("new")
+        (self.paths.themed_dir / "thpm-added.tpl").write_text("added")
+        updater._restore_integrations(backups)
+        self.assertEqual(existing.read_text(), "old")
+        self.assertEqual(foreign.read_text(), "keep")
+        self.assertFalse((self.paths.themed_dir / "thpm-added.tpl").exists())
 
     def test_aur_apply_hands_control_to_floating_terminal(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}

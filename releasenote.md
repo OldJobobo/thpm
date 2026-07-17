@@ -10,6 +10,10 @@ omarchy pkg aur add thpm && thpm install
 
 THPM 1.0.0rc3 is a release-safety candidate focused on trustworthy installation, plugin controls, and updates across the CLI, graphical panel, and terminal UI.
 
+### Upgrading from rc2
+
+AUR users can update normally. Source-installed rc2 users must update manually from the rc3 checkout or release archive once because rc2 predates RC-channel discovery. Automatic release-candidate discovery works from rc3 onward.
+
 ### Highlights
 
 - Source installs are staged and validated before activation, with runtime rollback on failure.

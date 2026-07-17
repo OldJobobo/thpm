@@ -13,6 +13,7 @@ pkgbase = thpm-git
 	depends = bash
 	depends = python>=3.11
 	depends = python-textual>=8.2.8
+	depends = python-textual<9
 	optdepends = omarchy: Omarchy 4 host integration (required for installation and theme operations)
 	provides = thpm
 	provides = theme-hook-plugin-manager

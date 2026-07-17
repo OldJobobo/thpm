@@ -16,9 +16,13 @@ concurrency:
 
 jobs:
   test:
-    name: Test on Python 3.11
+    name: Test on Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - name: Check out the repository
@@ -27,10 +31,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install THPM
-        run: python -m pip install .
+      - name: Install THPM and build tools
+        run: python -m pip install . build ruff
 
-      - name: Run checks
+      - name: Run tests and syntax checks
         run: tests/run.sh
+
+      - name: Run Python and shell static checks
+        run: |
+          ruff check --select E9,F src tests
+          shellcheck install.sh uninstall.sh assets/hooks/90-thpm scripts/release-assets.sh
+
+      - name: Build and inspect wheel
+        run: |
+          python -m build --wheel --no-isolation
+          python -m pip install --force-reinstall --no-deps dist/thpm-*.whl
+          python -c 'from thpm.tui import ThpmTui; import thpm; print(thpm.__version__)'

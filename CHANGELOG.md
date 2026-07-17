@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Stage and validate source installs before atomic runtime activation, with rollback to the previous runtime on failure.
+- Enforce sensitive-plugin confirmation and availability in the shared service, with matching QML, TUI, CLI, and JSON behavior.
+- Reject malformed persisted state and unsafe browser profile paths instead of silently overwriting or escaping expected roots.
+- Serialize theme-hook mutations, apply newly enabled integrations immediately, and stage the QML panel while the shell is stopped.
+- Add RC-aware update discovery, bounded downloads, stricter archive extraction, and streamed checksum verification.
+- Expand CI coverage and enforce the supported Textual 8.x range in Arch packaging.
+
 ## 1.0.0rc2 - 2026-07-15
 
 - Stage the Omarchy Shell panel as a `.qml.in` payload and install it as `Panel.qml`, preventing package linters from treating shell-private QML imports as system dependencies.

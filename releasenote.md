@@ -1,4 +1,4 @@
-## THPM 1.0.0rc2 is now available
+## THPM 1.0.0rc3 is now available
 
 **THPM is built exclusively for Omarchy Quattro and supports Omarchy 4.x only.**
 
@@ -8,29 +8,25 @@
 omarchy pkg aur add thpm && thpm install
 ```
 
-THPM 1.0 is a new, independently authored replacement for Theme Hook Plugin Manager. It provides one place to manage theme integrations that Omarchy does not handle natively.
+THPM 1.0.0rc3 is a release-safety candidate focused on trustworthy installation, plugin controls, and updates across the CLI, graphical panel, and terminal UI.
 
-### What's new
+### Highlights
 
-- Graphical, terminal, and command-line interfaces
-- Search, enable, disable, and diagnose integrations
-- One configurable Omarchy Menu entry
-- Safer migration, updates, and recovery
+- Source installs are staged and validated before activation, with runtime rollback on failure.
+- Firefox, Zen, and Steam are opt-in and require confirmation through every user interface.
+- Newly enabled integrations are applied immediately, while unavailable integrations are rejected by the shared service.
+- Corrupt state and unsafe browser profile paths fail safely instead of being silently overwritten.
+- QML and TUI controls now surface plugin mutation failures and confirmation prompts consistently.
+- RC installations can discover later release candidates through the updater.
+- Downloads and release archives have stricter size, path, entry-type, and checksum validation.
+- Theme-hook mutations are serialized to avoid lifecycle races.
+- The QML panel is installed even when Omarchy Shell is not currently running.
+- CI now covers Python 3.11, 3.12, and 3.13 with tests, Ruff, ShellCheck, and isolated wheel builds.
 
-### Integrations
+### Lifecycle note
 
-- **Browsers:** Firefox, Zen Browser, and Qutebrowser
-- **Terminal:** Fish, fzf, Superfile, and Zellij
-- **Desktop:** Branding extras, Qt6ct, Vicinae, nwg-dock-hyprland, and SwayNC
-- **Editors and writing:** Typora, Zed extras, Windsurf, Obsidian Terminal, and Hermes
-- **Media:** Spotify / Spicetify, Cava, and cliamp
-- **Messaging:** Discord / Vencord and Discord System24
-- **Games:** Steam and Heroic
+Disabling an integration stops future synchronization and removes its THPM template. It deliberately preserves configuration already installed into an application. Uninstall likewise removes THPM-owned hooks, templates, and control surfaces without deleting application configuration that may have been modified by the user.
 
-THPM also reports the Omarchy-owned status of Foot, tmux, GNOME, VS Code / Cursor, Obsidian, and keyboard theming without taking ownership of those integrations.
+This remains a release candidate. Please report installation, update, rollback, or interface issues before the final 1.0.0 release.
 
-All three interfaces share the same Python-powered core, settings, and controls.
-
-This is a release candidate, so testing and bug reports are welcome.
-
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc2)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc3)

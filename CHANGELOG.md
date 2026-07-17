@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0rc3 - 2026-07-17
+
 - Stage and validate source installs before atomic runtime activation, with rollback to the previous runtime on failure.
 - Enforce sensitive-plugin confirmation and availability in the shared service, with matching QML, TUI, CLI, and JSON behavior.
 - Reject malformed persisted state and unsafe browser profile paths instead of silently overwriting or escaping expected roots.

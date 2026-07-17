@@ -17,14 +17,14 @@ from textual.widgets import Button, Link
 from thpm import palette, ui
 from thpm import update as updater
 from thpm.cli import main
-from thpm.integrations import _reload, apply
+from thpm.integrations import _browser_import, _reload, apply
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
 from thpm.registry import PLUGINS
 from thpm.service import Service
-from thpm.state import load, save
+from thpm.state import StateError, load, save
 from thpm.templates import reconcile
-from thpm.tui import PluginRow, ThpmTui, omarchy_theme
+from thpm.tui import ThpmTui, omarchy_theme
 
 
 COLORS = {
@@ -66,6 +66,15 @@ class PaletteTests(Sandbox):
 
 
 class StateTests(Sandbox):
+    def test_malformed_state_is_not_silently_replaced(self):
+        self.paths.thpm_state_dir.mkdir(parents=True)
+        self.paths.state_file.write_text("[plugins\n")
+        with self.assertRaises(StateError):
+            load(self.paths)
+        with self.assertRaises(StateError):
+            Service(self.paths).set_enabled("fish", False)
+        self.assertEqual(self.paths.state_file.read_text(), "[plugins\n")
+
     def test_state_round_trip_preserves_known_values(self):
         state = load(self.paths)
         state["firefox"] = True
@@ -82,6 +91,10 @@ class StateTests(Sandbox):
             reconcile(self.paths, enabled)
         self.assertTrue((self.paths.themed_dir / "thpm-fish.fish.tpl").is_file())
         self.assertEqual(foreign.read_text(), "mine")
+
+    def test_sensitive_plugins_are_opt_in_by_default(self):
+        enabled = load(self.paths)
+        self.assertTrue(all(not enabled[plugin_id] for plugin_id in ("firefox", "zen", "steam")))
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -229,6 +242,13 @@ class UiTests(Sandbox):
         self.assertNotIn('text: "Refresh"', qml)
         self.assertIn("rightPadding: pluginScrollBar.visible ? pluginScrollBar.width", qml)
 
+    def test_qml_plugin_mutations_report_errors_and_require_confirmation(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
+        self.assertIn("id: pluginConfirm", qml)
+        self.assertIn("function readMutation()", qml)
+        self.assertIn("id: mutateOutput", qml)
+        self.assertIn('mutate.command.push("--yes")', qml)
+
     def test_qml_update_flow_requires_confirmation(self):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertIn('["thpm", "--json", "update", "status"]', qml)
@@ -298,6 +318,32 @@ class ServiceTests(Sandbox):
         self.assertTrue(foreign.exists())
         self.assertFalse(owned.exists())
         self.assertFalse(self.paths.hook_file.exists())
+
+    def test_sensitive_plugin_requires_service_confirmation(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch("thpm.snapshot.shutil.which", return_value="/bin/true"):
+            pending = Service(self.paths).set_enabled("firefox", True, refresh=False)
+            accepted = Service(self.paths).set_enabled("firefox", True, confirmed=True, refresh=False)
+        self.assertFalse(pending["ok"])
+        self.assertTrue(pending["confirmationRequired"])
+        self.assertTrue(accepted["ok"])
+
+    def test_unavailable_plugin_cannot_be_enabled_by_service(self):
+        with patch("thpm.snapshot.shutil.which", return_value=None):
+            payload = Service(self.paths).set_enabled("firefox", True, confirmed=True, refresh=False)
+        self.assertFalse(payload["ok"])
+        self.assertIn("unavailable", payload["summary"])
+
+    def test_install_stages_qml_even_when_shell_is_stopped(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch("thpm.service.capabilities") as caps, \
+             patch("thpm.service.ui.install", return_value={"installed": True}) as install_ui:
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            payload = Service(self.paths).install()
+        self.assertTrue(payload["ok"])
+        install_ui.assert_called_once_with(self.paths)
 
     def test_discord_plugins_remain_mutually_exclusive(self):
         assets = Path(__file__).parents[1] / "assets"
@@ -385,7 +431,7 @@ class FakeTuiService:
             {"id": "native-foot", "label": "Foot live colors", "category": "Native", "description": "Owned by Omarchy.", "ownership": "native", "enabled": True, "available": True, "warnings": []},
         ]}
 
-    def set_enabled(self, plugin_id, enabled):
+    def set_enabled(self, plugin_id, enabled, **_kwargs):
         self.mutations.append((plugin_id, enabled))
         return {"ok": True, "summary": "changed"}
 
@@ -509,6 +555,16 @@ class TuiTests(Sandbox):
 
 
 class IntegrationTests(Sandbox):
+    def test_browser_profile_cannot_escape_profile_root(self):
+        generated = self.paths.current_theme / "thpm-firefox.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("/* generated */\n")
+        base = self.paths.home / ".mozilla/firefox"
+        base.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=../../escape\n")
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            _browser_import(self.paths, "firefox", base)
+
     def test_vencord_asset_copy_does_not_require_palette(self):
         self.paths.current_theme.mkdir(parents=True)
         source = self.paths.current_theme / "vencord.theme.css"
@@ -652,6 +708,24 @@ class UpdateTests(Sandbox):
             result = updater.check(self.paths, force=True)
         self.assertEqual(result["status"], "current")
 
+    def test_archive_special_files_are_rejected(self):
+        archive = self.paths.home / "special.tar.gz"
+        with tarfile.open(archive, "w:gz") as bundle:
+            info = tarfile.TarInfo("thpm/fifo")
+            info.type = tarfile.FIFOTYPE
+            bundle.addfile(info)
+        with self.assertRaisesRegex(ValueError, "unsupported entry type"):
+            updater._safe_extract(archive, self.paths.home / "extract")
+
+    def test_rc_channel_selects_newest_prerelease(self):
+        self.paths.install_metadata.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.install_metadata.write_text('origin = "source"\nchannel = "rc"\n')
+        releases = [self.release("1.0.0rc1"), self.release("1.0.0rc3"), {**self.release("2.0.0"), "draft": True}]
+        with patch("thpm.update._read_json", return_value=releases):
+            result = updater.check(self.paths, force=True)
+        self.assertEqual(result["availableVersion"], "1.0.0rc3")
+        self.assertEqual(result["channel"], "rc")
+
     def test_archive_path_traversal_is_rejected(self):
         archive = self.paths.home / "bad.tar.gz"
         with tarfile.open(archive, "w:gz") as bundle:
@@ -664,13 +738,17 @@ class UpdateTests(Sandbox):
 
     def test_install_script_validates_before_migration_or_launcher_replacement(self):
         script = (Path(__file__).parents[1] / "install.sh").read_text()
-        validated_install = '"$runtime_dir/bin/thpm" install --no-ui "$@"'
+        non_mutating_check = '"$staged/bin/thpm" install --check "$@"'
+        activation = 'mv "$staged" "$runtime_dir"'
+        mutating_install = '"$runtime_dir/bin/thpm" install "$@"'
         launcher_replace = 'ln -sfn "$runtime_dir/bin/thpm" "$user_bin/thpm"'
         self.assertNotIn("python3 -m thpm migrate", script)
-        self.assertLess(script.index(validated_install), script.index(launcher_replace))
+        self.assertLess(script.index(non_mutating_check), script.index(activation))
+        self.assertLess(script.index(activation), script.index(mutating_install))
+        self.assertLess(script.index(mutating_install), script.index(launcher_replace))
         self.assertIn('origin = "source"', script)
         self.assertIn("textual>=8.2.8,<9", script)
-        self.assertIn('thpm-*.dist-info', script)
+        self.assertIn('mv "$previous" "$runtime_dir"', script)
         self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc2")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):

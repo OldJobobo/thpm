@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import subprocess
@@ -54,7 +53,11 @@ def _browser_import(paths: Paths, plugin_id: str, base: Path) -> None:
             break
     if not profile:
         return
-    chrome = base / profile / "chrome"
+    profile_root = base.resolve()
+    profile_path = (base / profile).resolve()
+    if profile_path == profile_root or profile_root not in profile_path.parents:
+        raise ValueError(f"browser profile escapes its profile root: {profile}")
+    chrome = profile_path / "chrome"
     managed = chrome / f"thpm-{plugin_id}.css"
     atomic_copy(generated, managed)
     user_chrome = chrome / "userChrome.css"

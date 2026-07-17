@@ -111,6 +111,36 @@ class ConfirmUpdate(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ConfirmPlugin(ModalScreen[bool]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.label = label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-card"):
+            yield Label(f"Enable {self.label}?", id="confirm-title")
+            yield Static("This integration changes sensitive application configuration.")
+            with Horizontal(id="confirm-actions"):
+                yield Button("Cancel", id="cancel-plugin")
+                yield Button("Enable", id="confirm-plugin", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#confirm-plugin", Button).focus()
+
+    @on(Button.Pressed, "#cancel-plugin")
+    def cancel_button(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#confirm-plugin")
+    def confirm_button(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class PluginRow(ListItem):
     """Focusable integration row with a terminal-native toggle."""
 
@@ -383,7 +413,12 @@ class ThpmTui(App[None]):
     def switch_changed(self, event: Switch.Changed) -> None:
         row = event.switch.parent.parent
         if isinstance(row, PluginRow) and row.mutable and bool(row.plugin["enabled"]) != event.value:
-            self.set_plugin(str(row.plugin["id"]), event.value)
+            plugin_id = str(row.plugin["id"])
+            if event.value and bool(row.plugin.get("confirmationRequired")):
+                self.push_screen(ConfirmPlugin(str(row.plugin["label"])),
+                    lambda confirmed: self.plugin_confirmed(plugin_id, bool(confirmed)))
+            else:
+                self.set_plugin(plugin_id, event.value)
 
     def toggle_row(self, row: PluginRow) -> None:
         if not row.mutable:
@@ -444,11 +479,17 @@ class ThpmTui(App[None]):
         self.query_one("#no-integrations", Static).display = not visible
         plugin_list.display = bool(visible)
 
+    def plugin_confirmed(self, plugin_id: str, confirmed: bool) -> None:
+        if confirmed:
+            self.set_plugin(plugin_id, True, True)
+        else:
+            self.load_state()
+
     @work(exclusive=True, group="mutation", exit_on_error=False)
-    async def set_plugin(self, plugin_id: str, enabled: bool) -> None:
+    async def set_plugin(self, plugin_id: str, enabled: bool, confirmed: bool = False) -> None:
         self.set_busy(True)
         try:
-            payload = await asyncio.to_thread(self.service.set_enabled, plugin_id, enabled)
+            payload = await asyncio.to_thread(self.service.set_enabled, plugin_id, enabled, confirmed=confirmed)
             if not payload.get("ok"):
                 raise RuntimeError(str(payload.get("summary", "Action failed")))
             self.notify(f"{plugin_id} {'enabled' if enabled else 'disabled'}.")

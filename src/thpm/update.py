@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -24,7 +25,11 @@ from .paths import Paths
 
 REPOSITORY = "oldjobobo/thpm"
 API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+RELEASES_API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=30"
 CACHE_SECONDS = 86_400
+MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 4_000
+MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 
 
 def _version(value: str) -> tuple[int, int, int, int, int]:
@@ -36,7 +41,7 @@ def _version(value: str) -> tuple[int, int, int, int, int]:
     return major, minor, patch, 0 if candidate else 1, int(candidate or 0)
 
 
-def _read_json(url: str) -> dict[str, object]:
+def _read_json(url: str) -> object:
     request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": f"thpm/{__version__}"})
     with urllib.request.urlopen(request, timeout=15) as response:
         return json.load(response)
@@ -56,7 +61,8 @@ def origin(paths: Paths) -> dict[str, str]:
         try:
             data = tomllib.loads(paths.install_metadata.read_text())
             if data.get("origin") == "source":
-                return {"origin": "source", "package": "", "repository": str(data.get("repository", REPOSITORY))}
+                return {"origin": "source", "package": "", "repository": str(data.get("repository", REPOSITORY)),
+                    "channel": str(data.get("channel", "stable")), "installedVersion": __version__}
         except (OSError, tomllib.TOMLDecodeError):
             pass
     return {"origin": "unsupported", "package": "", "repository": REPOSITORY}
@@ -78,13 +84,26 @@ def _save_cache(paths: Paths, payload: dict[str, object]) -> None:
 
 def check(paths: Paths, force: bool = False) -> dict[str, object]:
     install = origin(paths)
-    if not force and (cache := _cached(paths)) and cache.get("origin") == install["origin"]:
+    if not force and (cache := _cached(paths)) and all(cache.get(key) == install.get(key) for key in ("origin", "channel", "installedVersion")):
         return {**cache, "cached": True}
     if install["origin"] == "unsupported":
         return {"status": "unsupported", "origin": "unsupported", "currentVersion": __version__, "availableVersion": None, "cached": False}
     try:
         if install["origin"] == "source":
-            release = _read_json(os.environ.get("THPM_UPDATE_API_URL", API_URL))
+            channel = install.get("channel", "stable")
+            response = _read_json(os.environ.get("THPM_UPDATE_API_URL", RELEASES_API_URL if channel == "rc" else API_URL))
+            if channel == "rc":
+                candidates = [item for item in response if isinstance(item, dict) and not item.get("draft")] if isinstance(response, list) else []
+                valid: list[tuple[tuple[int, int, int, int, int], dict[str, object]]] = []
+                for item in candidates:
+                    try: valid.append((_version(str(item.get("tag_name", ""))), item))
+                    except ValueError: continue
+                if not valid: raise ValueError("no compatible releases found for the rc channel")
+                release = max(valid, key=lambda item: item[0])[1]
+            elif isinstance(response, dict):
+                release = response
+            else:
+                raise ValueError("release API returned an invalid response")
             available = str(release.get("tag_name", "")).removeprefix("v")
             _version(available)
             assets = {str(item.get("name")): str(item.get("browser_download_url")) for item in release.get("assets", []) if isinstance(item, dict)}
@@ -93,8 +112,9 @@ def check(paths: Paths, force: bool = False) -> dict[str, object]:
             if archive_name not in assets or checksum_name not in assets:
                 raise ValueError("release is missing the source archive or SHA-256 asset")
             status = "available" if _version(available) > _version(__version__) else "current"
-            result: dict[str, object] = {"status": status, "origin": "source", "currentVersion": __version__, "availableVersion": available,
-                "releaseUrl": str(release.get("html_url", "")), "archiveUrl": assets[archive_name], "checksumUrl": assets[checksum_name], "requiresInteractive": False}
+            result: dict[str, object] = {"status": status, "origin": "source", "channel": channel, "installedVersion": __version__,
+                "currentVersion": __version__, "availableVersion": available, "releaseUrl": str(release.get("html_url", "")),
+                "archiveUrl": assets[archive_name], "checksumUrl": assets[checksum_name], "requiresInteractive": False}
         else:
             package = install["package"]
             rpc = _read_json(f"https://aur.archlinux.org/rpc/v5/info/{package}")
@@ -102,7 +122,8 @@ def check(paths: Paths, force: bool = False) -> dict[str, object]:
             available = str(results[0].get("Version", "")) if isinstance(results, list) and results else ""
             installed = str(install.get("installedVersion", __version__))
             status = "available" if available and _arch_version_is_newer(available, installed) else "current"
-            result = {"status": status, "origin": install["origin"], "currentVersion": __version__, "availableVersion": available or None,
+            result = {"status": status, "origin": install["origin"], "installedVersion": installed,
+                "currentVersion": __version__, "availableVersion": available or None,
                 "releaseUrl": f"https://aur.archlinux.org/packages/{package}", "requiresInteractive": True}
         result["checkedAtEpoch"] = int(time.time())
         result["checkedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -135,15 +156,45 @@ def _arch_version_is_newer(available: str, installed: str) -> bool:
 def _download(url: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": f"thpm/{__version__}"})
     with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
-        shutil.copyfileobj(response, output)
+        declared = response.headers.get("Content-Length")
+        if declared and int(declared) > MAX_DOWNLOAD_BYTES:
+            raise ValueError("release download exceeds the size limit")
+        total = 0
+        while chunk := response.read(1024 * 1024):
+            total += len(chunk)
+            if total > MAX_DOWNLOAD_BYTES:
+                raise ValueError("release download exceeds the size limit")
+            output.write(chunk)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _safe_extract(archive: Path, destination: Path) -> Path:
     with tarfile.open(archive, "r:gz") as bundle:
         root = destination.resolve()
-        for member in bundle.getmembers():
-            if member.issym() or member.islnk():
-                raise ValueError("release archive contains a link")
+        members = bundle.getmembers()
+        if len(members) > MAX_ARCHIVE_MEMBERS:
+            raise ValueError("release archive contains too many files")
+        expanded = 0
+        seen: set[str] = set()
+        for member in members:
+            if not (member.isfile() or member.isdir()):
+                raise ValueError("release archive contains an unsupported entry type")
+            normalized = posixpath.normpath(member.name)
+            if normalized in seen:
+                raise ValueError("release archive contains duplicate paths")
+            seen.add(normalized)
+            expanded += member.size
+            if expanded > MAX_EXPANDED_BYTES:
+                raise ValueError("release archive exceeds the expanded size limit")
+            if member.mode & 0o6000:
+                raise ValueError("release archive contains privileged file modes")
             target = (destination / member.name).resolve()
             if target != root and root not in target.parents:
                 raise ValueError("release archive contains an unsafe path")
@@ -207,7 +258,7 @@ def apply(paths: Paths) -> dict[str, object]:
         temp = Path(temporary); archive = temp / "release.tar.gz"; checksum = temp / "release.sha256"
         _download(str(update["archiveUrl"]), archive); _download(str(update["checksumUrl"]), checksum)
         expected = checksum.read_text().split()[0].lower()
-        actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+        actual = _file_sha256(archive)
         if expected != actual: raise RuntimeError("release checksum verification failed")
         source = _safe_extract(archive, temp / "source")
         if source.joinpath("VERSION").read_text().strip() != update["availableVersion"]: raise RuntimeError("release version does not match its archive")

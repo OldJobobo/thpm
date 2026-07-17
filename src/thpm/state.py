@@ -12,17 +12,27 @@ from .paths import Paths
 from .registry import PLUGINS
 
 
+class StateError(ValueError):
+    """Raised when persisted THPM state exists but cannot be trusted."""
+
+
+def defaults() -> dict[str, bool]:
+    return {plugin.id: plugin.default_enabled for plugin in PLUGINS}
+
+
 def load(paths: Paths) -> dict[str, bool]:
-    defaults = {plugin.id: plugin.default_enabled for plugin in PLUGINS}
+    enabled = defaults()
     try:
         raw = tomllib.loads(paths.state_file.read_text())
-    except (FileNotFoundError, tomllib.TOMLDecodeError):
-        return defaults
+    except FileNotFoundError:
+        return enabled
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise StateError(f"invalid THPM state at {paths.state_file}: {exc}") from exc
     saved = raw.get("plugins", {})
-    for plugin_id in defaults:
+    for plugin_id in enabled:
         if isinstance(saved.get(plugin_id), bool):
-            defaults[plugin_id] = saved[plugin_id]
-    return defaults
+            enabled[plugin_id] = saved[plugin_id]
+    return enabled
 
 
 def save(paths: Paths, enabled: dict[str, bool]) -> None:

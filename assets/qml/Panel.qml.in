@@ -46,6 +46,8 @@ Item {
     property bool updateActionActive: false
     property bool closingFromHost: false
     property bool opened: false
+    property string pendingPluginId: ""
+    property string pendingPluginLabel: ""
     readonly property var visiblePlugins: plugins.filter(function(plugin) {
         var needle = query.trim().toLowerCase();
         if (!needle)
@@ -109,8 +111,39 @@ Item {
     }
 
     function setPlugin(id, enabled) {
+        var plugin = null;
+        for (var i = 0; i < plugins.length; ++i) {
+            if (plugins[i].id === id) {
+                plugin = plugins[i];
+                break;
+            }
+        }
+        if (enabled && plugin && plugin.confirmationRequired) {
+            pendingPluginId = id;
+            pendingPluginLabel = plugin.label;
+            pluginConfirm.opened = true;
+            return;
+        }
+        performPluginMutation(id, enabled, false);
+    }
+
+    function performPluginMutation(id, enabled, confirmed) {
         mutate.command = ["thpm", "--json", "plugin", enabled ? "enable" : "disable", id];
+        if (confirmed)
+            mutate.command.push("--yes");
         mutate.running = true;
+    }
+
+    function readMutation() {
+        try {
+            var payload = JSON.parse(mutateOutput.text);
+            actionError = !payload.ok;
+            actionMessage = payload.summary || (payload.ok ? "Integration updated." : "Integration update failed");
+        } catch (error) {
+            actionError = true;
+            actionMessage = "Unable to read THPM mutation response";
+        }
+        refresh.running = true;
     }
 
     function runDoctor() {
@@ -214,7 +247,8 @@ Item {
         id: mutate
 
         stdout: StdioCollector {
-            onStreamFinished: refresh.running = true
+            id: mutateOutput
+            onStreamFinished: root.readMutation()
         }
 
     }
@@ -1208,6 +1242,26 @@ Item {
             }
 
             ConfirmDialog {
+                id: pluginConfirm
+
+                anchors.fill: parent
+                message: "Enable " + root.pendingPluginLabel + "? This integration changes sensitive application configuration."
+                confirmText: "Enable"
+                onCanceled: {
+                    opened = false;
+                    root.pendingPluginId = "";
+                    root.pendingPluginLabel = "";
+                    refresh.running = true;
+                }
+                onConfirmed: {
+                    opened = false;
+                    root.performPluginMutation(root.pendingPluginId, true, true);
+                    root.pendingPluginId = "";
+                    root.pendingPluginLabel = "";
+                }
+            }
+
+            ConfirmDialog {
                 id: updateConfirm
 
                 anchors.fill: parent
@@ -1227,7 +1281,12 @@ Item {
         Shortcut {
             sequence: "Escape"
             onActivated: {
-                if (updateConfirm.opened)
+                if (pluginConfirm.opened) {
+                    pluginConfirm.opened = false;
+                    root.pendingPluginId = "";
+                    root.pendingPluginLabel = "";
+                    refresh.running = true;
+                } else if (updateConfirm.opened)
                     updateConfirm.opened = false;
                 else
                     root.requestClose();

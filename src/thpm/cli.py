@@ -17,14 +17,16 @@ def parser() -> argparse.ArgumentParser:
     for name in ("list", "status", "native-status", "reconcile", "run", "install", "uninstall", "migrate", "version", "tui"):
         sub = commands.add_parser(name); sub.add_argument("--json", action="store_true")
         if name == "reconcile": sub.add_argument("--refresh", action="store_true")
-        if name == "install": sub.add_argument("--no-ui", action="store_true")
+        if name == "install":
+            sub.add_argument("--no-ui", action="store_true")
+            sub.add_argument("--check", action="store_true", dest="install_check")
     for name in ("enable", "disable"):
-        sub = commands.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--json", action="store_true")
+        sub = commands.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--yes", action="store_true"); sub.add_argument("--json", action="store_true")
     doctor = commands.add_parser("doctor"); doctor.add_argument("plugin", nargs="?"); doctor.add_argument("--json", action="store_true")
     hook = commands.add_parser("hook-run"); hook.add_argument("event"); hook.add_argument("event_args", nargs="*"); hook.add_argument("--json", action="store_true")
     plugin = commands.add_parser("plugin"); plugin_sub = plugin.add_subparsers(dest="plugin_command", required=True)
     for name in ("enable", "disable"):
-        sub = plugin_sub.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--json", action="store_true")
+        sub = plugin_sub.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--yes", action="store_true"); sub.add_argument("--json", action="store_true")
     ui_cmd = commands.add_parser("ui"); ui_sub = ui_cmd.add_subparsers(dest="ui_command", required=True)
     for name in ("state", "install", "remove", "status", "open"):
         sub = ui_sub.add_parser(name); sub.add_argument("--json", action="store_true")
@@ -45,20 +47,30 @@ def _human(payload: dict[str, object]) -> None:
     for error in payload.get("errors", []): print(f"error: {error['message']}", file=sys.stderr)
 
 
+def _set_enabled(service: Service, args: argparse.Namespace, value: bool, json_mode: bool) -> dict[str, object]:
+    payload = service.set_enabled(args.plugin, value, confirmed=bool(args.yes))
+    if payload.get("confirmationRequired") and not json_mode and sys.stdin.isatty():
+        answer = input(f"Enable {args.plugin}? This integration changes sensitive application configuration. [y/N] ")
+        if answer.strip().lower() in {"y", "yes"}:
+            payload = service.set_enabled(args.plugin, value, confirmed=True)
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     service, paths = Service(), Paths.discover()
     command = args.command or "list"
+    json_mode = args.global_json or getattr(args, "json", False)
     try:
         if command in {"list", "status", "native-status"}: payload = service.state()
         elif command == "version": payload = envelope("version", summary=f"thpm {__version__}", version=__version__, errors=[])
-        elif command == "enable": payload = service.set_enabled(args.plugin, True)
-        elif command == "disable": payload = service.set_enabled(args.plugin, False)
-        elif command == "plugin": payload = service.set_enabled(args.plugin, args.plugin_command == "enable")
+        elif command == "enable": payload = _set_enabled(service, args, True, json_mode)
+        elif command == "disable": payload = _set_enabled(service, args, False, json_mode)
+        elif command == "plugin": payload = _set_enabled(service, args, args.plugin_command == "enable", json_mode)
         elif command == "doctor": payload = service.doctor(args.plugin)
         elif command == "reconcile": payload = service.reconcile(args.refresh)
         elif command == "run": payload = service.run_theme()
-        elif command == "install": payload = service.install(not args.no_ui)
+        elif command == "install": payload = service.install_check() if args.install_check else service.install(not args.no_ui)
         elif command == "uninstall": payload = service.uninstall()
         elif command == "migrate": payload = service.migrate()
         elif command == "tui":
@@ -83,7 +95,6 @@ def main(argv: list[str] | None = None) -> int:
         payload = envelope(command, False, summary=str(exc), busy="already running" in str(exc), errors=[{"message": str(exc)}])
     except Exception as exc:
         payload = envelope(command, False, summary=str(exc), errors=[{"message": str(exc)}])
-    json_mode = args.global_json or getattr(args, "json", False)
     if json_mode:
         print(json.dumps(payload, separators=(",", ":")))
     else:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import shutil
 import tomllib
-from pathlib import Path
 
 from .files import atomic_copy, atomic_text, remove_managed_block
 from .omarchy import run, shell_running

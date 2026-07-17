@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-import json
-import os
 import subprocess
-from pathlib import Path
 
 from . import __version__
 from .files import atomic_copy
 from .integrations import apply_enabled
 from .migrate import archive as archive_legacy, artifacts as legacy_artifacts, inspect as inspect_legacy, needs_compat
-from .omarchy import capabilities, run, shell_running
+from .omarchy import capabilities, run
 from .palette import load as load_palette
 from .paths import Paths
 from .registry import BY_ID
 from .resources import asset
 from .snapshot import build as build_snapshot
-from .state import load, mutation_lock, save
+from .state import StateError, load, mutation_lock, save
 from .templates import reconcile as reconcile_templates
 from .update import apply as apply_update, check as check_update
 from . import ui
@@ -63,9 +60,17 @@ class Service:
             errors=[],
         )
 
-    def set_enabled(self, plugin_id: str, value: bool) -> dict[str, object]:
-        if plugin_id not in BY_ID:
-            return envelope("plugin-enable" if value else "plugin-disable", False, summary=f"unknown plugin: {plugin_id}", errors=[{"message": "unknown plugin"}])
+    def set_enabled(self, plugin_id: str, value: bool, *, confirmed: bool = False, refresh: bool = True) -> dict[str, object]:
+        operation = "plugin-enable" if value else "plugin-disable"
+        plugin = BY_ID.get(plugin_id)
+        if plugin is None:
+            return envelope(operation, False, summary=f"unknown plugin: {plugin_id}", errors=[{"message": "unknown plugin"}])
+        view = next(item for item in self.views() if item["id"] == plugin_id)
+        if value and not view["available"]:
+            return envelope(operation, False, summary=f"{plugin_id} is unavailable", errors=[{"message": "required application or theme asset is unavailable"}])
+        if value and plugin.confirmation and not confirmed:
+            return envelope(operation, False, summary=f"confirmation required to enable {plugin_id}",
+                confirmationRequired=True, plugin=view, errors=[])
         with mutation_lock(self.paths):
             enabled = load(self.paths)
             enabled[plugin_id] = value
@@ -74,7 +79,21 @@ class Service:
                 enabled[conflict] = False
             save(self.paths, enabled)
             changed = reconcile_templates(self.paths, enabled)
-        return envelope("plugin-enable" if value else "plugin-disable", summary=f"{plugin_id} {'enabled' if value else 'disabled'}", changed=changed, plugins=self.views(), errors=[])
+        errors: list[dict[str, str]] = []
+        refreshed = False
+        if value and refresh:
+            try:
+                completed = run("theme", "refresh", check=False, timeout=180)
+                refreshed = completed.returncode == 0
+                if not refreshed:
+                    errors.append({"message": completed.stderr.strip() or "theme refresh failed"})
+            except (OSError, subprocess.SubprocessError) as exc:
+                errors.append({"message": f"theme refresh failed: {exc}"})
+        summary = f"{plugin_id} {'enabled' if value else 'disabled'}"
+        if errors:
+            summary += "; theme refresh failed"
+        return envelope(operation, not errors, summary=summary, changed=changed, refreshed=refreshed,
+            plugins=self.views(), errors=errors)
 
     def doctor(self, plugin_id: str | None = None) -> dict[str, object]:
         errors: list[dict[str, str]] = []
@@ -83,7 +102,11 @@ class Service:
         if not caps.available: errors.append({"message": "Omarchy 4 capabilities missing: " + ", ".join(caps.missing)})
         try: load_palette(self.paths.current_theme / "colors.toml")
         except (OSError, ValueError) as exc: errors.append({"message": str(exc)})
-        plugins = self.views()
+        try:
+            plugins = self.views()
+        except StateError as exc:
+            errors.append({"message": str(exc)})
+            plugins = []
         if plugin_id: plugins = [p for p in plugins if p["id"] == plugin_id]
         if plugin_id and not plugins: errors.append({"message": f"unknown plugin: {plugin_id}"})
         for plugin in plugins:
@@ -98,9 +121,18 @@ class Service:
         if refresh: run("theme", "refresh")
         return envelope("reconcile", summary=f"reconciled {len(changed)} files", changed=changed, plugins=self.views(), errors=[])
 
-    def install(self, with_ui: bool = True) -> dict[str, object]:
+    def install_check(self) -> dict[str, object]:
         caps = capabilities()
-        if not caps.available: return envelope("install", False, summary="Omarchy 4 is required", errors=[{"message": item} for item in caps.missing])
+        missing_assets = [str(asset(kind)) for kind in ("templates", "hooks", "qml") if not asset(kind).is_dir()]
+        errors = ([{"message": item} for item in caps.missing] +
+            [{"message": f"packaged asset directory missing: {item}"} for item in missing_assets])
+        return envelope("install-check", not errors, summary="installation prerequisites satisfied" if not errors else "installation prerequisites missing",
+            capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)}, errors=errors)
+
+    def install(self, with_ui: bool = True) -> dict[str, object]:
+        check = self.install_check()
+        if not check["ok"]:
+            return envelope("install", False, summary="Omarchy 4 is required", errors=check["errors"])
         migrated, legacy_files = inspect_legacy(self.paths)
         compat_required = needs_compat(self.paths, legacy_files)
         with mutation_lock(self.paths):
@@ -115,7 +147,7 @@ class Service:
                 atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
                 changed.append(str(self.paths.legacy_compat_file))
         ui_result: dict[str, object] = {"installed": False, "skipped": True}
-        if with_ui and shell_running(): ui_result = ui.install(self.paths)
+        if with_ui: ui_result = ui.install(self.paths)
         return envelope("install", summary="THPM installed", changed=changed, migratedTo=str(legacy_archive) if legacy_archive else None, ui=ui_result, errors=[])
 
     def uninstall(self) -> dict[str, object]:
@@ -143,7 +175,8 @@ class Service:
         if event != "theme-set":
             return envelope("hook-run", False, summary=f"unsupported hook event: {event}",
                 event=event, eventArgs=list(event_args), errors=[{"message": "unsupported hook event"}])
-        result = apply_enabled(self.paths, load(self.paths))
+        with mutation_lock(self.paths):
+            result = apply_enabled(self.paths, load(self.paths))
         theme_name = event_args[0] if event_args else ""
         summary = f"applied theme {theme_name}" if theme_name else "applied active theme"
         return envelope("hook-run", not result["errors"], summary=summary,

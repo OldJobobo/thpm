@@ -18,6 +18,6 @@ pkgbase = thpm
 	conflicts = theme-hook-plugin-manager
 	replaces = theme-hook-plugin-manager
 	source = thpm-1.0.0rc3.tar.gz::https://github.com/oldjobobo/thpm/releases/download/v1.0.0rc3/thpm-1.0.0rc3.tar.gz
-	sha256sums = SKIP
+	sha256sums = 14a911717a4619ee2704c234ba79572bb51328eb27db5dc799f5f02a2f09d8b8
 
 pkgname = thpm

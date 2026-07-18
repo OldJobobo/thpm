@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import tomllib
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -33,8 +32,7 @@ def omarchy_theme(paths: Paths) -> tuple[Theme, str | None]:
     try:
         palette_path = paths.current_theme / "colors.toml"
         palette = load_palette(palette_path)
-        source = tomllib.loads(palette_path.read_text())
-        explicit_border = str(source.get("active_border_color", ""))
+        explicit_border = str(palette.get("active_border_color", ""))
         border = explicit_border if HEX.fullmatch(explicit_border) else palette["lighter_bg"]
         if border.lower() == palette["bg"].lower():
             border = palette["muted"]
@@ -152,8 +150,13 @@ class PluginRow(ListItem):
         ownership = str(self.plugin["ownership"])
         available = bool(self.plugin["available"])
         warnings = list(self.plugin.get("warnings", []))
-        if ownership == "native":
+        applicable = bool(self.plugin.get("applicable", True))
+        if ownership == "native" and warnings:
+            prefix = "Native coverage gap · "
+        elif ownership == "native":
             prefix = "Managed by Omarchy · "
+        elif not applicable:
+            prefix = "Not requested by active theme · "
         elif warnings:
             prefix = "Needs attention · "
         elif not available:

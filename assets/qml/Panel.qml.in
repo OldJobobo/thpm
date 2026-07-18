@@ -870,7 +870,7 @@ Item {
 
                                 width: ListView.view.width
                                 label: modelData.label
-                                description: modelData.ownership === "native" ? "Managed by Omarchy · " + modelData.description : ((modelData.warnings || []).length > 0 ? "Needs attention · " : (!modelData.available ? "Not actionable · " : "")) + modelData.description
+                                description: modelData.ownership === "native" ? (((modelData.warnings || []).length > 0 ? "Native coverage gap · " : "Managed by Omarchy · ") + modelData.description) : (modelData.applicable === false ? "Not requested by active theme · " : ((modelData.warnings || []).length > 0 ? "Needs attention · " : (!modelData.available ? "Not actionable · " : "")) + modelData.description)
                                 checked: modelData.enabled
                                 enabled: modelData.ownership !== "native" && (modelData.available || modelData.enabled) && !mutate.running
                                 opacity: enabled ? 1 : 0.58

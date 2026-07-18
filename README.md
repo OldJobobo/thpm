@@ -11,7 +11,7 @@ This is a new MIT-licensed implementation. It is not a continuation or relicensi
 - Textual 8.2.8 or newer within the supported 8.x series (installed automatically by source installs; packaged as `python-textual` on Arch)
 - Optional: Omarchy Shell for the graphical manager and menu launchers
 
-Pre-4.0 Omarchy layouts and legacy palette aliases are intentionally unsupported.
+Pre-4.0 Omarchy path layouts are intentionally unsupported. Palette interpretation follows the installed Omarchy 4 `omarchy-theme-color` resolver, including aliases and derived values that Quattro accepts.
 
 ## Install
 
@@ -50,7 +50,7 @@ All service commands accept `--json`. The graphical control panel is available d
 
 The TUI uses the active Omarchy semantic palette and falls back to a readable built-in dark theme if the palette is unavailable. Use `1`–`4` to change sections, `/` to search integrations, `Space` or `Enter` to toggle the selected integration, `r` to refresh, and `q` to quit. Mouse controls and normal Tab navigation are also supported. Terminals smaller than 80×24 show a resize prompt instead of a damaged layout.
 
-Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Hook and JSON output distinguish applied, unchanged, skipped, and failed integrations, and Doctor flags enabled plugins that are no longer actionable. Omarchy-native integrations are shown read-only so ownership stays clear. Disabling an integration stops future synchronization and removes its THPM template, but deliberately preserves configuration already installed into an application. Likewise, uninstall removes THPM's hook, templates, and control surfaces without deleting application configuration that may have been modified by the user.
+Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Hook and JSON output distinguish applied, unchanged, skipped, and failed integrations, and Doctor flags enabled plugins that are no longer actionable. Conditional GTK CSS and validated local VS Code theme fallbacks cover Quattro native-ownership gaps only when the active theme requests them. Omarchy-native integrations are shown read-only so ownership stays clear. Disabling an integration stops future synchronization and removes its THPM template, but deliberately preserves configuration already installed into an application. Likewise, uninstall removes THPM's hook, templates, and control surfaces without deleting application configuration that may have been modified by the user.
 
 The two Discord choices are mutually exclusive: `discord` provides the compact palette mapping, while `discord-system24` provides the full System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template.
 
@@ -60,9 +60,10 @@ The two Discord choices are mutually exclusive: `discord` provides the compact p
 python -m unittest discover -s tests -v
 python -m compileall -q src
 bash -n install.sh uninstall.sh assets/hooks/90-thpm
+qmllint assets/qml/Panel.qml.in  # when Qt tooling is installed
 ```
 
-See [docs/architecture.md](docs/architecture.md) and [docs/plugins.md](docs/plugins.md) for the contracts.
+See [docs/architecture.md](docs/architecture.md), [docs/plugins.md](docs/plugins.md), and the [Quattro compatibility plan](docs/quattro-compatibility-plan.md) for the contracts and native-ownership boundary.
 
 Source updates follow stable GitHub releases and require matching `thpm-<version>.tar.gz` and `thpm-<version>.tar.gz.sha256` assets. Build both from committed content with `scripts/release-assets.sh`. Package-managed installations hand updates back to AUR rather than overwriting pacman-owned files.
 

@@ -2,10 +2,18 @@
 
 ## Unreleased
 
-- Report explicit applied, unchanged, skipped, and failed outcomes instead of silently accepting inert integrations.
-- Share actionable-readiness checks across the service, hook runner, frontends, and Doctor.
+- Follow Omarchy's canonical `omarchy-theme-color` resolver so Doctor and the TUI accept every palette Quattro can resolve, including legacy-compatible aliases and stock themes with derived values.
+- Restore conditional GTK 3/GTK 4 CSS deployment through managed imports, preserving user content and stylesheet symlinks while cleaning only THPM-owned output on theme changes, disable, or uninstall.
+- Restore bundled local VS Code-family themes through validated data-only source packages, deterministic VSIX builds, source hashes, Omarchy skip-toggle support, bounded installation, and post-install registration checks.
+- Reject unsafe local editor bundles with executable capabilities, identity or contribution mismatches, traversal, symlinks, unsupported files, and package size violations.
+- Distinguish non-applicable compatibility integrations from unavailable ones, add synchronization diagnostics, migrate legacy GTK/VS Code state, and narrow native GNOME/VS Code ownership descriptions to actual Omarchy coverage.
+- Report explicit applied, unchanged, skipped, and failed outcomes instead of silently accepting inert integrations, while preserving per-plugin failure isolation and partial change reporting.
+- Share actionable-readiness checks across the service, hook runner, frontends, and Doctor; surface readiness and native-coverage warnings consistently in CLI, JSON, TUI, and QML.
 - Honor declared Firefox, Zen, Superfile, and Cava theme assets, report browser-managed files, and expose bounded reload and steam-adwaita failures.
 - Correct cliamp, Steam, Branding, Discord, and nwg-dock prerequisites and user-facing behavior.
+- Expand behavioral coverage to 92 tests, add optional QML linting, validate every installed stock Omarchy palette, and verify isolated VSIX installation and wheel packaging.
+- Publish finalized rc3 Arch package metadata and release checksum, and reset the VCS package baseline to rc3.
+- Document the one-time manual source-upgrade requirement from rc2; RC-channel discovery works automatically from rc3 onward.
 
 ## 1.0.0rc3 - 2026-07-17
 

@@ -17,7 +17,7 @@ from textual.widgets import Button, Link
 from thpm import palette, ui
 from thpm import update as updater
 from thpm.cli import main
-from thpm.integrations import _browser_import, _reload, apply
+from thpm.integrations import _browser_import, _reload, apply, apply_enabled
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
 from thpm.registry import PLUGINS
@@ -321,6 +321,9 @@ class ServiceTests(Sandbox):
 
     def test_sensitive_plugin_requires_service_confirmation(self):
         assets = Path(__file__).parents[1] / "assets"
+        browser = self.paths.home / ".mozilla/firefox"
+        browser.mkdir(parents=True)
+        (browser / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch("thpm.snapshot.shutil.which", return_value="/bin/true"):
             pending = Service(self.paths).set_enabled("firefox", True, refresh=False)
             accepted = Service(self.paths).set_enabled("firefox", True, confirmed=True, refresh=False)
@@ -359,7 +362,7 @@ class ServiceTests(Sandbox):
         self.assertTrue(plugin["available"])
         self.assertEqual(plugin["missing"], [])
 
-    def test_missing_optional_application_is_unavailable_not_unhealthy(self):
+    def test_enabled_unavailable_plugins_are_reported_as_attention(self):
         with patch("thpm.snapshot.shutil.which", return_value=None), patch("thpm.service.capabilities") as caps:
             caps.return_value.available = True
             caps.return_value.routes = set()
@@ -367,9 +370,9 @@ class ServiceTests(Sandbox):
             state = Service(self.paths).state()
             doctor = Service(self.paths).doctor()
         self.assertGreater(state["counts"]["unavailable"], 0)
-        self.assertEqual(state["counts"]["attention"], 0)
-        self.assertEqual(doctor["warnings"], [])
-        self.assertEqual(doctor["summary"], "1 errors, 0 warnings")
+        self.assertGreater(state["counts"]["attention"], 0)
+        self.assertGreater(len(doctor["warnings"]), 0)
+        self.assertTrue(doctor["summary"].startswith("1 errors, "))
 
     def test_theme_hook_preserves_event_context(self):
         with patch("thpm.service.apply_enabled", return_value={"changed": [], "errors": []}):
@@ -378,7 +381,7 @@ class ServiceTests(Sandbox):
         self.assertEqual(payload["event"], "theme-set")
         self.assertEqual(payload["eventArgs"], ["tokyo-night"])
         self.assertEqual(payload["themeName"], "tokyo-night")
-        self.assertEqual(payload["summary"], "applied theme tokyo-night")
+        self.assertEqual(payload["summary"], "processed theme tokyo-night: 0 applied, 0 unchanged, 0 skipped, 0 failed")
 
     def test_unknown_hook_event_is_rejected_without_applying_integrations(self):
         with patch("thpm.service.apply_enabled") as apply_plugins:
@@ -571,10 +574,11 @@ class IntegrationTests(Sandbox):
         source.write_text("/* current theme */\n")
         target_dir = self.paths.config_home / "vesktop/themes"
         target_dir.mkdir(parents=True)
-        changed = apply("discord", self.paths)
+        result = apply("discord", self.paths)
         target = target_dir / "vencord.theme.css"
         self.assertEqual(target.read_bytes(), source.read_bytes())
-        self.assertIn(str(target), changed)
+        self.assertIn(str(target), result.changed)
+        self.assertEqual(result.status, "applied")
         self.assertFalse((target_dir / "omarchy.theme.css").exists())
 
     def test_system24_uses_generated_fallback_when_theme_has_no_asset(self):
@@ -583,10 +587,10 @@ class IntegrationTests(Sandbox):
         generated.write_text('@import url("system24.css");\n')
         target_dir = self.paths.config_home / "vesktop/themes"
         target_dir.mkdir(parents=True)
-        changed = apply("discord-system24", self.paths)
+        result = apply("discord-system24", self.paths)
         target = target_dir / "vencord.theme.css"
         self.assertEqual(target.read_bytes(), generated.read_bytes())
-        self.assertIn(str(target), changed)
+        self.assertIn(str(target), result.changed)
 
     def test_zellij_selects_generated_theme_and_removes_legacy_block(self):
         generated = self.paths.current_theme / "thpm-zellij.kdl"
@@ -595,10 +599,10 @@ class IntegrationTests(Sandbox):
         config = self.paths.config_home / "zellij/config.kdl"
         config.parent.mkdir(parents=True)
         config.write_text('theme "current"\n\n// thpm-zellij-theme-start\nthemes { current {} }\n// thpm-zellij-theme-end\n')
-        changed = apply("zellij", self.paths)
+        result = apply("zellij", self.paths)
         self.assertEqual((self.paths.config_home / "zellij/themes/thpm.kdl").read_bytes(), generated.read_bytes())
         self.assertEqual(config.read_text(), 'theme "thpm-current"\n')
-        self.assertIn(str(config), changed)
+        self.assertIn(str(config), result.changed)
 
     def test_zellij_prefers_theme_asset_over_generated_fallback(self):
         generated = self.paths.current_theme / "thpm-zellij.kdl"
@@ -608,13 +612,13 @@ class IntegrationTests(Sandbox):
         theme_asset.write_text(
             'themes { current { text_selected { background 36 55 46 } } }\n'
         )
-        changed = apply("zellij", self.paths)
+        result = apply("zellij", self.paths)
         installed = self.paths.config_home / "zellij/themes/thpm.kdl"
         self.assertEqual(
             installed.read_text(),
             'themes { thpm-current { text_selected { background 36 55 46 } } }\n',
         )
-        self.assertIn(str(installed), changed)
+        self.assertIn(str(installed), result.changed)
 
     def test_zellij_preserves_an_already_normalized_theme_asset(self):
         theme_asset = self.paths.current_theme / "zellij.kdl"
@@ -624,17 +628,17 @@ class IntegrationTests(Sandbox):
         installed = self.paths.config_home / "zellij/themes/thpm.kdl"
         self.assertEqual(installed.read_bytes(), theme_asset.read_bytes())
 
-    def test_app_reload_timeout_does_not_stall_theme_hook(self):
+    def test_app_reload_timeout_is_reported_without_stalling(self):
         with patch("thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"), patch(
             "thpm.integrations.subprocess.run",
             side_effect=subprocess.TimeoutExpired(["swaync-client", "--reload-css"], 5),
-        ) as run:
+        ) as run, self.assertRaisesRegex(RuntimeError, "reload timed out"):
             _reload("swaync")
         run.assert_called_once_with(
             ["swaync-client", "--reload-css"],
+            text=True,
+            capture_output=True,
             check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
             timeout=5,
         )
 
@@ -643,15 +647,105 @@ class IntegrationTests(Sandbox):
         script.parent.mkdir(parents=True)
         script.touch()
         with patch("thpm.integrations.subprocess.run") as run:
-            apply("steam", self.paths)
+            run.return_value.returncode = 0
+            result = apply("steam", self.paths)
+        self.assertEqual(result.status, "applied")
         run.assert_called_once_with(
             [str(script), "--color-theme", "omarchy"],
             cwd=script.parent,
+            text=True,
+            capture_output=True,
             check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
             timeout=30,
         )
+
+    def test_browser_prefers_theme_asset_and_reports_both_managed_files(self):
+        theme_asset = self.paths.current_theme / "firefox.css"
+        generated = self.paths.current_theme / "thpm-firefox.css"
+        theme_asset.parent.mkdir(parents=True)
+        theme_asset.write_text("/* preferred */\n")
+        generated.write_text("/* fallback */\n")
+        base = self.paths.home / ".mozilla/firefox"
+        profile = base / "profile.default"
+        base.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        result = apply("firefox", self.paths)
+        managed = profile / "chrome/thpm-firefox.css"
+        user_chrome = profile / "chrome/userChrome.css"
+        self.assertEqual(managed.read_text(), "/* preferred */\n")
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(set(result.changed), {str(managed), str(user_chrome)})
+
+    def test_declared_superfile_and_cava_assets_are_preferred(self):
+        self.paths.current_theme.mkdir(parents=True)
+        (self.paths.current_theme / "superfile.toml").write_text("native")
+        (self.paths.current_theme / "thpm-superfile.toml").write_text("generated")
+        (self.paths.current_theme / "cava_theme").write_text("native cava")
+        (self.paths.current_theme / "thpm-cava.ini").write_text("generated cava")
+        superfile = apply("superfile", self.paths)
+        with patch("thpm.integrations._reload", return_value=[]):
+            cava = apply("cava", self.paths)
+        self.assertEqual((self.paths.config_home / "superfile/theme/thpm.toml").read_text(), "native")
+        self.assertEqual((self.paths.config_home / "cava/themes/thpm").read_text(), "native cava")
+        self.assertEqual(superfile.status, "applied")
+        self.assertEqual(cava.status, "applied")
+
+    def test_optional_integrations_explain_why_they_skip(self):
+        branding = apply("branding", self.paths)
+        discord = apply("discord", self.paths)
+        cliamp = apply("cliamp", self.paths)
+        self.assertEqual(branding.status, "skipped")
+        self.assertIn("branding assets", branding.message)
+        self.assertEqual(discord.status, "skipped")
+        self.assertIn("Discord client", discord.message)
+        self.assertEqual(cliamp.status, "skipped")
+        self.assertIn("cliamp.toml", cliamp.message)
+
+    def test_nwg_dock_reports_restart_requirement(self):
+        generated = self.paths.current_theme / "thpm-nwg-dock.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("/* dock */")
+        result = apply("nwg-dock", self.paths)
+        self.assertEqual(result.status, "applied")
+        self.assertTrue(any("restart" in warning for warning in result.warnings))
+
+    def test_steam_missing_helper_skips_and_failure_is_reported(self):
+        skipped = apply("steam", self.paths)
+        self.assertEqual(skipped.status, "skipped")
+        script = self.paths.home / ".local/share/steam-adwaita/install.py"
+        script.parent.mkdir(parents=True)
+        script.touch()
+        with patch("thpm.integrations.subprocess.run") as run:
+            run.return_value.returncode = 2
+            run.return_value.stderr = "installer broke"
+            run.return_value.stdout = ""
+            with self.assertRaisesRegex(RuntimeError, "installer broke"):
+                apply("steam", self.paths)
+
+    def test_reload_failure_preserves_files_changed_before_failure(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[base]\n")
+        with patch("thpm.integrations.inspect_readiness", return_value=(True, [], [])), patch(
+            "thpm.integrations._reload", side_effect=RuntimeError("reload failed")
+        ):
+            payload = apply_enabled(self.paths, {"spotify": True})
+        target = self.paths.config_home / "spicetify/Themes/Omarchy/color.ini"
+        self.assertEqual(payload["results"][0]["status"], "failed")
+        self.assertIn(str(target), payload["results"][0]["changed"])
+        self.assertEqual(target.read_text(), "[base]\n")
+
+    def test_apply_enabled_isolates_failures_and_exposes_statuses(self):
+        generated = self.paths.current_theme / "thpm-fish.fish"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("set -g fish_color_normal normal\n")
+        with patch("thpm.integrations.inspect_readiness", return_value=(True, [], [])), patch(
+            "thpm.integrations.apply", side_effect=[apply("fish", self.paths), RuntimeError("broken")]
+        ):
+            payload = apply_enabled(self.paths, {"fish": True, "fzf": True})
+        self.assertEqual([result["status"] for result in payload["results"]], ["applied", "failed"])
+        self.assertEqual(payload["counts"]["failed"], 1)
+        self.assertEqual(payload["errors"][0]["plugin"], "fzf")
 
     def test_hermes_template_matches_desktop_theme_contract(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()

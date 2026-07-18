@@ -14,7 +14,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("vicinae", "Vicinae", "Desktop", "Install and select an Omarchy Vicinae theme.", "hybrid", ("vicinae",), templates=("thpm-vicinae.toml.tpl",)),
     Plugin("zellij", "Zellij", "Terminal", "Install a theme-provided or generated Zellij theme.", "hybrid", ("zellij",), theme_assets=("zellij.kdl",), templates=("thpm-zellij.kdl.tpl",), default_enabled=False),
     Plugin("typora", "Typora", "Writing", "Install Typora theme CSS.", "apply", ("typora",), theme_assets=("typora.css",)),
-    Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Retint and reload the dock.", "hybrid", ("nwg-dock-hyprland",), templates=("thpm-nwg-dock.css.tpl",)),
+    Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Install dock colors; restart the dock to apply them.", "hybrid", ("nwg-dock-hyprland",), templates=("thpm-nwg-dock.css.tpl",)),
     Plugin("zed-extra", "Zed extras", "Editors", "Apply only Zed behavior not provided by Omarchy.", "apply", ("zeditor",), theme_assets=("zed.json",), default_enabled=False),
     Plugin("swaync", "SwayNC", "Desktop", "Install SwayNC theme files and reload.", "apply", ("swaync-client",), theme_assets=("colors.css",)),
     Plugin("windsurf", "Windsurf", "Editors", "Install the generated Omarchy editor theme.", "apply", ("windsurf",), theme_assets=("vscode-theme.json",)),
@@ -23,9 +23,9 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("zen", "Zen Browser", "Browsers", "Manage Zen userChrome imports and generated CSS.", "hybrid", ("zen-browser",), theme_assets=("zen.css",), templates=("thpm-zen.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("hermes", "Hermes", "Editors", "Generate the Hermes Omarchy theme descriptor.", "hybrid", ("Hermes",), templates=("thpm-hermes.json.tpl",)),
     Plugin("qutebrowser", "Qutebrowser", "Browsers", "Install generated Qutebrowser colors.", "hybrid", ("qutebrowser",), templates=("thpm-qutebrowser.py.tpl",)),
-    Plugin("steam", "Steam", "Games", "Apply a theme through steam-adwaita.", "apply", ("steam", "python"), theme_assets=("steam.css",), default_enabled=False, confirmation=True),
+    Plugin("steam", "Steam", "Games", "Apply the Omarchy color theme through steam-adwaita.", "action", ("steam", "python"), default_enabled=False, confirmation=True),
     Plugin("heroic", "Heroic", "Games", "Install a Heroic theme stylesheet.", "hybrid", ("heroic",), templates=("thpm-heroic.css.tpl",)),
-    Plugin("cliamp", "cliamp", "Media", "Use an opted-in native cliamp theme or ANSI fallback.", "apply", ("cliamp",), theme_assets=("cliamp.toml",)),
+    Plugin("cliamp", "cliamp", "Media", "Install an opted-in theme-provided cliamp theme.", "apply", ("cliamp",), theme_assets=("cliamp.toml",)),
 )
 
 NATIVE: tuple[Plugin, ...] = (

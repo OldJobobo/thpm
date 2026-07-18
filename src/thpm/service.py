@@ -178,7 +178,10 @@ class Service:
         with mutation_lock(self.paths):
             result = apply_enabled(self.paths, load(self.paths))
         theme_name = event_args[0] if event_args else ""
-        summary = f"applied theme {theme_name}" if theme_name else "applied active theme"
+        subject = f"theme {theme_name}" if theme_name else "active theme"
+        counts = result.get("counts") or {"applied": 0, "unchanged": 0, "skipped": 0, "failed": len(result["errors"])}
+        summary = (f"processed {subject}: {counts['applied']} applied, {counts['unchanged']} unchanged, "
+            f"{counts['skipped']} skipped, {counts['failed']} failed")
         return envelope("hook-run", not result["errors"], summary=summary,
             event=event, eventArgs=list(event_args), themeName=theme_name or None, **result)
 

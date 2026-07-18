@@ -3,6 +3,8 @@ from __future__ import annotations
 from .models import Plugin
 
 PLUGINS: tuple[Plugin, ...] = (
+    Plugin("gtk-css-compat", "GTK theme CSS compatibility", "Compatibility", "Deploy theme-provided GTK CSS not yet handled by Omarchy.", "action", theme_assets=("gtk.css",)),
+    Plugin("vscode-local-compat", "Local VS Code theme compatibility", "Compatibility", "Install validated theme-bundled local editor themes.", "action"),
     Plugin("fish", "Fish", "Terminal", "Synchronize Fish shell colors.", "hybrid", ("fish",), templates=("thpm-fish.fish.tpl",)),
     Plugin("fzf", "fzf", "Terminal", "Provide an Omarchy-colored fzf palette.", "hybrid", ("fzf",), templates=("thpm-fzf.fish.tpl",)),
     Plugin("branding", "Branding extras", "Desktop", "Synchronize optional theme branding text.", "action", theme_assets=("about.txt", "screensaver.txt"), default_enabled=False),
@@ -31,8 +33,8 @@ PLUGINS: tuple[Plugin, ...] = (
 NATIVE: tuple[Plugin, ...] = (
     Plugin("native-foot", "Foot live colors", "Native", "Owned by Omarchy 4.", "action", native=True),
     Plugin("native-tmux", "tmux synchronization", "Native", "Owned by Omarchy 4.", "action", native=True),
-    Plugin("native-gnome", "GNOME mode and icons", "Native", "Owned by Omarchy 4.", "action", native=True),
-    Plugin("native-vscode", "VS Code and Cursor", "Native", "Owned by Omarchy 4.", "action", native=True),
+    Plugin("native-gnome", "GNOME mode and icons", "Native", "Omarchy owns mode and icons; THPM covers optional theme GTK CSS.", "action", native=True),
+    Plugin("native-vscode", "VS Code and Cursor", "Native", "Omarchy owns Marketplace and generated themes; THPM covers validated local bundles.", "action", native=True),
     Plugin("native-obsidian", "Obsidian theme", "Native", "Owned by Omarchy 4.", "action", native=True),
     Plugin("native-keyboard", "Keyboard theming", "Native", "Owned by Omarchy 4.", "action", native=True),
 )

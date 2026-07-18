@@ -6,6 +6,13 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+from .compat import (
+    apply_gtk,
+    apply_vscode_local,
+    gtk_requested,
+    vscode_local_requested,
+    vscode_readiness,
+)
 from .files import atomic_copy, atomic_text, remove_managed_block
 from .models import ApplyResult
 from .paths import Paths
@@ -77,6 +84,14 @@ def _browser_default_profile(base: Path) -> str:
     return ""
 
 
+def inspect_applicability(plugin_id: str, paths: Paths) -> bool:
+    if plugin_id == "gtk-css-compat":
+        return gtk_requested(paths)
+    if plugin_id == "vscode-local-compat":
+        return vscode_local_requested(paths)
+    return True
+
+
 def inspect_readiness(
     plugin_id: str, paths: Paths, which: Callable[[str], str | None] | None = None
 ) -> tuple[bool, list[str], list[str]]:
@@ -89,7 +104,12 @@ def inspect_readiness(
         name for name in plugin.theme_assets if (paths.current_theme / name).is_file()
     ]
 
-    if plugin_id == "hermes" and (
+    if plugin_id == "gtk-css-compat":
+        missing = []
+    elif plugin_id == "vscode-local-compat":
+        ready, missing = vscode_readiness(paths)
+        return ready, missing, warnings
+    elif plugin_id == "hermes" and (
         (paths.config_home / "Hermes").is_dir()
         or command_path("hermes-desktop-remote")
         or command_path("Hermes")
@@ -288,6 +308,10 @@ def _result(
 def apply(plugin_id: str, paths: Paths) -> ApplyResult:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
+    if plugin_id == "gtk-css-compat":
+        return apply_gtk(paths)
+    if plugin_id == "vscode-local-compat":
+        return apply_vscode_local(paths)
     paths.current_theme.mkdir(parents=True, exist_ok=True)
     changed: list[str] = []
     warnings: list[str] = []
@@ -479,6 +503,10 @@ def apply_enabled(paths: Paths, enabled: dict[str, bool]) -> dict[str, object]:
             except Exception as exc:  # isolate plugins at the hook boundary
                 result = ApplyResult(plugin.id, "failed", message=str(exc))
                 errors.append({"plugin": plugin.id, "message": str(exc)})
+        if result.status == "failed" and not any(
+            error["plugin"] == plugin.id for error in errors
+        ):
+            errors.append({"plugin": plugin.id, "message": result.message})
         results.append(result.json())
         for warning in result.warnings:
             warnings.append({"plugin": plugin.id, "message": warning})

@@ -54,15 +54,68 @@ class Sandbox(unittest.TestCase):
 
 
 class PaletteTests(Sandbox):
-    def test_accepts_quattro_semantic_palette(self):
+    def test_accepts_quattro_semantic_palette_without_host_resolver(self):
         self.write_palette()
-        self.assertEqual(palette.load(self.paths.current_theme / "colors.toml")["mode"], "dark")
+        with patch("thpm.palette.shutil.which", return_value=None):
+            result = palette.load(self.paths.current_theme / "colors.toml")
+        self.assertEqual(result["mode"], "dark")
 
-    def test_rejects_pre_quattro_palette(self):
+    def test_uses_omarchy_resolver_as_native_palette_contract(self):
         self.paths.current_theme.mkdir(parents=True)
-        (self.paths.current_theme / "colors.toml").write_text('background = "#000000"\n')
-        with self.assertRaisesRegex(ValueError, "missing semantic colors"):
-            palette.load(self.paths.current_theme / "colors.toml")
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text('background = "#000000"\ncolor0 = "#000000"\n')
+        resolved = "\n".join(f"{key}\t{value}" for key, value in COLORS.items()) + "\n"
+        with patch("thpm.palette.shutil.which", return_value="/usr/bin/omarchy-theme-color"), patch(
+            "thpm.palette.subprocess.run"
+        ) as run:
+            run.return_value = subprocess.CompletedProcess([], 0, resolved, "")
+            result = palette.load(colors)
+        self.assertEqual(result, COLORS)
+        run.assert_called_once_with(
+            ["/usr/bin/omarchy-theme-color", "--file", str(colors), "--all"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+
+    def test_strict_fallback_rejects_incomplete_palette(self):
+        self.paths.current_theme.mkdir(parents=True)
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text('background = "#000000"\n')
+        with patch("thpm.palette.shutil.which", return_value=None), self.assertRaisesRegex(
+            ValueError, "missing semantic colors"
+        ):
+            palette.load(colors)
+
+    def test_rejects_malformed_resolver_output(self):
+        self.paths.current_theme.mkdir(parents=True)
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text('mode = "dark"\n')
+        with patch("thpm.palette.shutil.which", return_value="resolver"), patch(
+            "thpm.palette.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "mode\tdark\nmode\tlight\n", ""),
+        ), self.assertRaisesRegex(ValueError, "invalid Omarchy palette resolver output"):
+            palette.load(colors)
+
+    def test_resolver_timeout_is_reported(self):
+        self.paths.current_theme.mkdir(parents=True)
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text('mode = "dark"\n')
+        with patch("thpm.palette.shutil.which", return_value="resolver"), patch(
+            "thpm.palette.subprocess.run", side_effect=subprocess.TimeoutExpired(["resolver"], 5)
+        ), self.assertRaisesRegex(ValueError, "resolver timed out"):
+            palette.load(colors)
+
+    def test_resolver_failure_is_not_hidden_by_strict_fallback(self):
+        self.paths.current_theme.mkdir(parents=True)
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text('mode = "dark"\n')
+        with patch("thpm.palette.shutil.which", return_value="resolver"), patch(
+            "thpm.palette.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 2, "", "bad palette"),
+        ), self.assertRaisesRegex(ValueError, "bad palette"):
+            palette.load(colors)
 
 
 class StateTests(Sandbox):
@@ -95,6 +148,8 @@ class StateTests(Sandbox):
     def test_sensitive_plugins_are_opt_in_by_default(self):
         enabled = load(self.paths)
         self.assertTrue(all(not enabled[plugin_id] for plugin_id in ("firefox", "zen", "steam")))
+        self.assertTrue(enabled["gtk-css-compat"])
+        self.assertTrue(enabled["vscode-local-compat"])
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -113,6 +168,17 @@ class MigrationTests(Sandbox):
         updates, files = inspect(self.paths)
         self.assertTrue(updates["firefox"])
         self.assertEqual(files, [legacy])
+
+    def test_migration_maps_legacy_native_coverage_hooks_to_compatibility_plugins(self):
+        self.paths.hook_dir.mkdir(parents=True)
+        gtk = self.paths.hook_dir / "10-gtk.sh"
+        vscode = self.paths.hook_dir / "30-vscode.sh"
+        gtk.write_text("legacy GTK\n")
+        vscode.write_text("legacy VS Code\n")
+        updates, files = inspect(self.paths)
+        self.assertTrue(updates["gtk-css-compat"])
+        self.assertTrue(updates["vscode-local-compat"])
+        self.assertEqual(set(files), {gtk, vscode})
 
     def test_migration_preserves_hooks_without_a_replacement_adapter(self):
         self.paths.hook_dir.mkdir(parents=True)
@@ -331,6 +397,21 @@ class ServiceTests(Sandbox):
         self.assertTrue(pending["confirmationRequired"])
         self.assertTrue(accepted["ok"])
 
+    def test_disabling_gtk_compat_removes_only_managed_css(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent #abcdef;\n")
+        gtk = self.paths.config_home / "gtk-3.0/gtk.css"
+        gtk.parent.mkdir(parents=True)
+        gtk.write_text("button { padding: 2px; }\n")
+        apply("gtk-css-compat", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("gtk-css-compat", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(gtk.read_text(), "button { padding: 2px; }\n")
+        self.assertFalse((gtk.parent / "thpm-theme.css").exists())
+
     def test_unavailable_plugin_cannot_be_enabled_by_service(self):
         with patch("thpm.snapshot.shutil.which", return_value=None):
             payload = Service(self.paths).set_enabled("firefox", True, confirmed=True, refresh=False)
@@ -355,6 +436,25 @@ class ServiceTests(Sandbox):
         state = load(self.paths)
         self.assertTrue(state["discord"])
         self.assertFalse(state["discord-system24"])
+
+    def test_non_applicable_compatibility_plugins_do_not_need_attention(self):
+        plugins = Service(self.paths).state()["plugins"]
+        compat = {plugin["id"]: plugin for plugin in plugins if plugin["id"].endswith("-compat")}
+        self.assertFalse(compat["gtk-css-compat"]["applicable"])
+        self.assertFalse(compat["vscode-local-compat"]["applicable"])
+        self.assertEqual(compat["gtk-css-compat"]["warnings"], [])
+        self.assertEqual(compat["vscode-local-compat"]["warnings"], [])
+
+    def test_requested_gtk_compatibility_is_attention_until_synchronized(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent #abcdef;\n")
+        before = next(plugin for plugin in Service(self.paths).state()["plugins"] if plugin["id"] == "gtk-css-compat")
+        self.assertTrue(before["applicable"])
+        self.assertTrue(before["warnings"])
+        apply("gtk-css-compat", self.paths)
+        after = next(plugin for plugin in Service(self.paths).state()["plugins"] if plugin["id"] == "gtk-css-compat")
+        self.assertEqual(after["warnings"], [])
 
     def test_hermes_desktop_config_makes_plugin_available(self):
         (self.paths.config_home / "Hermes").mkdir(parents=True)
@@ -558,6 +658,24 @@ class TuiTests(Sandbox):
 
 
 class IntegrationTests(Sandbox):
+    def write_local_vscode_theme(self, *, unsafe: bool = False):
+        theme = self.paths.current_theme
+        extension = theme / "vscode-extension"
+        (extension / "themes").mkdir(parents=True)
+        (theme / "vscode.json").write_text(json.dumps({"name": "Dos-Moos", "extension": "local.theme-dos-moos"}))
+        manifest = {
+            "name": "theme-dos-moos",
+            "publisher": "local",
+            "version": "1.0.0",
+            "engines": {"vscode": "^1.70.0"},
+            "contributes": {"themes": [{"label": "Dos-Moos", "uiTheme": "vs-dark", "path": "./themes/theme.json"}]},
+        }
+        if unsafe:
+            manifest["main"] = "./index.js"
+            (extension / "index.js").write_text("module.exports = {}\n")
+        (extension / "package.json").write_text(json.dumps(manifest))
+        (extension / "themes/theme.json").write_text(json.dumps({"name": "Dos-Moos", "type": "dark", "colors": {}}))
+
     def test_browser_profile_cannot_escape_profile_root(self):
         generated = self.paths.current_theme / "thpm-firefox.css"
         generated.parent.mkdir(parents=True)
@@ -658,6 +776,110 @@ class IntegrationTests(Sandbox):
             check=False,
             timeout=30,
         )
+
+    def test_gtk_compat_preserves_user_css_and_removes_only_managed_content(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent #abcdef;\n")
+        gtk3 = self.paths.config_home / "gtk-3.0/gtk.css"
+        gtk3.parent.mkdir(parents=True)
+        gtk3.write_text("button { padding: 4px; }\n")
+        first = apply("gtk-css-compat", self.paths)
+        self.assertEqual(first.status, "applied")
+        self.assertIn('import url("thpm-theme.css")', gtk3.read_text())
+        self.assertIn("button { padding: 4px; }", gtk3.read_text())
+        self.assertEqual((gtk3.parent / "thpm-theme.css").read_bytes(), source.read_bytes())
+        second = apply("gtk-css-compat", self.paths)
+        self.assertEqual(second.status, "unchanged")
+        source.unlink()
+        cleanup = apply("gtk-css-compat", self.paths)
+        self.assertEqual(cleanup.status, "applied")
+        self.assertEqual(gtk3.read_text(), "button { padding: 4px; }\n")
+        self.assertFalse((gtk3.parent / "thpm-theme.css").exists())
+
+    def test_gtk_compat_preserves_user_stylesheet_symlink(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent #abcdef;\n")
+        dotfile = self.paths.home / "dotfiles/gtk.css"
+        dotfile.parent.mkdir(parents=True)
+        dotfile.write_text("label { color: red; }\n")
+        gtk = self.paths.config_home / "gtk-3.0/gtk.css"
+        gtk.parent.mkdir(parents=True)
+        gtk.symlink_to(dotfile)
+        apply("gtk-css-compat", self.paths)
+        self.assertTrue(gtk.is_symlink())
+        self.assertIn("thpm-gtk-theme-start", dotfile.read_text())
+        source.unlink()
+        apply("gtk-css-compat", self.paths)
+        self.assertTrue(gtk.is_symlink())
+        self.assertEqual(dotfile.read_text(), "label { color: red; }\n")
+
+    def test_vscode_extension_directory_without_local_descriptor_is_not_applicable(self):
+        extension = self.paths.current_theme / "vscode-extension"
+        extension.mkdir(parents=True)
+        (extension / "package.json").write_text("{}\n")
+        result = apply("vscode-local-compat", self.paths)
+        self.assertEqual(result.status, "unchanged")
+        self.assertIn("does not request", result.message)
+
+    def test_local_vscode_theme_is_installed_once_and_verified(self):
+        self.write_local_vscode_theme()
+        installed = subprocess.CompletedProcess([], 0, "", "")
+        listed_after = subprocess.CompletedProcess([], 0, "local.theme-dos-moos\n", "")
+        with patch("thpm.compat.shutil.which", side_effect=lambda command: "/usr/bin/code" if command == "code" else None), patch(
+            "thpm.compat.subprocess.run", side_effect=[installed, listed_after]
+        ) as run:
+            first = apply("vscode-local-compat", self.paths)
+        self.assertEqual(first.status, "applied")
+        self.assertEqual(first.actions, ["code installed local.theme-dos-moos"])
+        self.assertEqual(run.call_count, 2)
+        with patch("thpm.compat.shutil.which", side_effect=lambda command: "/usr/bin/code" if command == "code" else None), patch(
+            "thpm.compat.subprocess.run", return_value=listed_after
+        ) as run:
+            second = apply("vscode-local-compat", self.paths)
+        self.assertEqual(second.status, "unchanged")
+        self.assertEqual(run.call_count, 1)
+
+    def test_local_vscode_theme_respects_omarchy_skip_toggle(self):
+        self.write_local_vscode_theme()
+        with patch(
+            "thpm.compat.shutil.which",
+            side_effect=lambda command: f"/usr/bin/{command}" if command in {"code", "omarchy-toggle-enabled"} else None,
+        ), patch(
+            "thpm.compat.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ) as run:
+            result = apply("vscode-local-compat", self.paths)
+        self.assertEqual(result.status, "unchanged")
+        self.assertIn("disabled by Omarchy toggles", result.message)
+        self.assertEqual(run.call_count, 1)
+
+    def test_local_vscode_theme_rejects_escaping_theme_path(self):
+        self.write_local_vscode_theme()
+        manifest_path = self.paths.current_theme / "vscode-extension/package.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["contributes"]["themes"][0]["path"] = "../../outside.json"
+        manifest_path.write_text(json.dumps(manifest))
+        (self.paths.current_theme / "outside.json").write_text("{}\n")
+        with patch(
+            "thpm.compat.shutil.which",
+            side_effect=lambda command: "/usr/bin/code" if command == "code" else None,
+        ):
+            result = apply("vscode-local-compat", self.paths)
+        self.assertEqual(result.status, "failed")
+        self.assertIn("escapes or is missing", result.message)
+
+    def test_local_vscode_theme_rejects_executable_extension(self):
+        self.write_local_vscode_theme(unsafe=True)
+        with patch(
+            "thpm.compat.shutil.which",
+            side_effect=lambda command: "/usr/bin/code" if command == "code" else None,
+        ), patch("thpm.compat.subprocess.run") as run:
+            result = apply("vscode-local-compat", self.paths)
+        self.assertEqual(result.status, "failed")
+        self.assertIn("may not declare main", result.message)
+        run.assert_not_called()
 
     def test_browser_prefers_theme_asset_and_reports_both_managed_files(self):
         theme_asset = self.paths.current_theme / "firefox.css"

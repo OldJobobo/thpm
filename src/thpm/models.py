@@ -45,6 +45,7 @@ class PluginView:
     ownership: Ownership
     enabled: bool
     available: bool
+    applicable: bool = True
     commands: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     themeAssets: list[str] = field(default_factory=list)

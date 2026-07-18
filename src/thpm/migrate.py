@@ -8,7 +8,12 @@ from .paths import Paths
 from .registry import BY_ID
 
 LEGACY_NAMES = {"fish", "fzf", "branding", "discord", "discord-system24", "gtk", "qt6ct", "spotify", "superfile", "tmux", "vicinae", "zellij", "typora", "nwg-dock-hyprland", "zed", "swaync", "foot-live-colors", "cursor", "vscode", "windsurf", "cava", "firefox", "hermes", "qutebrowser", "steam", "zen", "cliamp", "heroic"}
-MAPPING = {"nwg-dock-hyprland": "nwg-dock", "zed": "zed-extra"}
+MAPPING = {
+    "gtk": "gtk-css-compat",
+    "vscode": "vscode-local-compat",
+    "nwg-dock-hyprland": "nwg-dock",
+    "zed": "zed-extra",
+}
 LEGACY_BINARIES = ("thpm", "thctl", "theme-hook-update")
 LEGACY_CONTROL_FILES = (
     "lib/config.sh", "lib/plugin-registry.sh", "lib/theme-env.sh",

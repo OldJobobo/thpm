@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 
 from . import __version__
+from .compat import cleanup_gtk, vscode_doctor_warnings
 from .files import atomic_copy
 from .integrations import apply_enabled
 from .migrate import archive as archive_legacy, artifacts as legacy_artifacts, inspect as inspect_legacy, needs_compat
@@ -79,6 +80,8 @@ class Service:
                 enabled[conflict] = False
             save(self.paths, enabled)
             changed = reconcile_templates(self.paths, enabled)
+            if not value and plugin_id == "gtk-css-compat":
+                changed.extend(cleanup_gtk(self.paths))
         errors: list[dict[str, str]] = []
         refreshed = False
         if value and refresh:
@@ -111,6 +114,13 @@ class Service:
         if plugin_id and not plugins: errors.append({"message": f"unknown plugin: {plugin_id}"})
         for plugin in plugins:
             for warning in plugin["warnings"]: warnings.append({"plugin": str(plugin["id"]), "message": str(warning)})
+        local_compat = next((plugin for plugin in plugins if plugin["id"] == "vscode-local-compat"), None)
+        if local_compat and local_compat["enabled"] and local_compat.get("applicable", True):
+            known = {(item.get("plugin"), item["message"]) for item in warnings}
+            for message in vscode_doctor_warnings(self.paths):
+                entry = ("vscode-local-compat", message)
+                if entry not in known:
+                    warnings.append({"plugin": entry[0], "message": entry[1]})
         return envelope("doctor", not errors, summary=f"{len(errors)} errors, {len(warnings)} warnings", plugins=plugins, errors=errors, warnings=warnings, capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)})
 
     def reconcile(self, refresh: bool = False) -> dict[str, object]:
@@ -154,6 +164,7 @@ class Service:
         with mutation_lock(self.paths):
             disabled = {plugin_id: False for plugin_id in BY_ID}
             changed = reconcile_templates(self.paths, disabled)
+            changed.extend(cleanup_gtk(self.paths))
             if self.paths.hook_file.exists():
                 self.paths.hook_file.unlink()
                 changed.append(str(self.paths.hook_file))

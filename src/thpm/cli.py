@@ -44,7 +44,15 @@ def _human(payload: dict[str, object]) -> None:
         for item in payload["plugins"]:
             marker = "on" if item["enabled"] else "off"
             print(f"{marker:>3}  {item['id']:<22} {item['ownership']}")
-    for error in payload.get("errors", []): print(f"error: {error['message']}", file=sys.stderr)
+    for result in payload.get("results", []):
+        detail = result.get("message", "")
+        print(f"{result['status']:>9}  {result['id']:<22} {detail}")
+    for warning in payload.get("warnings", []):
+        owner = f"{warning.get('plugin')}: " if warning.get("plugin") else ""
+        print(f"warning: {owner}{warning['message']}", file=sys.stderr)
+    for error in payload.get("errors", []):
+        owner = f"{error.get('plugin')}: " if error.get("plugin") else ""
+        print(f"error: {owner}{error['message']}", file=sys.stderr)
 
 
 def _set_enabled(service: Service, args: argparse.Namespace, value: bool, json_mode: bool) -> dict[str, object]:

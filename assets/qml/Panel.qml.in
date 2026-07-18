@@ -870,9 +870,9 @@ Item {
 
                                 width: ListView.view.width
                                 label: modelData.label
-                                description: modelData.ownership === "native" ? "Managed by Omarchy · " + modelData.description : (!modelData.available ? "Not installed · " : "") + modelData.description
+                                description: modelData.ownership === "native" ? "Managed by Omarchy · " + modelData.description : ((modelData.warnings || []).length > 0 ? "Needs attention · " : (!modelData.available ? "Not actionable · " : "")) + modelData.description
                                 checked: modelData.enabled
-                                enabled: modelData.ownership !== "native" && modelData.available && !mutate.running
+                                enabled: modelData.ownership !== "native" && (modelData.available || modelData.enabled) && !mutate.running
                                 opacity: enabled ? 1 : 0.58
                                 onClicked: {
                                     if (enabled)

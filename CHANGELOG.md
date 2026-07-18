@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Report explicit applied, unchanged, skipped, and failed outcomes instead of silently accepting inert integrations.
+- Share actionable-readiness checks across the service, hook runner, frontends, and Doctor.
+- Honor declared Firefox, Zen, Superfile, and Cava theme assets, report browser-managed files, and expose bounded reload and steam-adwaita failures.
+- Correct cliamp, Steam, Branding, Discord, and nwg-dock prerequisites and user-facing behavior.
+
 ## 1.0.0rc3 - 2026-07-17
 
 - Stage and validate source installs before atomic runtime activation, with rollback to the previous runtime on failure.

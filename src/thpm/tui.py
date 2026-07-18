@@ -151,10 +151,13 @@ class PluginRow(ListItem):
     def compose(self) -> ComposeResult:
         ownership = str(self.plugin["ownership"])
         available = bool(self.plugin["available"])
+        warnings = list(self.plugin.get("warnings", []))
         if ownership == "native":
             prefix = "Managed by Omarchy · "
+        elif warnings:
+            prefix = "Needs attention · "
         elif not available:
-            prefix = "Not installed · "
+            prefix = "Not actionable · "
         else:
             prefix = ""
         with Horizontal(classes="plugin-row-inner"):
@@ -164,13 +167,15 @@ class PluginRow(ListItem):
             yield Static(ownership, classes="ownership")
             yield Switch(
                 value=bool(self.plugin["enabled"]),
-                disabled=ownership == "native" or not available,
+                disabled=ownership == "native" or (not available and not bool(self.plugin["enabled"])),
                 id="switch-" + str(self.plugin["id"]),
             )
 
     @property
     def mutable(self) -> bool:
-        return str(self.plugin["ownership"]) != "native" and bool(self.plugin["available"])
+        return str(self.plugin["ownership"]) != "native" and (
+            bool(self.plugin["available"]) or bool(self.plugin["enabled"])
+        )
 
 
 class ThpmTui(App[None]):

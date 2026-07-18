@@ -10,7 +10,7 @@ THPM has four deliberately narrow layers:
 
 The canonical palette is the active Omarchy 4 `colors.toml`. THPM requires the Quattro semantic keys and never derives state from generated application files.
 
-State is stored in `$XDG_STATE_HOME/thpm/state.toml`. Mutations use an advisory runtime lock and atomic replacement. Each hook adapter runs behind an error boundary so an optional application cannot abort the remaining plugins.
+State is stored in `$XDG_STATE_HOME/thpm/state.toml`. Mutations use an advisory runtime lock and atomic replacement. Each hook adapter runs behind an error boundary so one integration cannot abort the remaining plugins. Adapter results distinguish applied, unchanged, skipped, and failed work; hook responses include per-status counts, changed paths, actions, warnings, and errors. Readiness checks are shared by snapshots, enable policy, Doctor, and hook execution so a plugin cannot appear actionable to one caller and inert to another.
 
 Omarchy-native behavior is outside THPM. Foot, tmux, GNOME, VS Code/Cursor, general Obsidian theming, keyboard theming, and Omarchy terminal reload behavior are displayed as native read-only records.
 

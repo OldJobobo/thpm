@@ -1,4 +1,4 @@
-## THPM 1.0.0rc3 is now available
+## THPM 1.0.0rc4 is now available
 
 **THPM is built exclusively for Omarchy Quattro and supports Omarchy 4.x only.**
 
@@ -8,29 +8,29 @@
 omarchy pkg aur add thpm && thpm install
 ```
 
-THPM 1.0.0rc3 is a release-safety candidate focused on trustworthy installation, plugin controls, and updates across the CLI, graphical panel, and terminal UI.
+THPM 1.0.0rc4 makes integration results trustworthy and restores conditional compatibility for theme assets that Quattro does not yet handle natively.
 
-### Upgrading from rc2
+### Upgrading from rc3
 
-AUR users can update normally. Source-installed rc2 users must update manually from the rc3 checkout or release archive once because rc2 predates RC-channel discovery. Automatic release-candidate discovery works from rc3 onward.
+AUR users can update normally. Source-installed rc3 users can use THPM's built-in updater, which now discovers later release candidates on the RC channel.
 
 ### Highlights
 
-- Source installs are staged and validated before activation, with runtime rollback on failure.
-- Firefox, Zen, and Steam are opt-in and require confirmation through every user interface.
-- Newly enabled integrations are applied immediately, while unavailable integrations are rejected by the shared service.
-- Corrupt state and unsafe browser profile paths fail safely instead of being silently overwritten.
-- QML and TUI controls now surface plugin mutation failures and confirmation prompts consistently.
-- RC installations can discover later release candidates through the updater.
-- Downloads and release archives have stricter size, path, entry-type, and checksum validation.
-- Theme-hook mutations are serialized to avoid lifecycle races.
-- The QML panel is installed even when Omarchy Shell is not currently running.
-- CI now covers Python 3.11, 3.12, and 3.13 with tests, Ruff, ShellCheck, and isolated wheel builds.
+- Every enabled integration now reports an explicit applied, unchanged, skipped, or failed outcome.
+- Readiness checks are shared by the service, hook runner, Doctor, CLI, TUI, and QML panel.
+- Firefox, Zen, Superfile, and Cava honor declared theme assets and report the files they manage.
+- Steam reports missing helpers, subprocess failures, and timeouts instead of silently succeeding.
+- Branding, Discord, cliamp, and nwg-dock now describe their actual prerequisites and behavior.
+- Conditional GTK compatibility deploys managed GTK3/GTK4 imports while preserving user CSS and stylesheet symlinks.
+- Validated local VS Code-family theme bundles install deterministically across VS Code, Insiders, VSCodium, and Cursor.
+- Unsafe local editor bundles are rejected for executable capabilities, identity mismatches, traversal, symlinks, unsupported files, or excessive size.
+- Doctor and the interfaces distinguish applicability, availability, readiness, and synchronization warnings.
+- Palette interpretation now follows Omarchy's canonical `omarchy-theme-color` resolver.
 
-### Lifecycle note
+### Compatibility scope
 
-Disabling an integration stops future synchronization and removes its THPM template. It deliberately preserves configuration already installed into an application. Uninstall likewise removes THPM-owned hooks, templates, and control surfaces without deleting application configuration that may have been modified by the user.
+GTK and local editor compatibility activate only when the current theme supplies the relevant assets. Native Omarchy ownership remains authoritative where it already exists, and THPM does not change GNOME settings or kill applications.
 
-This remains a release candidate. Please report installation, update, rollback, or interface issues before the final 1.0.0 release.
+This remains a release candidate. Please report installation, update, integration-outcome, or compatibility issues before the final 1.0.0 release.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc3)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc4)

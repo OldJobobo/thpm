@@ -1,6 +1,6 @@
 # Quattro native-ownership compatibility plan
 
-Status: implemented in the working tree; upstream Omarchy follow-up and release packaging remain pending
+Status: implemented and released in THPM 1.0.0rc4; upstream Omarchy follow-up remains pending
 
 ## Goal
 

@@ -1065,7 +1065,7 @@ class UpdateTests(Sandbox):
         self.assertIn('origin = "source"', script)
         self.assertIn("textual>=8.2.8,<9", script)
         self.assertIn('mv "$previous" "$runtime_dir"', script)
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc3")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc4")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)

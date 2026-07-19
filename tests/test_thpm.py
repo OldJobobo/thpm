@@ -1083,6 +1083,14 @@ class UpdateTests(Sandbox):
                 updater.apply(self.paths)
         stage.assert_not_called()
 
+    def test_source_update_keeps_symlinked_venv_runtime_path(self):
+        runtime = self.paths.home / "runtime"
+        (runtime / "bin").mkdir(parents=True)
+        python = runtime / "bin/python"
+        python.symlink_to(Path(updater.sys.executable))
+        with patch("thpm.update.sys.executable", str(python)):
+            self.assertEqual(updater._source_runtime(), runtime)
+
     def test_failed_activation_restores_previous_runtime(self):
         fake_root = self.paths.home / "runtime"
         (fake_root / "bin").mkdir(parents=True)

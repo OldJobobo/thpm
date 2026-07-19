@@ -243,6 +243,14 @@ def _restore_integrations(backups: dict[Path, Path | None]) -> None:
         else: shutil.copy2(backup, target)
 
 
+def _source_runtime() -> Path:
+    # Keep the venv path itself: resolving bin/python follows its symlink to the
+    # system interpreter and loses the source runtime root.
+    runtime = Path(sys.executable).absolute().parent.parent
+    if runtime.name != "runtime": raise RuntimeError("source runtime could not be identified")
+    return runtime
+
+
 def apply(paths: Paths) -> dict[str, object]:
     update = check(paths, force=True)
     if update["status"] != "available":
@@ -262,8 +270,7 @@ def apply(paths: Paths) -> dict[str, object]:
         if expected != actual: raise RuntimeError("release checksum verification failed")
         source = _safe_extract(archive, temp / "source")
         if source.joinpath("VERSION").read_text().strip() != update["availableVersion"]: raise RuntimeError("release version does not match its archive")
-        runtime = Path(sys.executable).resolve().parent.parent
-        if runtime.name != "runtime": raise RuntimeError("source runtime could not be identified")
+        runtime = _source_runtime()
         staged = runtime.with_name(f"runtime.next-{os.getpid()}"); previous = runtime.with_name("runtime.previous")
         shutil.rmtree(staged, ignore_errors=True); _stage_runtime(source, staged); shutil.rmtree(previous, ignore_errors=True)
         integration_backups = _backup_integrations(paths, temp / "integration-backup")

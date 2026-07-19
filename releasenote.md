@@ -16,6 +16,7 @@ AUR users can update normally. Source-installed rc3 users can use THPM's built-i
 
 ### Highlights
 
+- Source-installed rc3 runtimes now retain their virtualenv path and can complete the built-in RC upgrade.
 - Every enabled integration now reports an explicit applied, unchanged, skipped, or failed outcome.
 - Readiness checks are shared by the service, hook runner, Doctor, CLI, TUI, and QML panel.
 - Firefox, Zen, Superfile, and Cava honor declared theme assets and report the files they manage.

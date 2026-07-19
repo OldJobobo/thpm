@@ -4,6 +4,7 @@
 
 ## 1.0.0rc4 - 2026-07-19
 
+- Preserve the source virtualenv path during RC updates instead of resolving its Python symlink to the system interpreter.
 - Follow Omarchy's canonical `omarchy-theme-color` resolver so Doctor and the TUI accept every palette Quattro can resolve, including legacy-compatible aliases and stock themes with derived values.
 - Restore conditional GTK 3/GTK 4 CSS deployment through managed imports, preserving user content and stylesheet symlinks while cleaning only THPM-owned output on theme changes, disable, or uninstall.
 - Restore bundled local VS Code-family themes through validated data-only source packages, deterministic VSIX builds, source hashes, Omarchy skip-toggle support, bounded installation, and post-install registration checks.

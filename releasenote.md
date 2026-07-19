@@ -12,11 +12,11 @@ THPM 1.0.0rc4 makes integration results trustworthy and restores conditional com
 
 ### Upgrading from rc3
 
-AUR users can update normally. Source-installed rc3 users can use THPM's built-in updater, which now discovers later release candidates on the RC channel.
+AUR users can update normally. Source-installed rc3 users must update manually from the rc4 checkout or release archive once because rc3 resolves its virtualenv Python symlink before locating the runtime. Built-in RC upgrades work from rc4 onward.
 
 ### Highlights
 
-- Source-installed rc3 runtimes now retain their virtualenv path and can complete the built-in RC upgrade.
+- Source runtimes now retain their virtualenv path so built-in RC upgrades work from rc4 onward.
 - Every enabled integration now reports an explicit applied, unchanged, skipped, or failed outcome.
 - Readiness checks are shared by the service, hook runner, Doctor, CLI, TUI, and QML panel.
 - Firefox, Zen, Superfile, and Cava honor declared theme assets and report the files they manage.

@@ -264,10 +264,27 @@ def apply(
         return update
     if update["origin"] in {"thpm", "thpm-git"}:
         package = str(update["origin"])
+        yay = shutil.which("yay")
+        if not yay: raise RuntimeError("yay is required to update an AUR installation")
+        command = f"yay -S --noconfirm --needed {package} && thpm reconcile"
+        if sys.stdin.isatty():
+            step("Upgrading AUR package", package)
+            with _lock(paths):
+                subprocess.run(
+                    [yay, "-S", "--noconfirm", "--needed", package],
+                    check=True,
+                )
+                subprocess.run([shutil.which("thpm") or "thpm", "reconcile"], check=True)
+            return {
+                **update,
+                "status": "updated",
+                "command": None,
+                "refreshRequired": False,
+                "refreshCommand": None,
+            }
         step("Opening AUR package upgrade", package)
-        command = f"yay -S {package} && thpm reconcile"
         launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
-        if not launcher: raise RuntimeError("Omarchy's floating terminal launcher is unavailable")
+        if not launcher: raise RuntimeError("A terminal is required to authorize the AUR package update")
         with _lock(paths):
             subprocess.Popen([launcher, command], start_new_session=True)
         return {

@@ -10,7 +10,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from rich.console import Console
 from textual.widgets import Button, Link
@@ -1503,23 +1503,51 @@ class UpdateTests(Sandbox):
         self.assertEqual(foreign.read_text(), "keep")
         self.assertFalse((self.paths.themed_dir / "thpm-added.tpl").exists())
 
-    def test_aur_apply_hands_control_to_floating_terminal(self):
+    def test_aur_apply_runs_noninteractive_upgrade_in_current_terminal(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
         progress = []
-        with patch("thpm.update.check", return_value=result), patch("thpm.update.shutil.which", return_value="/usr/bin/omarchy-launch-floating-terminal-with-presentation"), \
-             patch("thpm.update.subprocess.Popen") as launch:
+        commands = {"yay": "/usr/bin/yay", "thpm": "/usr/bin/thpm"}
+        with patch("thpm.update.check", return_value=result), patch(
+            "thpm.update.shutil.which", side_effect=commands.get
+        ), patch("thpm.update.sys.stdin.isatty", return_value=True), patch(
+            "thpm.update.subprocess.run"
+        ) as run, patch("thpm.update.subprocess.Popen") as launch:
             applied = updater.apply(self.paths, progress=lambda message, detail: progress.append((message, detail)))
+        self.assertEqual(applied["status"], "updated")
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(
+                    ["/usr/bin/yay", "-S", "--noconfirm", "--needed", "thpm"],
+                    check=True,
+                ),
+                call(["/usr/bin/thpm", "reconcile"], check=True),
+            ],
+        )
+        launch.assert_not_called()
+        self.assertFalse(applied["refreshRequired"])
+        self.assertEqual(progress, [("Upgrading AUR package", "thpm")])
+
+    def test_aur_apply_uses_terminal_fallback_without_a_tty(self):
+        result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
+        commands = {
+            "yay": "/usr/bin/yay",
+            "omarchy-launch-floating-terminal-with-presentation": "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
+        }
+        with patch("thpm.update.check", return_value=result), patch(
+            "thpm.update.shutil.which", side_effect=commands.get
+        ), patch("thpm.update.sys.stdin.isatty", return_value=False), patch(
+            "thpm.update.subprocess.Popen"
+        ) as launch:
+            applied = updater.apply(self.paths)
         self.assertEqual(applied["status"], "started")
         launch.assert_called_once_with(
             [
                 "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
-                "yay -S thpm && thpm reconcile",
+                "yay -S --noconfirm --needed thpm && thpm reconcile",
             ],
             start_new_session=True,
         )
-        self.assertTrue(applied["refreshRequired"])
-        self.assertEqual(applied["refreshCommand"], "thpm reconcile --refresh")
-        self.assertEqual(progress, [("Opening AUR package upgrade", "thpm")])
 
 
 if __name__ == "__main__":

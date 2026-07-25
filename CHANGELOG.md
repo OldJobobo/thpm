@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.0.0rc5 - 2026-07-25
+
+- Normalize Omarchy's canonical long palette keys to THPM's internal TUI schema with explicit canonical precedence, fixing Doctor and TUI on stock Omarchy themes.
+- Convert bundled templates, including stripped color forms, to Omarchy's canonical resolver namespace and reject unresolved generated placeholders before application.
+- Add a serialized, versioned, retryable per-user template refresh migration. Install and reconciliation complete it once; rc4 and newer source-update activation paths defer across rollback, source installation refreshes only after commit, and AUR updates reconcile after successful package installation.
+- Add canonical-schema, collision, Doctor/TUI, template-rendering, unresolved-output, and upgrade-refresh regression coverage.
+
 ## 1.0.0rc4 - 2026-07-19
 
 - Preserve the source virtualenv path during RC updates instead of resolving its Python symlink to the system interpreter.

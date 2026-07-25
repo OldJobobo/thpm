@@ -1,4 +1,4 @@
-## THPM 1.0.0rc4 is now available
+## THPM 1.0.0rc5 is now available
 
 **THPM is built exclusively for Omarchy Quattro and supports Omarchy 4.x only.**
 
@@ -8,30 +8,37 @@
 omarchy pkg aur add thpm && thpm install
 ```
 
-THPM 1.0.0rc4 makes integration results trustworthy and restores conditional compatibility for theme assets that Quattro does not yet handle natively.
+THPM 1.0.0rc5 fixes the rc4 palette/template schema regression and safely regenerates per-user theme outputs after upgrade.
 
-### Upgrading from rc3
+### Upgrading from rc4
 
-AUR users can update normally. Source-installed rc3 users must update manually from the rc4 checkout or release archive once because rc3 resolves its virtualenv Python symlink before locating the runtime. Built-in RC upgrades work from rc4 onward.
+AUR updates launched through THPM reconcile per-user templates after the package succeeds. If THPM was updated through another package workflow, run:
+
+```sh
+thpm reconcile --refresh
+```
+
+Source updates detect rc4's rollbackable activation window and defer the live refresh until the new runtime is committed. A versioned migration marker is written only after a successful refresh, so interrupted or failed refreshes remain visible and retryable.
 
 ### Highlights
 
-- Source runtimes now retain their virtualenv path so built-in RC upgrades work from rc4 onward.
-- Every enabled integration now reports an explicit applied, unchanged, skipped, or failed outcome.
-- Readiness checks are shared by the service, hook runner, Doctor, CLI, TUI, and QML panel.
-- Firefox, Zen, Superfile, and Cava honor declared theme assets and report the files they manage.
-- Steam reports missing helpers, subprocess failures, and timeouts instead of silently succeeding.
-- Branding, Discord, cliamp, and nwg-dock now describe their actual prerequisites and behavior.
-- Conditional GTK compatibility deploys managed GTK3/GTK4 imports while preserving user CSS and stylesheet symlinks.
-- Validated local VS Code-family theme bundles install deterministically across VS Code, Insiders, VSCodium, and Cursor.
-- Unsafe local editor bundles are rejected for executable capabilities, identity mismatches, traversal, symlinks, unsupported files, or excessive size.
-- Doctor and the interfaces distinguish applicability, availability, readiness, and synchronization warnings.
-- Palette interpretation now follows Omarchy's canonical `omarchy-theme-color` resolver.
+- Normalize Omarchy's canonical `background`, `foreground`, and related long palette names for Doctor and the TUI.
+- Preserve short-only compatibility when the resolver emits empty canonical rows, while giving non-empty canonical values explicit precedence.
+- Convert every affected bundled template—including stripped Spicetify values—to Omarchy's canonical resolver namespace.
+- Reject unresolved `{{ ... }}` placeholders before generated fallbacks can be copied into application configuration.
+- Surface unresolved output and pending refresh migrations through Doctor, CLI, TUI, and the QML panel.
+- Serialize the one-time refresh migration and record completion only after a successful theme refresh.
+- Keep rc4-to-rc5 source-update rollback narrow by deferring live integration effects until activation is committed.
+- Expand regression coverage for canonical schemas, collisions, stock-theme rendering, generated-output safety, and source/AUR upgrade paths.
 
 ### Compatibility scope
 
-GTK and local editor compatibility activate only when the current theme supplies the relevant assets. Native Omarchy ownership remains authoritative where it already exists, and THPM does not change GNOME settings or kill applications.
+Theme-provided assets retain precedence over THPM-generated fallbacks. THPM continues to delegate palette parsing, aliases, derivations, and template rendering to the installed Omarchy 4 resolver rather than maintaining a second theme engine.
 
-This remains a release candidate. Please report installation, update, integration-outcome, or compatibility issues before the final 1.0.0 release.
+### Special thanks
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc4)
+Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//directive.
+
+This remains a release candidate. Please report palette, upgrade, or integration-output issues before the final 1.0.0 release.
+
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc5)

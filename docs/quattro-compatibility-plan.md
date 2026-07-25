@@ -1,6 +1,6 @@
 # Quattro native-ownership compatibility plan
 
-Status: implemented and released in THPM 1.0.0rc4; upstream Omarchy follow-up remains pending
+Status: compatibility work released in THPM 1.0.0rc4; canonical palette schema correction prepared for 1.0.0rc5; upstream Omarchy follow-up remains pending
 
 ## Goal
 

@@ -1,4 +1,4 @@
-## THPM 1.0.0rc7 is now available
+## THPM 1.0.0rc8 is now available
 
 **THPM is built exclusively for Omarchy Quattro and supports Omarchy 4.x only.**
 
@@ -9,22 +9,31 @@ omarchy pkg aur add thpm   # first installation
 omarchy update aur pkgs    # update an installed AUR package
 ```
 
-### A proper command-line experience
+### Detailed by default
 
-THPM commands now show useful work while it happens instead of disappearing into silence and returning with “done.”
+The rc7 progress surface is now fully verbose by default. Normal commands show:
 
-- Animated spinner for active work.
-- Stage-based progress bar driven by real service events—not a fake timer.
-- Elapsed time and concise phase labels.
-- Semantic color for active, successful, warning, and failed states.
-- Structured completion cards and integration result tables.
-- Update version, package origin, next-action, and migration details where relevant.
-- `--verbose` / `-v` stage logs, changed paths, and captured command output.
-- Automatic non-animated output when redirected or piped.
-- Full `NO_COLOR` support.
-- Stable, decoration-free `--json` output for scripts and UI clients.
+- Animated spinner and real stage-based progress bar.
+- Elapsed time and current phase.
+- Live stage logs.
+- Changed paths and captured command output.
+- Structured completion cards, result tables, warnings, and errors.
 
-The progress surface covers update, install, reconcile, run, enable, disable, migrate, and uninstall workflows. Source updates report download, checksum verification, runtime staging, activation, integration synchronization, and control-panel refresh phases. AUR updates report the handoff to Omarchy’s package presentation terminal, where package-manager logs remain interactive.
+No extra flag is required:
+
+```sh
+thpm update
+thpm run
+thpm reconcile --refresh
+```
+
+Use compact mode only when you specifically want less output:
+
+```sh
+thpm update --quiet
+```
+
+`--verbose` / `-v` remains accepted as an explicit alias for the default detailed mode. Redirected output remains non-animated, `NO_COLOR=1` disables ANSI color, and `--json` remains stable and decoration-free.
 
 ### Special thanks
 
@@ -32,4 +41,4 @@ Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//
 
 This remains a release candidate. Please report command-output or integration issues before the final 1.0.0 release.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc7)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc8)

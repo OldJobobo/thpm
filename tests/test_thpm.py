@@ -717,6 +717,22 @@ class PresentationTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def test_human_output_is_verbose_by_default(self):
+        response = {"ok": True, "summary": "THPM is current", "errors": []}
+        with patch("thpm.cli.Service") as service_type, patch("thpm.cli.render") as render_output:
+            service_type.return_value.update_apply.return_value = response
+            exit_code = main(["update"])
+        self.assertEqual(exit_code, 0)
+        render_output.assert_called_once_with(response, verbose=True)
+
+    def test_quiet_opts_out_of_verbose_human_output(self):
+        response = {"ok": True, "summary": "THPM is current", "errors": []}
+        with patch("thpm.cli.Service") as service_type, patch("thpm.cli.render") as render_output:
+            service_type.return_value.update_apply.return_value = response
+            exit_code = main(["update", "--quiet"])
+        self.assertEqual(exit_code, 0)
+        render_output.assert_called_once_with(response, verbose=False)
+
     def test_bare_update_applies_the_available_update(self):
         response = {"ok": True, "summary": "THPM updated"}
         with patch("thpm.cli.Service") as service_type, patch(
@@ -1357,7 +1373,7 @@ class UpdateTests(Sandbox):
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc7")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc8")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc8 - 2026-07-25
+
+- Make detailed stage logs, changed paths, and captured command output the default human interface; add `--quiet` / `-q` as the explicit compact-mode opt-out while retaining `--verbose` compatibility.
+
 ## 1.0.0rc7 - 2026-07-25
 
 - Add a TTY-aware Rich command surface with animated spinners, honest stage-based progress bars, elapsed time, semantic color, structured completion details, and `--verbose` logs while preserving plain redirected output, `NO_COLOR`, and decoration-free JSON.

@@ -13,11 +13,12 @@ from .service import Service, envelope
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="thpm", description="Omarchy 4 theme integration manager")
     root.add_argument("--json", action="store_true", dest="global_json")
-    root.add_argument("-v", "--verbose", action="store_true", dest="global_verbose")
+    root.add_argument("-v", "--verbose", action="store_true", dest="global_verbose", default=True)
+    root.add_argument("-q", "--quiet", action="store_false", dest="global_verbose")
     root.add_argument("--version", action="version", version=f"thpm {__version__}")
     commands = root.add_subparsers(dest="command")
     for name in ("list", "status", "native-status", "reconcile", "run", "install", "uninstall", "migrate", "version", "tui"):
-        sub = commands.add_parser(name); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true")
+        sub = commands.add_parser(name); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
         if name == "reconcile":
             sub.add_argument("--refresh", action="store_true")
             sub.add_argument(
@@ -29,21 +30,21 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--no-ui", action="store_true")
             sub.add_argument("--check", action="store_true", dest="install_check")
     for name in ("enable", "disable"):
-        sub = commands.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--yes", action="store_true"); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true")
-    doctor = commands.add_parser("doctor"); doctor.add_argument("plugin", nargs="?"); doctor.add_argument("--json", action="store_true"); doctor.add_argument("-v", "--verbose", action="store_true")
-    hook = commands.add_parser("hook-run"); hook.add_argument("event"); hook.add_argument("event_args", nargs="*"); hook.add_argument("--json", action="store_true"); hook.add_argument("-v", "--verbose", action="store_true")
+        sub = commands.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--yes", action="store_true"); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+    doctor = commands.add_parser("doctor"); doctor.add_argument("plugin", nargs="?"); doctor.add_argument("--json", action="store_true"); doctor.add_argument("-v", "--verbose", action="store_true", default=True); doctor.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+    hook = commands.add_parser("hook-run"); hook.add_argument("event"); hook.add_argument("event_args", nargs="*"); hook.add_argument("--json", action="store_true"); hook.add_argument("-v", "--verbose", action="store_true", default=True); hook.add_argument("-q", "--quiet", action="store_false", dest="verbose")
     plugin = commands.add_parser("plugin"); plugin_sub = plugin.add_subparsers(dest="plugin_command", required=True)
     for name in ("enable", "disable"):
-        sub = plugin_sub.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--yes", action="store_true"); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true")
+        sub = plugin_sub.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--yes", action="store_true"); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
     ui_cmd = commands.add_parser("ui"); ui_sub = ui_cmd.add_subparsers(dest="ui_command", required=True)
     for name in ("state", "install", "remove", "status", "open"):
-        sub = ui_sub.add_parser(name); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true")
-    surface = ui_sub.add_parser("surface"); surface.add_argument("surface", nargs="?", choices=("gui", "tui", "toggle")); surface.add_argument("--json", action="store_true"); surface.add_argument("-v", "--verbose", action="store_true")
-    update = commands.add_parser("update"); update.add_argument("--json", action="store_true"); update.add_argument("-v", "--verbose", action="store_true")
+        sub = ui_sub.add_parser(name); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+    surface = ui_sub.add_parser("surface"); surface.add_argument("surface", nargs="?", choices=("gui", "tui", "toggle")); surface.add_argument("--json", action="store_true"); surface.add_argument("-v", "--verbose", action="store_true", default=True); surface.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+    update = commands.add_parser("update"); update.add_argument("--json", action="store_true"); update.add_argument("-v", "--verbose", action="store_true", default=True); update.add_argument("-q", "--quiet", action="store_false", dest="verbose")
     update_sub = update.add_subparsers(dest="update_command")
-    check = update_sub.add_parser("check"); check.add_argument("--force", action="store_true"); check.add_argument("--json", action="store_true"); check.add_argument("-v", "--verbose", action="store_true")
-    status = update_sub.add_parser("status"); status.add_argument("--json", action="store_true"); status.add_argument("-v", "--verbose", action="store_true")
-    apply = update_sub.add_parser("apply"); apply.add_argument("--json", action="store_true"); apply.add_argument("-v", "--verbose", action="store_true")
+    check = update_sub.add_parser("check"); check.add_argument("--force", action="store_true"); check.add_argument("--json", action="store_true"); check.add_argument("-v", "--verbose", action="store_true", default=True); check.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+    status = update_sub.add_parser("status"); status.add_argument("--json", action="store_true"); status.add_argument("-v", "--verbose", action="store_true", default=True); status.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+    apply = update_sub.add_parser("apply"); apply.add_argument("--json", action="store_true"); apply.add_argument("-v", "--verbose", action="store_true", default=True); apply.add_argument("-q", "--quiet", action="store_false", dest="verbose")
     return root
 
 
@@ -116,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     paths = Paths.discover()
     command = args.command or "list"
     json_mode = args.global_json or getattr(args, "json", False)
-    verbose = args.global_verbose or getattr(args, "verbose", False)
+    verbose = args.global_verbose and getattr(args, "verbose", True)
     activity_name = None if json_mode else operation_name(command, args)
     activity = Activity(activity_name, verbose=verbose) if activity_name else None
     service = Service(paths=paths, progress=reporter(activity))

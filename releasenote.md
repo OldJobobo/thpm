@@ -1,4 +1,4 @@
-## THPM 1.0.0rc10 is now available
+## THPM 1.0.0rc11 is now available
 
 **THPM is built exclusively for Omarchy Quattro and supports Omarchy 4.x only.**
 
@@ -9,13 +9,11 @@ omarchy pkg aur add thpm   # first installation
 omarchy update aur pkgs    # update an installed AUR package
 ```
 
-### Update-flow documentation
+### Clean terminal ownership during AUR updates
 
-This release documents the AUR update behavior introduced in rc9: `thpm update` keeps the upgrade in the invoking terminal, suppresses routine package-manager confirmations, allows normal password authentication when required, and reconciles integrations after installation.
+THPM now suspends its Rich live progress display while Yay owns the terminal. Package build output is no longer interleaved with a stale spinner, and sudo password prompts remain visible and usable.
 
-The plugin security design now also reflects the policy already enforced by the shared service: sensitive integrations require explicit confirmation, and unavailable integrations are rejected consistently across CLI, JSON, TUI, and QML callers.
-
-This documentation-only release is intentionally suitable for validating the rc9-to-rc10 AUR update path.
+After Yay and reconciliation finish, THPM resumes its own completion output normally. Non-TTY callers retain the Omarchy terminal fallback.
 
 ### Special thanks
 
@@ -23,4 +21,4 @@ Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//
 
 This remains a release candidate. Please report update-flow or integration issues before the final 1.0.0 release.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc10)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc11)

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc11 - 2026-07-25
+
+- Suspend THPM's Rich live progress display while Yay owns the terminal so package output remains readable and sudo password prompts remain visible and usable.
+
 ## 1.0.0rc10 - 2026-07-25
 
 - Document the synchronous AUR update flow and bring the plugin security design's confirmation and availability status in line with the enforced service policy.

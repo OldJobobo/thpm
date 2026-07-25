@@ -27,7 +27,7 @@ trap cleanup ERR INT TERM
 mkdir -p "$(dirname "$runtime_dir")"
 rm -rf "$staged"
 python3 -m venv "$staged"
-"$staged/bin/python" -m pip install --disable-pip-version-check --no-input 'textual>=8.2.8,<9'
+"$staged/bin/python" -m pip install --disable-pip-version-check --no-input 'rich>=14,<16' 'textual>=8.2.8,<9'
 site_packages="$("$staged/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 cp -R "$repo_dir/src/thpm" "$site_packages/thpm"
 mkdir -p "$staged/share/thpm"

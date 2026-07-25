@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
@@ -67,8 +68,17 @@ def envelope(operation: str, ok: bool = True, **fields: object) -> dict[str, obj
 
 
 class Service:
-    def __init__(self, paths: Paths | None = None):
+    def __init__(
+        self,
+        paths: Paths | None = None,
+        progress: Callable[[str, str | None], None] | None = None,
+    ):
         self.paths = paths or Paths.discover()
+        self.progress = progress
+
+    def _step(self, message: str, detail: str | None = None) -> None:
+        if self.progress is not None:
+            self.progress(message, detail)
 
     def views(self) -> list[dict[str, object]]:
         return [view.json() for view in build_snapshot(self.paths, load(self.paths))]
@@ -173,12 +183,16 @@ class Service:
     def reconcile(
         self, refresh: bool = False, *, defer_upgrade_refresh: bool = False
     ) -> dict[str, object]:
+        self._step("Reading integration state")
         deferred = defer_upgrade_refresh or _source_activation_in_progress()
         with migration_lock(self.paths):
             with mutation_lock(self.paths):
+                self._step("Rendering managed templates")
                 changed = reconcile_templates(self.paths, load(self.paths))
+                self._step("Installing theme hook")
                 atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
                 changed.append(str(self.paths.hook_file))
+            self._step("Refreshing active theme" if refresh else "Checking refresh migration")
             migration, errors = _refresh_templates(
                 self.paths, requested=refresh, deferred=deferred
             )
@@ -207,13 +221,16 @@ class Service:
             capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)}, errors=errors)
 
     def install(self, with_ui: bool = True) -> dict[str, object]:
+        self._step("Checking Omarchy capabilities")
         check = self.install_check()
         if not check["ok"]:
             return envelope("install", False, summary="Omarchy 4 is required", errors=check["errors"])
+        self._step("Inspecting existing installation")
         migrated, legacy_files = inspect_legacy(self.paths)
         compat_required = needs_compat(self.paths, legacy_files)
         with migration_lock(self.paths):
             with mutation_lock(self.paths):
+                self._step("Rendering managed integrations")
                 enabled = load(self.paths)
                 enabled.update(migrated)
                 save(self.paths, enabled)
@@ -225,7 +242,10 @@ class Service:
                     atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
                     changed.append(str(self.paths.legacy_compat_file))
             ui_result: dict[str, object] = {"installed": False, "skipped": True}
-            if with_ui: ui_result = ui.install(self.paths)
+            if with_ui:
+                self._step("Installing control panel")
+                ui_result = ui.install(self.paths)
+            self._step("Refreshing active theme")
             migration, errors = _refresh_templates(
                 self.paths, deferred=_source_activation_in_progress()
             )
@@ -286,7 +306,9 @@ class Service:
             event=event, eventArgs=list(event_args), themeName=theme_name or None, **result)
 
     def run_theme(self) -> dict[str, object]:
+        self._step("Sending refresh to Omarchy")
         completed = run("theme", "refresh", check=False, timeout=180)
+        self._step("Verifying refreshed integrations")
         return envelope("run", completed.returncode == 0, summary="theme refreshed" if completed.returncode == 0 else "theme refresh failed", stdout=completed.stdout, errors=[] if completed.returncode == 0 else [{"message": completed.stderr.strip()}])
 
     def migrate(self) -> dict[str, object]:
@@ -302,6 +324,7 @@ class Service:
         return envelope("migrate", summary=f"migrated {len(files)} legacy hooks", archive=str(destination) if destination else None, changed=changed, errors=[])
 
     def update_check(self, force: bool = False) -> dict[str, object]:
+        self._step("Checking release channel")
         result = check_update(self.paths, force)
         ok = result.get("status") != "error"
         summary = {"available": "THPM update available", "current": "THPM is current", "unsupported": "installation origin is unsupported", "error": "update check failed"}.get(str(result.get("status")), "update status")
@@ -309,7 +332,8 @@ class Service:
         return envelope("update-check", ok, summary=summary, result=result, errors=errors)
 
     def update_apply(self) -> dict[str, object]:
-        result = apply_update(self.paths)
+        self._step("Checking for an available release")
+        result = apply_update(self.paths, progress=self.progress)
         ok = result.get("status") in {"updated", "started", "current"}
         summary = {"updated": "THPM updated", "started": "package update started", "current": "THPM is current"}.get(str(result.get("status")), "THPM update not applied")
         if result.get("refreshRequired"):

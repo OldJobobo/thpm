@@ -1,35 +1,35 @@
-## THPM 1.0.0rc6 is now available
+## THPM 1.0.0rc7 is now available
 
 **THPM is built exclusively for Omarchy Quattro and supports Omarchy 4.x only.**
 
-### Install or upgrade through AUR
+### Install or upgrade through Omarchy
 
 ```sh
-omarchy pkg aur add thpm
+omarchy pkg aur add thpm   # first installation
+omarchy update aur pkgs    # update an installed AUR package
 ```
 
-Users on rc4 or rc5 can upgrade directly with:
+### A proper command-line experience
 
-```sh
-yay -S thpm
-```
+THPM commands now show useful work while it happens instead of disappearing into silence and returning with “done.”
 
-Source-install users on rc5 must use the old explicit form once:
+- Animated spinner for active work.
+- Stage-based progress bar driven by real service events—not a fake timer.
+- Elapsed time and concise phase labels.
+- Semantic color for active, successful, warning, and failed states.
+- Structured completion cards and integration result tables.
+- Update version, package origin, next-action, and migration details where relevant.
+- `--verbose` / `-v` stage logs, changed paths, and captured command output.
+- Automatic non-animated output when redirected or piped.
+- Full `NO_COLOR` support.
+- Stable, decoration-free `--json` output for scripts and UI clients.
 
-```sh
-thpm update apply
-```
-
-### Fixed
-
-Bare `thpm update` now does exactly what it says: it checks for and applies the available update. The more specific `thpm update check`, `thpm update status`, and `thpm update apply` commands remain available for scripted and UI workflows, but they are no longer required for normal command-line use.
-
-Regression coverage now verifies both the bare update path and explicit update checks.
+The progress surface covers update, install, reconcile, run, enable, disable, migrate, and uninstall workflows. Source updates report download, checksum verification, runtime staging, activation, integration synchronization, and control-panel refresh phases. AUR updates report the handoff to Omarchy’s package presentation terminal, where package-manager logs remain interactive.
 
 ### Special thanks
 
 Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//directive.
 
-This remains a release candidate. Please report update or integration issues before the final 1.0.0 release.
+This remains a release candidate. Please report command-output or integration issues before the final 1.0.0 release.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc6)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc7)

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc7 - 2026-07-25
+
+- Add a TTY-aware Rich command surface with animated spinners, honest stage-based progress bars, elapsed time, semantic color, structured completion details, and `--verbose` logs while preserving plain redirected output, `NO_COLOR`, and decoration-free JSON.
+
 ## 1.0.0rc6 - 2026-07-25
 
 - Make bare `thpm update` apply the available update instead of failing because an internal update subcommand was omitted.

@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from rich.console import Console
 from textual.widgets import Button, Link
 
 from thpm import palette, ui
@@ -20,6 +21,7 @@ from thpm.cli import main
 from thpm.integrations import _browser_import, _reload, apply, apply_enabled, inspect_readiness
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
+from thpm.presentation import Activity, render
 from thpm.registry import PLUGINS
 from thpm.service import Service
 from thpm.state import StateError, load, save
@@ -679,6 +681,41 @@ class ServiceTests(Sandbox):
         apply_plugins.assert_not_called()
 
 
+class PresentationTests(unittest.TestCase):
+    def test_verbose_result_groups_summary_changes_and_command_output(self):
+        output = io.StringIO()
+        console = Console(file=output, force_terminal=False, width=100)
+        render(
+            {
+                "ok": True,
+                "operation": "reconcile",
+                "summary": "reconciled 2 files",
+                "changed": ["/tmp/one", "/tmp/two"],
+                "stdout": "renderer: complete\n",
+                "errors": [],
+            },
+            verbose=True,
+            console=console,
+        )
+        text = output.getvalue()
+        self.assertIn("✓ reconciled 2 files", text)
+        self.assertIn("Changed files", text)
+        self.assertIn("/tmp/one", text)
+        self.assertIn("renderer: complete", text)
+
+    def test_activity_renders_real_reported_stages(self):
+        output = io.StringIO()
+        console = Console(file=output, force_terminal=True, color_system="standard", width=100)
+        with Activity("reconcile", verbose=True, console=console) as activity:
+            activity.step("Reading integration state")
+            activity.step("Rendering managed templates")
+            activity.step("Installing theme hook")
+        text = output.getvalue()
+        self.assertIn("Reading integration state", text)
+        self.assertIn("Rendering managed templates", text)
+        self.assertIn("Installing theme hook", text)
+
+
 class CliTests(unittest.TestCase):
     def test_bare_update_applies_the_available_update(self):
         response = {"ok": True, "summary": "THPM updated"}
@@ -1320,7 +1357,7 @@ class UpdateTests(Sandbox):
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc6")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc7")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)
@@ -1452,9 +1489,10 @@ class UpdateTests(Sandbox):
 
     def test_aur_apply_hands_control_to_floating_terminal(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
+        progress = []
         with patch("thpm.update.check", return_value=result), patch("thpm.update.shutil.which", return_value="/usr/bin/omarchy-launch-floating-terminal-with-presentation"), \
              patch("thpm.update.subprocess.Popen") as launch:
-            applied = updater.apply(self.paths)
+            applied = updater.apply(self.paths, progress=lambda message, detail: progress.append((message, detail)))
         self.assertEqual(applied["status"], "started")
         launch.assert_called_once_with(
             [
@@ -1465,6 +1503,7 @@ class UpdateTests(Sandbox):
         )
         self.assertTrue(applied["refreshRequired"])
         self.assertEqual(applied["refreshCommand"], "thpm reconcile --refresh")
+        self.assertEqual(progress, [("Opening AUR package upgrade", "thpm")])
 
 
 if __name__ == "__main__":

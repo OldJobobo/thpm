@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "OldJobobo"}]
-dependencies = ["textual>=8.2.8,<9"]
+dependencies = ["rich>=14,<16", "textual>=8.2.8,<9"]
 
 [project.scripts]
 thpm = "thpm.cli:main"

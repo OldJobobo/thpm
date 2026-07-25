@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from . import __version__
 from .files import atomic_text
@@ -206,7 +206,7 @@ def _safe_extract(archive: Path, destination: Path) -> Path:
 
 def _stage_runtime(source: Path, runtime: Path) -> None:
     subprocess.run([sys.executable, "-m", "venv", str(runtime)], check=True)
-    subprocess.run([str(runtime / "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "textual>=8.2.8,<9"], check=True)
+    subprocess.run([str(runtime / "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "rich>=14,<16", "textual>=8.2.8,<9"], check=True)
     purelib = subprocess.run([str(runtime / "bin/python"), "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True, capture_output=True, check=True).stdout.strip()
     shutil.copytree(source / "src/thpm", Path(purelib) / "thpm")
     shutil.copytree(source / "assets", runtime / "share/thpm")
@@ -251,12 +251,20 @@ def _source_runtime() -> Path:
     return runtime
 
 
-def apply(paths: Paths) -> dict[str, object]:
+def apply(
+    paths: Paths,
+    progress: Callable[[str, str | None], None] | None = None,
+) -> dict[str, object]:
+    def step(message: str, detail: str | None = None) -> None:
+        if progress is not None:
+            progress(message, detail)
+
     update = check(paths, force=True)
     if update["status"] != "available":
         return update
     if update["origin"] in {"thpm", "thpm-git"}:
         package = str(update["origin"])
+        step("Opening AUR package upgrade", package)
         command = f"yay -S {package} && thpm reconcile"
         launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
         if not launcher: raise RuntimeError("Omarchy's floating terminal launcher is unavailable")
@@ -271,21 +279,28 @@ def apply(paths: Paths) -> dict[str, object]:
         }
     with _lock(paths), tempfile.TemporaryDirectory(prefix="thpm-update-") as temporary:
         temp = Path(temporary); archive = temp / "release.tar.gz"; checksum = temp / "release.sha256"
-        _download(str(update["archiveUrl"]), archive); _download(str(update["checksumUrl"]), checksum)
+        step("Downloading release archive", str(update["availableVersion"]))
+        _download(str(update["archiveUrl"]), archive)
+        step("Downloading release checksum")
+        _download(str(update["checksumUrl"]), checksum)
+        step("Verifying release integrity")
         expected = checksum.read_text().split()[0].lower()
         actual = _file_sha256(archive)
         if expected != actual: raise RuntimeError("release checksum verification failed")
         source = _safe_extract(archive, temp / "source")
         if source.joinpath("VERSION").read_text().strip() != update["availableVersion"]: raise RuntimeError("release version does not match its archive")
+        step("Staging isolated runtime")
         runtime = _source_runtime()
         staged = runtime.with_name(f"runtime.next-{os.getpid()}"); previous = runtime.with_name("runtime.previous")
         shutil.rmtree(staged, ignore_errors=True); _stage_runtime(source, staged); shutil.rmtree(previous, ignore_errors=True)
         integration_backups = _backup_integrations(paths, temp / "integration-backup")
+        step("Activating new runtime")
         runtime.rename(previous)
         try:
             staged.rename(runtime)
             # Updates must not rerun legacy migration or rewrite persisted plugin
             # state. Reconcile only the managed hook/templates, then refresh QML.
+            step("Synchronizing integrations")
             subprocess.run(
                 [
                     str(runtime / "bin/thpm"),
@@ -296,6 +311,7 @@ def apply(paths: Paths) -> dict[str, object]:
                 capture_output=True,
                 text=True,
             )
+            step("Refreshing control panel")
             subprocess.run([str(runtime / "bin/thpm"), "ui", "install"], check=True, capture_output=True, text=True)
         except Exception:
             shutil.rmtree(runtime, ignore_errors=True); previous.rename(runtime); _restore_integrations(integration_backups); raise

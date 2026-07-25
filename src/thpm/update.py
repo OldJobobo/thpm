@@ -15,7 +15,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -269,7 +269,9 @@ def apply(
         command = f"yay -S --noconfirm --needed {package} && thpm reconcile"
         if sys.stdin.isatty():
             step("Upgrading AUR package", package)
-            with _lock(paths):
+            suspend = getattr(progress, "suspend", None)
+            terminal = suspend() if callable(suspend) else nullcontext()
+            with _lock(paths), terminal:
                 subprocess.run(
                     [yay, "-S", "--noconfirm", "--needed", package],
                     check=True,

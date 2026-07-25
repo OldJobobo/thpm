@@ -9,6 +9,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import call, patch
 
@@ -21,7 +22,7 @@ from thpm.cli import main
 from thpm.integrations import _browser_import, _reload, apply, apply_enabled, inspect_readiness
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
-from thpm.presentation import Activity, render
+from thpm.presentation import Activity, render, reporter
 from thpm.registry import PLUGINS
 from thpm.service import Service
 from thpm.state import StateError, load, save
@@ -714,6 +715,19 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("Reading integration state", text)
         self.assertIn("Rendering managed templates", text)
         self.assertIn("Installing theme hook", text)
+
+    def test_activity_reporter_can_suspend_live_rendering_for_terminal_subprocesses(self):
+        output = io.StringIO()
+        console = Console(file=output, force_terminal=True, color_system="standard", width=100)
+        with Activity("update", console=console) as activity:
+            callback = reporter(activity)
+            self.assertIs(callback, activity)
+            self.assertTrue(activity._progress.live.is_started)
+            with activity.suspend():
+                self.assertFalse(activity._progress.live.is_started)
+                output.write("[sudo] password for user: ")
+            self.assertTrue(activity._progress.live.is_started)
+        self.assertIn("[sudo] password for user:", output.getvalue())
 
 
 class CliTests(unittest.TestCase):
@@ -1505,14 +1519,35 @@ class UpdateTests(Sandbox):
 
     def test_aur_apply_runs_noninteractive_upgrade_in_current_terminal(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
-        progress = []
+
+        class TerminalProgress:
+            def __init__(self):
+                self.events = []
+                self.suspended = False
+
+            def __call__(self, message, detail):
+                self.events.append((message, detail))
+
+            @contextmanager
+            def suspend(self):
+                self.suspended = True
+                try:
+                    yield
+                finally:
+                    self.suspended = False
+
+        progress = TerminalProgress()
         commands = {"yay": "/usr/bin/yay", "thpm": "/usr/bin/thpm"}
+
+        def run_command(*_args, **_kwargs):
+            self.assertTrue(progress.suspended)
+
         with patch("thpm.update.check", return_value=result), patch(
             "thpm.update.shutil.which", side_effect=commands.get
         ), patch("thpm.update.sys.stdin.isatty", return_value=True), patch(
-            "thpm.update.subprocess.run"
+            "thpm.update.subprocess.run", side_effect=run_command
         ) as run, patch("thpm.update.subprocess.Popen") as launch:
-            applied = updater.apply(self.paths, progress=lambda message, detail: progress.append((message, detail)))
+            applied = updater.apply(self.paths, progress=progress)
         self.assertEqual(applied["status"], "updated")
         self.assertEqual(
             run.call_args_list,
@@ -1526,7 +1561,7 @@ class UpdateTests(Sandbox):
         )
         launch.assert_not_called()
         self.assertFalse(applied["refreshRequired"])
-        self.assertEqual(progress, [("Upgrading AUR package", "thpm")])
+        self.assertEqual(progress.events, [("Upgrading AUR package", "thpm")])
 
     def test_aur_apply_uses_terminal_fallback_without_a_tty(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}

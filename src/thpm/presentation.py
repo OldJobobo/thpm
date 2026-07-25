@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from rich.console import Console
@@ -71,6 +72,9 @@ class Activity:
             self.console.print(f"[cyan]→[/] {self._last_message}")
         return self
 
+    def __call__(self, message: str, detail: str | None = None) -> None:
+        self.step(message, detail)
+
     def step(self, message: str, detail: str | None = None) -> None:
         self._last_message = message
         self._steps += 1
@@ -84,6 +88,18 @@ class Activity:
         elif self.verbose:
             suffix = f" [dim]{detail}[/]" if detail else ""
             self.console.print(f"  [cyan]•[/] {message}{suffix}")
+
+    @contextmanager
+    def suspend(self) -> Iterator[None]:
+        """Yield terminal ownership without a Rich live display obscuring prompts."""
+        active = self._progress is not None and self._task is not None
+        if active:
+            self._progress.stop()
+        try:
+            yield
+        finally:
+            if active:
+                self._progress.start()
 
     def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
         if self._progress is not None and self._task is not None:
@@ -184,4 +200,4 @@ def render(payload: dict[str, Any], *, verbose: bool = False, console: Console |
 
 
 def reporter(activity: Activity | None) -> Callable[[str, str | None], None] | None:
-    return activity.step if activity is not None else None
+    return activity

@@ -43,17 +43,15 @@ However, today’s “plugins” are compiled-in records plus ID-specific Python
 
 Consequently, the project currently supports **enable/disable of built-in integrations**, not installation/removal of plugin packages.
 
-## Current security and lifecycle gaps
+## Current security and lifecycle status
 
-### 1. Confirmation metadata is not enforced
+### 1. Confirmation metadata is enforced
 
-`Plugin.confirmation` is exposed as `confirmationRequired`, but `Service.set_enabled()` does not check it and neither frontend presents a plugin-specific confirmation. Firefox, Zen, and Steam therefore have security-sensitive metadata that is currently informational only.
+`Plugin.confirmation` is exposed as `confirmationRequired` and enforced by `Service.set_enabled()`. CLI, TUI, and QML callers must explicitly confirm sensitive integrations such as Firefox, Zen, and Steam; JSON callers cannot bypass the shared policy.
 
-Enforcement belongs in `Service`, not only in UI code. A caller of `--json` must not bypass policy.
+### 2. Availability is enforced by the service
 
-### 2. Availability is enforced by the frontends, not the service
-
-The GUI and TUI disable unavailable rows, but `Service.set_enabled()` accepts an unavailable built-in plugin. Policy must be identical for every caller.
+The GUI and TUI disable unavailable rows, and `Service.set_enabled()` independently rejects unavailable built-in plugins so policy remains identical for every caller.
 
 ### 3. Disable is not remove or cleanup
 

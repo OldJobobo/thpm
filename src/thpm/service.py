@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import subprocess
+import sys
+from pathlib import Path
 
 from . import __version__
 from .compat import cleanup_gtk, vscode_doctor_warnings
-from .files import atomic_copy
+from .files import atomic_copy, atomic_text
 from .integrations import apply_enabled
 from .migrate import archive as archive_legacy, artifacts as legacy_artifacts, inspect as inspect_legacy, needs_compat
 from .omarchy import capabilities, run
@@ -13,12 +15,51 @@ from .paths import Paths
 from .registry import BY_ID
 from .resources import asset
 from .snapshot import build as build_snapshot
-from .state import StateError, load, mutation_lock, save
+from .state import StateError, load, migration_lock, mutation_lock, save
 from .templates import reconcile as reconcile_templates
 from .update import apply as apply_update, check as check_update
 from . import ui
 
 SCHEMA_VERSION = 1
+CANONICAL_PALETTE_MIGRATION = "canonical-palette-v1"
+
+
+def _source_activation_in_progress() -> bool:
+    """Recognize both new and rc4 updaters while the previous runtime is rollbackable."""
+    runtime = Path(sys.executable).absolute().parent.parent
+    return runtime.name == "runtime" and runtime.with_name("runtime.previous").is_dir()
+
+
+def _migration_status(paths: Paths, *, deferred: bool = False) -> dict[str, object]:
+    pending = not paths.canonical_palette_migration_marker.is_file()
+    return {
+        "id": CANONICAL_PALETTE_MIGRATION,
+        "pending": pending,
+        "refreshed": False,
+        "deferred": deferred and pending,
+        "command": "thpm reconcile --refresh" if pending else None,
+    }
+
+
+def _refresh_templates(
+    paths: Paths, *, requested: bool = False, deferred: bool = False
+) -> tuple[dict[str, object], list[dict[str, str]]]:
+    marker = paths.canonical_palette_migration_marker
+    status = _migration_status(paths, deferred=deferred)
+    pending = bool(status["pending"])
+    if deferred or not (requested or pending):
+        return status, []
+    try:
+        completed = run("theme", "refresh", check=False, timeout=180)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return status, [{"message": f"theme refresh failed: {exc}"}]
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or "theme refresh failed"
+        return status, [{"message": detail}]
+    if pending:
+        atomic_text(marker, CANONICAL_PALETTE_MIGRATION + "\n")
+    status.update(pending=False, refreshed=True, deferred=False, command=None)
+    return status, []
 
 
 def envelope(operation: str, ok: bool = True, **fields: object) -> dict[str, object]:
@@ -42,6 +83,7 @@ class Service:
             "attention": lambda p: bool(p["warnings"]),
         }.items()}
         menu_surface = str(ui.surface(self.paths)["surface"])
+        migration = _migration_status(self.paths)
         return envelope(
             "ui-state",
             summary="THPM plugin state",
@@ -49,6 +91,8 @@ class Service:
             counts=counts,
             plugins=plugins,
             menuSurface=menu_surface,
+            migration=migration,
+            warnings=([{"message": "template refresh migration pending; run thpm reconcile --refresh"}] if migration["pending"] else []),
             errors=[],
         )
 
@@ -121,15 +165,38 @@ class Service:
                 entry = ("vscode-local-compat", message)
                 if entry not in known:
                     warnings.append({"plugin": entry[0], "message": entry[1]})
-        return envelope("doctor", not errors, summary=f"{len(errors)} errors, {len(warnings)} warnings", plugins=plugins, errors=errors, warnings=warnings, capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)})
+        migration = _migration_status(self.paths)
+        if migration["pending"]:
+            warnings.append({"message": "template refresh migration pending; run thpm reconcile --refresh"})
+        return envelope("doctor", not errors, summary=f"{len(errors)} errors, {len(warnings)} warnings", plugins=plugins, errors=errors, warnings=warnings, migration=migration, capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)})
 
-    def reconcile(self, refresh: bool = False) -> dict[str, object]:
-        with mutation_lock(self.paths):
-            changed = reconcile_templates(self.paths, load(self.paths))
-            atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
-            changed.append(str(self.paths.hook_file))
-        if refresh: run("theme", "refresh")
-        return envelope("reconcile", summary=f"reconciled {len(changed)} files", changed=changed, plugins=self.views(), errors=[])
+    def reconcile(
+        self, refresh: bool = False, *, defer_upgrade_refresh: bool = False
+    ) -> dict[str, object]:
+        deferred = defer_upgrade_refresh or _source_activation_in_progress()
+        with migration_lock(self.paths):
+            with mutation_lock(self.paths):
+                changed = reconcile_templates(self.paths, load(self.paths))
+                atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
+                changed.append(str(self.paths.hook_file))
+            migration, errors = _refresh_templates(
+                self.paths, requested=refresh, deferred=deferred
+            )
+        summary = f"reconciled {len(changed)} files"
+        if migration["refreshed"]:
+            summary += "; theme refreshed"
+        elif migration["pending"]:
+            summary += "; theme refresh pending (run thpm reconcile --refresh)"
+        return envelope(
+            "reconcile",
+            not errors,
+            summary=summary,
+            changed=changed,
+            refreshed=migration["refreshed"],
+            migration=migration,
+            plugins=self.views(),
+            errors=errors,
+        )
 
     def install_check(self) -> dict[str, object]:
         caps = capabilities()
@@ -145,33 +212,55 @@ class Service:
             return envelope("install", False, summary="Omarchy 4 is required", errors=check["errors"])
         migrated, legacy_files = inspect_legacy(self.paths)
         compat_required = needs_compat(self.paths, legacy_files)
-        with mutation_lock(self.paths):
-            enabled = load(self.paths)
-            enabled.update(migrated)
-            save(self.paths, enabled)
-            changed = reconcile_templates(self.paths, enabled)
-            atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
-            changed.append(str(self.paths.hook_file))
-            legacy_archive = archive_legacy(self.paths, legacy_files, legacy_artifacts(self.paths))
-            if compat_required:
-                atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
-                changed.append(str(self.paths.legacy_compat_file))
-        ui_result: dict[str, object] = {"installed": False, "skipped": True}
-        if with_ui: ui_result = ui.install(self.paths)
-        return envelope("install", summary="THPM installed", changed=changed, migratedTo=str(legacy_archive) if legacy_archive else None, ui=ui_result, errors=[])
+        with migration_lock(self.paths):
+            with mutation_lock(self.paths):
+                enabled = load(self.paths)
+                enabled.update(migrated)
+                save(self.paths, enabled)
+                changed = reconcile_templates(self.paths, enabled)
+                atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
+                changed.append(str(self.paths.hook_file))
+                legacy_archive = archive_legacy(self.paths, legacy_files, legacy_artifacts(self.paths))
+                if compat_required:
+                    atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
+                    changed.append(str(self.paths.legacy_compat_file))
+            ui_result: dict[str, object] = {"installed": False, "skipped": True}
+            if with_ui: ui_result = ui.install(self.paths)
+            migration, errors = _refresh_templates(
+                self.paths, deferred=_source_activation_in_progress()
+            )
+        summary = "THPM installed"
+        if migration["refreshed"]:
+            summary += "; templates rendered and active theme refreshed"
+        elif migration["pending"]:
+            summary += "; theme refresh pending (run thpm reconcile --refresh)"
+        return envelope(
+            "install",
+            not errors,
+            summary=summary,
+            changed=changed,
+            migratedTo=str(legacy_archive) if legacy_archive else None,
+            ui=ui_result,
+            migration=migration,
+            errors=errors,
+        )
 
     def uninstall(self) -> dict[str, object]:
-        with mutation_lock(self.paths):
-            disabled = {plugin_id: False for plugin_id in BY_ID}
-            changed = reconcile_templates(self.paths, disabled)
-            changed.extend(cleanup_gtk(self.paths))
-            if self.paths.hook_file.exists():
-                self.paths.hook_file.unlink()
-                changed.append(str(self.paths.hook_file))
-            compat_asset = asset("compat", "theme-env.sh")
-            if self.paths.legacy_compat_file.is_file() and compat_asset.is_file() and self.paths.legacy_compat_file.read_bytes() == compat_asset.read_bytes():
-                self.paths.legacy_compat_file.unlink()
-                changed.append(str(self.paths.legacy_compat_file))
+        with migration_lock(self.paths):
+            with mutation_lock(self.paths):
+                disabled = {plugin_id: False for plugin_id in BY_ID}
+                changed = reconcile_templates(self.paths, disabled)
+                changed.extend(cleanup_gtk(self.paths))
+                if self.paths.hook_file.exists():
+                    self.paths.hook_file.unlink()
+                    changed.append(str(self.paths.hook_file))
+                if self.paths.canonical_palette_migration_marker.exists():
+                    self.paths.canonical_palette_migration_marker.unlink()
+                    changed.append(str(self.paths.canonical_palette_migration_marker))
+                compat_asset = asset("compat", "theme-env.sh")
+                if self.paths.legacy_compat_file.is_file() and compat_asset.is_file() and self.paths.legacy_compat_file.read_bytes() == compat_asset.read_bytes():
+                    self.paths.legacy_compat_file.unlink()
+                    changed.append(str(self.paths.legacy_compat_file))
         ui_result = ui.remove(self.paths)
         self.paths.update_cache_file.unlink(missing_ok=True)
         if self.paths.install_metadata.is_file():
@@ -223,4 +312,6 @@ class Service:
         result = apply_update(self.paths)
         ok = result.get("status") in {"updated", "started", "current"}
         summary = {"updated": "THPM updated", "started": "package update started", "current": "THPM is current"}.get(str(result.get("status")), "THPM update not applied")
+        if result.get("refreshRequired"):
+            summary += "; run thpm reconcile --refresh to regenerate active theme outputs"
         return envelope("update-apply", ok, summary=summary, result=result, errors=[] if ok else [{"message": str(result.get("error", result.get("status")))}])

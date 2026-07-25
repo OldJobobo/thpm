@@ -35,9 +35,30 @@ REQUIRED = (
 )
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 OPTIONAL_HEX = ("active_border_color",)
+CANONICAL_TO_INTERNAL = {
+    "background": "bg",
+    "dark_background": "dark_bg",
+    "darker_background": "darker_bg",
+    "lighter_background": "lighter_bg",
+    "dark_foreground": "dark_fg",
+    "foreground": "fg",
+    "light_foreground": "light_fg",
+    "bright_foreground": "bright_fg",
+}
+
+
+def _normalize(data: dict[str, object]) -> dict[str, object]:
+    normalized = dict(data)
+    for canonical, internal in CANONICAL_TO_INTERNAL.items():
+        canonical_value = data.get(canonical)
+        if str(canonical_value or "").strip() or internal not in data:
+            if canonical in data:
+                normalized[internal] = canonical_value
+    return normalized
 
 
 def _validate(data: dict[str, object]) -> dict[str, str]:
+    data = _normalize(data)
     missing = [key for key in REQUIRED if not str(data.get(key, "")).strip()]
     if missing:
         raise ValueError("missing semantic colors: " + ", ".join(missing))

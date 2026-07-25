@@ -63,4 +63,9 @@ mv "$metadata_tmp" "$install_metadata"
 rm -rf "$previous"
 activated=false
 trap - ERR INT TERM
+
+# Refresh only after runtime, launcher, and metadata activation can no longer roll
+# back. A failure leaves the installed runtime usable and the migration pending
+# for a retry with `thpm reconcile --refresh`.
+"$runtime_dir/bin/thpm" reconcile --refresh
 printf 'Installed thpm %s in %s. Ensure %s is in PATH.\n' "$(<"$repo_dir/VERSION")" "$runtime_dir" "$user_bin"

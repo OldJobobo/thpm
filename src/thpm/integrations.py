@@ -42,6 +42,33 @@ ZELLIJ_MANAGED_END = "// thpm-zellij-theme-end"
 ZELLIJ_THEME_DECLARATION = re.compile(
     r'(?m)^(?P<prefix>[ \t]*themes[ \t]*\{\s*)(?P<name>"(?:\\.|[^"\\])*"|[^\s{}]+)(?P<suffix>[ \t]*\{)'
 )
+UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
+
+
+def _ensure_generated_output_is_rendered(source: Path) -> None:
+    match = UNRESOLVED_PLACEHOLDER.search(source.read_text())
+    if match:
+        raise RuntimeError(
+            f"generated theme output contains an unresolved placeholder: "
+            f"{source} ({match.group(0)})"
+        )
+
+
+def _generated_output_error(plugin_id: str, paths: Paths) -> str | None:
+    name = GENERATED.get(plugin_id)
+    if not name:
+        return None
+    plugin = BY_ID[plugin_id]
+    if any((paths.current_theme / asset).is_file() for asset in plugin.theme_assets):
+        return None
+    source = paths.current_theme / name
+    if not source.is_file():
+        return None
+    try:
+        _ensure_generated_output_is_rendered(source)
+    except (OSError, RuntimeError, UnicodeError) as exc:
+        return str(exc)
+    return None
 
 
 class ApplyFailure(RuntimeError):
@@ -139,6 +166,8 @@ def inspect_readiness(
     ):
         missing.append(" or ".join(plugin.theme_assets) + " in the active theme")
 
+    if generated_error := _generated_output_error(plugin_id, paths):
+        missing.append(generated_error)
     if plugin_id == "nwg-dock":
         warnings.append(
             "nwg-dock-hyprland has no supported live reload; restart it to see theme changes"
@@ -149,9 +178,12 @@ def inspect_readiness(
 def _copy_first(
     paths: Paths, candidates: tuple[str, ...], target: Path
 ) -> tuple[Path | None, bool]:
+    generated_names = set(GENERATED.values())
     for name in candidates:
         source = paths.current_theme / name
         if source.is_file():
+            if name in generated_names:
+                _ensure_generated_output_is_rendered(source)
             unchanged = target.is_file() and source.read_bytes() == target.read_bytes()
             if not unchanged:
                 atomic_copy(source, target)
@@ -346,6 +378,8 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
         )
         if source is None:
             raise RuntimeError("zellij: no theme asset or generated theme was found")
+        if source.name == GENERATED[plugin_id]:
+            _ensure_generated_output_is_rendered(source)
         if _install_zellij_theme(source, targets[plugin_id]):
             changed.append(str(targets[plugin_id]))
         config_file, config_changed = _select_zellij_theme(paths)

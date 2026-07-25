@@ -16,7 +16,13 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command")
     for name in ("list", "status", "native-status", "reconcile", "run", "install", "uninstall", "migrate", "version", "tui"):
         sub = commands.add_parser(name); sub.add_argument("--json", action="store_true")
-        if name == "reconcile": sub.add_argument("--refresh", action="store_true")
+        if name == "reconcile":
+            sub.add_argument("--refresh", action="store_true")
+            sub.add_argument(
+                "--defer-upgrade-refresh",
+                action="store_true",
+                help=argparse.SUPPRESS,
+            )
         if name == "install":
             sub.add_argument("--no-ui", action="store_true")
             sub.add_argument("--check", action="store_true", dest="install_check")
@@ -76,7 +82,10 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "disable": payload = _set_enabled(service, args, False, json_mode)
         elif command == "plugin": payload = _set_enabled(service, args, args.plugin_command == "enable", json_mode)
         elif command == "doctor": payload = service.doctor(args.plugin)
-        elif command == "reconcile": payload = service.reconcile(args.refresh)
+        elif command == "reconcile":
+            payload = service.reconcile(
+                args.refresh, defer_upgrade_refresh=args.defer_upgrade_refresh
+            )
         elif command == "run": payload = service.run_theme()
         elif command == "install": payload = service.install_check() if args.install_check else service.install(not args.no_ui)
         elif command == "uninstall": payload = service.uninstall()

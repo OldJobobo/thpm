@@ -448,7 +448,12 @@ class ThpmTui(App[None]):
             self.render_counts()
             self.render_menu_surface()
             await self.render_plugins(self.query_one("#integration-search", Input).value)
-            self.set_message(self.palette_warning or "")
+            migration = dict(payload.get("migration", {}))
+            migration_warning = (
+                "Template refresh pending; run thpm reconcile --refresh."
+                if migration.get("pending") else ""
+            )
+            self.set_message(self.palette_warning or migration_warning)
         except Exception as exc:
             self.set_message(f"Unable to read THPM state: {exc}", error=True)
 
@@ -640,9 +645,13 @@ class ThpmTui(App[None]):
             status = str(result.get("status", ""))
             if status == "updated":
                 message = f"Updated to {result.get('availableVersion')}. Restart the shell and relaunch this TUI."
+                if result.get("refreshRequired"):
+                    message += " Then run thpm reconcile --refresh to regenerate active theme outputs."
                 self.query_one("#restart-shell", Button).display = True
             elif status == "started":
                 message = "Package update opened in a terminal."
+                if result.get("refreshRequired"):
+                    message += " It will reconcile the per-user templates after a successful upgrade."
             else:
                 message = "THPM is current."
             self.query_one("#update-message", Static).update(message)

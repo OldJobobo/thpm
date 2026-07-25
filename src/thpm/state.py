@@ -49,11 +49,24 @@ def save(paths: Paths, enabled: dict[str, bool]) -> None:
 
 
 @contextmanager
-def mutation_lock(paths: Paths) -> Iterator[None]:
-    paths.lock_file.parent.mkdir(parents=True, exist_ok=True)
-    with paths.lock_file.open("w") as lock:
+def _lock(path: Path, message: str) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise RuntimeError("another THPM operation is already running") from exc
+            raise RuntimeError(message) from exc
+        yield
+
+
+@contextmanager
+def mutation_lock(paths: Paths) -> Iterator[None]:
+    with _lock(paths.lock_file, "another THPM operation is already running"):
+        yield
+
+
+@contextmanager
+def migration_lock(paths: Paths) -> Iterator[None]:
+    """Serialize refresh migrations without blocking theme hooks on the mutation lock."""
+    with _lock(paths.migration_lock_file, "another THPM migration is already running"):
         yield

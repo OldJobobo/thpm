@@ -2,7 +2,7 @@
  * @name Omarchy System24
  * @description System24 using the active Omarchy semantic palette.
  * @author OldJobobo, refact0r
- * @version 1.0.0rc4
+ * @version 1.0.0rc5
  * @website https://github.com/refact0r/system24
  * @source https://github.com/refact0r/system24
  */
@@ -34,27 +34,27 @@ body {
 :root {
     --colors: on;
 
-    --text-0: {{ bg }};
-    --text-1: {{ bright_fg }};
-    --text-2: {{ fg }};
-    --text-3: {{ light_fg }};
+    --text-0: {{ background }};
+    --text-1: {{ bright_foreground }};
+    --text-2: {{ foreground }};
+    --text-3: {{ light_foreground }};
     --text-4: {{ muted }};
-    --text-5: {{ dark_fg }};
+    --text-5: {{ dark_foreground }};
 
-    --bg-1: color-mix(in srgb, {{ bg }}, {{ fg }} 18%);
-    --bg-2: color-mix(in srgb, {{ bg }}, {{ fg }} 12%);
-    --bg-3: color-mix(in srgb, {{ bg }}, {{ fg }} 6%);
-    --bg-4: {{ bg }};
+    --bg-1: color-mix(in srgb, {{ background }}, {{ foreground }} 18%);
+    --bg-2: color-mix(in srgb, {{ background }}, {{ foreground }} 12%);
+    --bg-3: color-mix(in srgb, {{ background }}, {{ foreground }} 6%);
+    --bg-4: {{ background }};
     --hover: color-mix(in srgb, {{ muted }} 18%, transparent);
     --active: color-mix(in srgb, {{ muted }} 28%, transparent);
     --active-2: color-mix(in srgb, {{ muted }} 38%, transparent);
-    --message-hover: color-mix(in srgb, {{ darker_bg }} 55%, transparent);
+    --message-hover: color-mix(in srgb, {{ darker_background }} 55%, transparent);
 
     --accent-1: {{ bright_blue }};
     --accent-2: {{ blue }};
     --accent-3: {{ blue }};
     --accent-4: {{ bright_blue }};
-    --accent-5: color-mix(in srgb, {{ blue }}, {{ bg }} 28%);
+    --accent-5: color-mix(in srgb, {{ blue }}, {{ background }} 28%);
     --accent-new: var(--red-2);
 
     --online: {{ green }};
@@ -81,28 +81,28 @@ body {
     --red-1: {{ bright_red }};
     --red-2: {{ red }};
     --red-3: {{ red }};
-    --red-4: color-mix(in srgb, {{ red }}, {{ bg }} 18%);
-    --red-5: color-mix(in srgb, {{ red }}, {{ bg }} 34%);
+    --red-4: color-mix(in srgb, {{ red }}, {{ background }} 18%);
+    --red-5: color-mix(in srgb, {{ red }}, {{ background }} 34%);
     --green-1: {{ bright_green }};
     --green-2: {{ green }};
     --green-3: {{ green }};
-    --green-4: color-mix(in srgb, {{ green }}, {{ bg }} 18%);
-    --green-5: color-mix(in srgb, {{ green }}, {{ bg }} 34%);
+    --green-4: color-mix(in srgb, {{ green }}, {{ background }} 18%);
+    --green-5: color-mix(in srgb, {{ green }}, {{ background }} 34%);
     --blue-1: {{ bright_blue }};
     --blue-2: {{ blue }};
     --blue-3: {{ blue }};
-    --blue-4: color-mix(in srgb, {{ blue }}, {{ bg }} 18%);
-    --blue-5: color-mix(in srgb, {{ blue }}, {{ bg }} 34%);
+    --blue-4: color-mix(in srgb, {{ blue }}, {{ background }} 18%);
+    --blue-5: color-mix(in srgb, {{ blue }}, {{ background }} 34%);
     --yellow-1: {{ bright_yellow }};
     --yellow-2: {{ yellow }};
     --yellow-3: {{ yellow }};
-    --yellow-4: color-mix(in srgb, {{ yellow }}, {{ bg }} 18%);
-    --yellow-5: color-mix(in srgb, {{ yellow }}, {{ bg }} 34%);
+    --yellow-4: color-mix(in srgb, {{ yellow }}, {{ background }} 18%);
+    --yellow-5: color-mix(in srgb, {{ yellow }}, {{ background }} 34%);
     --purple-1: {{ bright_magenta }};
     --purple-2: {{ magenta }};
     --purple-3: {{ magenta }};
-    --purple-4: color-mix(in srgb, {{ magenta }}, {{ bg }} 18%);
-    --purple-5: color-mix(in srgb, {{ magenta }}, {{ bg }} 34%);
+    --purple-4: color-mix(in srgb, {{ magenta }}, {{ background }} 18%);
+    --purple-5: color-mix(in srgb, {{ magenta }}, {{ background }} 34%);
 }
 
 :is([class*="containerDefault_"], [class*="containerDragAfter_"], [class*="containerDragBefore_"])

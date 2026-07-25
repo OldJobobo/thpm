@@ -1,2 +1,2 @@
-window { background: {{ bg }}; color: {{ fg }}; border: 1px solid {{ muted }}; }
+window { background: {{ background }}; color: {{ foreground }}; border: 1px solid {{ muted }}; }
 button:hover { background: {{ selection }}; border-color: {{ blue }}; }

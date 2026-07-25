@@ -38,7 +38,7 @@ Item {
     property string menuSurfaceMessage: ""
     property var updateInfo: ({
         "status": "idle",
-        "currentVersion": "1.0.0rc4",
+        "currentVersion": "1.0.0rc5",
         "availableVersion": null
     })
     property string updateMessage: ""
@@ -104,7 +104,12 @@ Item {
             plugins = state.plugins || [];
             counts = state.counts || counts;
             menuSurface = state.menuSurface || menuSurface;
-            message = state.ok ? "" : (state.summary || "Unable to read THPM state");
+            if (!state.ok)
+                message = state.summary || "Unable to read THPM state";
+            else if (state.migration && state.migration.pending)
+                message = "Template refresh pending; run thpm reconcile --refresh.";
+            else
+                message = "";
         } catch (error) {
             message = "Unable to read THPM state";
         }
@@ -213,9 +218,9 @@ Item {
                 "status": "error"
             });
             if (updateInfo.status === "updated")
-                updateMessage = "Updated to " + updateInfo.availableVersion + ". Restart the shell to load the new panel.";
+                updateMessage = "Updated to " + updateInfo.availableVersion + ". Restart the shell to load the new panel." + (updateInfo.refreshRequired ? " Then run thpm reconcile --refresh to regenerate active theme outputs." : "");
             else if (updateInfo.status === "started")
-                updateMessage = "Package update opened in a terminal.";
+                updateMessage = "Package update opened in a terminal." + (updateInfo.refreshRequired ? " Per-user templates will reconcile after a successful upgrade." : "");
             else if (updateInfo.status === "error" && reportErrors)
                 updateMessage = payload.errors && payload.errors.length ? payload.errors[0].message : "Update check failed";
             else
@@ -494,7 +499,7 @@ Item {
                         }
 
                         Text {
-                            text: "Version " + (root.updateInfo.currentVersion || "1.0.0rc4")
+                            text: "Version " + (root.updateInfo.currentVersion || "1.0.0rc5")
                             color: Qt.darker(Color.foreground, 1.55)
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption
@@ -1146,7 +1151,7 @@ Item {
                                 }
 
                                 Text {
-                                    text: root.updateInfo.status === "available" ? "Version " + root.updateInfo.availableVersion + " is available" : "Installed version " + (root.updateInfo.currentVersion || "1.0.0rc4")
+                                    text: root.updateInfo.status === "available" ? "Version " + root.updateInfo.availableVersion + " is available" : "Installed version " + (root.updateInfo.currentVersion || "1.0.0rc5")
                                     color: Qt.darker(Color.foreground, 1.35)
                                     font.family: Style.font.family
                                     font.pixelSize: Style.font.caption

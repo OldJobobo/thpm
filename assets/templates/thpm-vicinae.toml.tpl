@@ -1,8 +1,8 @@
 [meta]
 name = "THPM Current"
 [colors]
-background = "{{ bg }}"
-foreground = "{{ fg }}"
+background = "{{ background }}"
+foreground = "{{ foreground }}"
 accent = "{{ blue }}"
 muted = "{{ muted }}"
 selection = "{{ selection }}"

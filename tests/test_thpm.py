@@ -17,7 +17,7 @@ from textual.widgets import Button, Link
 from thpm import palette, ui
 from thpm import update as updater
 from thpm.cli import main
-from thpm.integrations import _browser_import, _reload, apply, apply_enabled
+from thpm.integrations import _browser_import, _reload, apply, apply_enabled, inspect_readiness
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
 from thpm.registry import PLUGINS
@@ -36,6 +36,21 @@ COLORS = {
     "bright_yellow": "#ffdd66", "bright_green": "#77dd88", "bright_cyan": "#66ddee",
     "bright_blue": "#6699ff", "bright_magenta": "#dd77ff",
 }
+CANONICAL_NAMES = {
+    "bg": "background",
+    "dark_bg": "dark_background",
+    "darker_bg": "darker_background",
+    "lighter_bg": "lighter_background",
+    "dark_fg": "dark_foreground",
+    "fg": "foreground",
+    "light_fg": "light_foreground",
+    "bright_fg": "bright_foreground",
+}
+CANONICAL_COLORS = {CANONICAL_NAMES.get(key, key): value for key, value in COLORS.items()}
+
+
+def resolver_output(colors: dict[str, str]) -> str:
+    return "\n".join(f"{key}\t{value}" for key, value in colors.items()) + "\n"
 
 
 class Sandbox(unittest.TestCase):
@@ -64,11 +79,12 @@ class PaletteTests(Sandbox):
         self.paths.current_theme.mkdir(parents=True)
         colors = self.paths.current_theme / "colors.toml"
         colors.write_text('background = "#000000"\ncolor0 = "#000000"\n')
-        resolved = "\n".join(f"{key}\t{value}" for key, value in COLORS.items()) + "\n"
         with patch("thpm.palette.shutil.which", return_value="/usr/bin/omarchy-theme-color"), patch(
             "thpm.palette.subprocess.run"
         ) as run:
-            run.return_value = subprocess.CompletedProcess([], 0, resolved, "")
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, resolver_output(CANONICAL_COLORS), ""
+            )
             result = palette.load(colors)
         self.assertEqual(result, COLORS)
         run.assert_called_once_with(
@@ -78,6 +94,40 @@ class PaletteTests(Sandbox):
             check=False,
             timeout=5,
         )
+
+    def test_canonical_keys_win_conflicts_independent_of_output_order(self):
+        self.paths.current_theme.mkdir(parents=True)
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text('mode = "dark"\n')
+        conflicting = {**COLORS, **CANONICAL_COLORS}
+        for key, canonical in CANONICAL_NAMES.items():
+            conflicting[key] = "#010203"
+            conflicting[canonical] = COLORS[key]
+        for entries in (list(conflicting.items()), list(reversed(conflicting.items()))):
+            with self.subTest(order="forward" if entries[0] == next(iter(conflicting.items())) else "reverse"), patch(
+                "thpm.palette.shutil.which", return_value="resolver"
+            ), patch(
+                "thpm.palette.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, resolver_output(dict(entries)), ""
+                ),
+            ):
+                result = palette.load(colors)
+            for key in CANONICAL_NAMES:
+                self.assertEqual(result[key], COLORS[key])
+
+    def test_blank_canonical_rows_fall_back_to_short_compatibility_values(self):
+        data = {**COLORS, **{canonical: "" for canonical in CANONICAL_NAMES.values()}}
+        self.assertEqual(palette._validate(data), COLORS)
+
+    def test_strict_fallback_accepts_complete_canonical_palette(self):
+        self.paths.current_theme.mkdir(parents=True)
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text(
+            "\n".join(f'{key} = "{value}"' for key, value in CANONICAL_COLORS.items()) + "\n"
+        )
+        with patch("thpm.palette.shutil.which", return_value=None):
+            self.assertEqual(palette.load(colors), COLORS)
 
     def test_strict_fallback_rejects_incomplete_palette(self):
         self.paths.current_theme.mkdir(parents=True)
@@ -155,6 +205,45 @@ class StateTests(Sandbox):
         templates = Path(__file__).parents[1] / "assets/templates"
         missing = [name for plugin in PLUGINS for name in plugin.templates if not (templates / name).is_file()]
         self.assertEqual(missing, [])
+
+    def test_templates_use_canonical_palette_keys_and_render_completely(self):
+        templates = Path(__file__).parents[1] / "assets/templates"
+        legacy = set(CANONICAL_NAMES)
+        placeholder = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+        rendered: dict[str, str] = {}
+
+        def substitute(match: re.Match[str]) -> str:
+            expression = match.group(1).strip()
+            parts = expression.split()
+            self.assertEqual(
+                len(parts), 1, f"test renderer needs explicit coverage for {expression}"
+            )
+            token = parts[0]
+            suffix = ""
+            for candidate in ("_strip", "_rgb"):
+                if token.endswith(candidate):
+                    token, suffix = token[: -len(candidate)], candidate
+                    break
+            self.assertNotIn(token, legacy)
+            self.assertIn(token, CANONICAL_COLORS)
+            value = CANONICAL_COLORS[token]
+            if suffix == "_strip":
+                return value.removeprefix("#")
+            if suffix == "_rgb":
+                return ",".join(str(int(value[index:index + 2], 16)) for index in (1, 3, 5))
+            return value
+
+        for path in sorted(templates.glob("*.tpl")):
+            source = path.read_text()
+            for expression in placeholder.findall(source):
+                identifiers = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expression)
+                self.assertFalse(legacy.intersection(identifiers), f"{path}: {expression}")
+            output = placeholder.sub(substitute, source)
+            self.assertNotIn("{{", output, str(path))
+            rendered[path.name] = output
+        document = json.loads(rendered["thpm-hermes.json.tpl"])
+        self.assertEqual(document["schemaVersion"], 1)
+        self.assertIn("brightWhite", document["theme"]["darkTerminal"])
 
     def test_unimplemented_plugins_are_not_exposed(self):
         self.assertNotIn("obsidian-terminal", {plugin.id for plugin in PLUGINS})
@@ -320,6 +409,8 @@ class UiTests(Sandbox):
         self.assertIn('["thpm", "--json", "update", "status"]', qml)
         self.assertIn('id: updateConfirm', qml)
         self.assertIn('command: ["thpm", "--json", "update", "apply"]', qml)
+        self.assertIn("updateInfo.refreshRequired", qml)
+        self.assertIn("thpm reconcile --refresh", qml)
         self.assertIn('text: "Restart shell"', qml)
 
     def test_qml_is_a_multi_section_control_panel(self):
@@ -379,11 +470,14 @@ class ServiceTests(Sandbox):
         owned.write_text("remove")
         self.paths.hook_file.parent.mkdir(parents=True)
         self.paths.hook_file.write_text("remove")
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text("done\n")
         with patch("thpm.service.ui.remove", return_value={"installed": False}):
             Service(self.paths).uninstall()
         self.assertTrue(foreign.exists())
         self.assertFalse(owned.exists())
         self.assertFalse(self.paths.hook_file.exists())
+        self.assertFalse(self.paths.canonical_palette_migration_marker.exists())
 
     def test_sensitive_plugin_requires_service_confirmation(self):
         assets = Path(__file__).parents[1] / "assets"
@@ -420,14 +514,108 @@ class ServiceTests(Sandbox):
 
     def test_install_stages_qml_even_when_shell_is_stopped(self):
         assets = Path(__file__).parents[1] / "assets"
+        refreshed = subprocess.CompletedProcess([], 0, "", "")
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch("thpm.service.capabilities") as caps, \
-             patch("thpm.service.ui.install", return_value={"installed": True}) as install_ui:
+             patch("thpm.service.ui.install", return_value={"installed": True}) as install_ui, \
+             patch("thpm.service.run", return_value=refreshed) as run:
             caps.return_value.available = True
             caps.return_value.routes = set()
             caps.return_value.missing = ()
             payload = Service(self.paths).install()
         self.assertTrue(payload["ok"])
+        self.assertTrue(payload["migration"]["refreshed"])
+        self.assertTrue(self.paths.canonical_palette_migration_marker.is_file())
         install_ui.assert_called_once_with(self.paths)
+        run.assert_called_once_with("theme", "refresh", check=False, timeout=180)
+
+    def test_palette_upgrade_refresh_is_idempotent_and_retries_failures(self):
+        assets = Path(__file__).parents[1] / "assets"
+        failed = subprocess.CompletedProcess([], 1, "", "render failed")
+        refreshed = subprocess.CompletedProcess([], 0, "", "")
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service.run", side_effect=[failed, refreshed]
+        ) as run:
+            first = Service(self.paths).reconcile()
+            second = Service(self.paths).reconcile()
+            third = Service(self.paths).reconcile()
+        self.assertFalse(first["ok"])
+        self.assertTrue(first["migration"]["pending"])
+        self.assertTrue(second["ok"])
+        self.assertTrue(second["migration"]["refreshed"])
+        self.assertFalse(third["migration"]["pending"])
+        self.assertFalse(third["migration"]["refreshed"])
+        self.assertEqual(run.call_count, 2)
+
+    def test_source_update_can_defer_upgrade_refresh_with_actionable_status(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service.run"
+        ) as run:
+            payload = Service(self.paths).reconcile(defer_upgrade_refresh=True)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["migration"]["pending"])
+        self.assertTrue(payload["migration"]["deferred"])
+        self.assertEqual(payload["migration"]["command"], "thpm reconcile --refresh")
+        self.assertFalse(self.paths.canonical_palette_migration_marker.exists())
+        run.assert_not_called()
+
+    def test_rc4_bare_reconcile_defers_while_previous_runtime_is_rollbackable(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service._source_activation_in_progress", return_value=True
+        ), patch("thpm.service.run") as run:
+            payload = Service(self.paths).reconcile()
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["migration"]["pending"])
+        self.assertTrue(payload["migration"]["deferred"])
+        run.assert_not_called()
+
+    def test_state_and_doctor_report_pending_refresh_without_running_it(self):
+        with patch("thpm.service.run") as run, patch(
+            "thpm.service.capabilities"
+        ) as caps, patch("thpm.service.load_palette", return_value=COLORS):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            state = Service(self.paths).state()
+            doctor = Service(self.paths).doctor()
+        self.assertTrue(state["migration"]["pending"])
+        self.assertTrue(state["warnings"])
+        self.assertTrue(doctor["migration"]["pending"])
+        self.assertIn("refresh migration pending", str(doctor["warnings"]))
+        run.assert_not_called()
+
+    def test_doctor_accepts_canonical_resolver_palette(self):
+        self.paths.current_theme.mkdir(parents=True)
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text('background = "#111111"\n')
+        completed = subprocess.CompletedProcess(
+            [], 0, resolver_output(CANONICAL_COLORS), ""
+        )
+        with patch("thpm.service.capabilities") as caps, patch(
+            "thpm.palette.shutil.which", return_value="resolver"
+        ), patch("thpm.palette.subprocess.run", return_value=completed):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            payload = Service(self.paths).doctor()
+        self.assertTrue(payload["ok"])
+        self.assertNotIn("missing semantic colors", str(payload["errors"]))
+
+    def test_doctor_warns_about_unresolved_generated_output(self):
+        generated = self.paths.current_theme / "thpm-fish.fish"
+        generated.parent.mkdir(parents=True)
+        generated.write_text('set -gx COLOR "{{ background }}"\n')
+        with patch("thpm.service.capabilities") as caps, patch(
+            "thpm.service.load_palette", return_value=COLORS
+        ), patch("thpm.snapshot.shutil.which", return_value="/bin/true"):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            payload = Service(self.paths).doctor()
+        warnings = [item for item in payload["warnings"] if item.get("plugin") == "fish"]
+        self.assertTrue(warnings)
+        self.assertIn("unresolved placeholder", warnings[0]["message"])
 
     def test_discord_plugins_remain_mutually_exclusive(self):
         assets = Path(__file__).parents[1] / "assets"
@@ -569,6 +757,21 @@ class TuiTests(Sandbox):
         theme, warning = omarchy_theme(self.paths)
         self.assertEqual(theme.name, "thpm-fallback")
         self.assertIn("using fallback", warning)
+
+    def test_tui_uses_normalized_canonical_palette(self):
+        self.paths.current_theme.mkdir(parents=True)
+        (self.paths.current_theme / "colors.toml").write_text('background = "#111111"\n')
+        completed = subprocess.CompletedProcess(
+            [], 0, resolver_output(CANONICAL_COLORS), ""
+        )
+        with patch("thpm.palette.shutil.which", return_value="resolver"), patch(
+            "thpm.palette.subprocess.run", return_value=completed
+        ):
+            theme, warning = omarchy_theme(self.paths)
+        self.assertIsNone(warning)
+        self.assertEqual(theme.background, COLORS["bg"])
+        self.assertEqual(theme.foreground, COLORS["fg"])
+        self.assertEqual(theme.variables["thpm-border"], COLORS["lighter_bg"])
 
     def test_headless_navigation_search_toggle_and_doctor(self):
         async def exercise():
@@ -898,12 +1101,26 @@ class IntegrationTests(Sandbox):
         self.assertEqual(result.status, "applied")
         self.assertEqual(set(result.changed), {str(managed), str(user_chrome)})
 
+    def test_unresolved_generated_output_is_refused_and_reported_unavailable(self):
+        generated = self.paths.current_theme / "thpm-fish.fish"
+        generated.parent.mkdir(parents=True)
+        generated.write_text('set -gx THPM_THEME_BG "{{ background }}"\n')
+        target = self.paths.config_home / "fish/conf.d/thpm-theme.fish"
+        with self.assertRaisesRegex(RuntimeError, "unresolved placeholder"):
+            apply("fish", self.paths)
+        available, missing, _ = inspect_readiness(
+            "fish", self.paths, lambda _command: "/bin/true"
+        )
+        self.assertFalse(available)
+        self.assertIn("unresolved placeholder", " ".join(missing))
+        self.assertFalse(target.exists())
+
     def test_declared_superfile_and_cava_assets_are_preferred(self):
         self.paths.current_theme.mkdir(parents=True)
         (self.paths.current_theme / "superfile.toml").write_text("native")
-        (self.paths.current_theme / "thpm-superfile.toml").write_text("generated")
+        (self.paths.current_theme / "thpm-superfile.toml").write_text("{{ unresolved }}")
         (self.paths.current_theme / "cava_theme").write_text("native cava")
-        (self.paths.current_theme / "thpm-cava.ini").write_text("generated cava")
+        (self.paths.current_theme / "thpm-cava.ini").write_text("{{ unresolved }}")
         superfile = apply("superfile", self.paths)
         with patch("thpm.integrations._reload", return_value=[]):
             cava = apply("cava", self.paths)
@@ -971,7 +1188,11 @@ class IntegrationTests(Sandbox):
 
     def test_hermes_template_matches_desktop_theme_contract(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()
-        rendered = re.sub(r"\{\{ ([a-z_]+) \}\}", lambda match: COLORS.get(match.group(1), "dark"), template)
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            self.assertIn(key, CANONICAL_COLORS)
+            return CANONICAL_COLORS[key]
+        rendered = re.sub(r"\{\{ ([a-z_]+) \}\}", replace, template)
         document = json.loads(rendered)
         self.assertEqual(document["schemaVersion"], 1)
         self.assertEqual(document["source"], "thpm")
@@ -1065,12 +1286,19 @@ class UpdateTests(Sandbox):
         self.assertIn('origin = "source"', script)
         self.assertIn("textual>=8.2.8,<9", script)
         self.assertIn('mv "$previous" "$runtime_dir"', script)
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc4")
+        committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
+        disable_rollback = "trap - ERR INT TERM"
+        self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc5")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)
+        update_source = __import__("inspect").getsource(updater.apply)
         self.assertIn('"textual>=8.2.8,<9"', source)
         self.assertIn("from thpm.tui import ThpmTui", source)
+        self.assertIn('"--defer-upgrade-refresh"', update_source)
+        self.assertIn('"refreshRequired"', update_source)
+        self.assertIn('"thpm reconcile --refresh"', update_source)
 
     def test_checksum_mismatch_stops_before_runtime_staging(self):
         result = {"status": "available", "origin": "source", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1",
@@ -1121,6 +1349,52 @@ class UpdateTests(Sandbox):
         self.assertEqual(self.paths.hook_file.read_text(), "original hook")
         self.assertFalse(fake_root.with_name("runtime.previous").exists())
 
+    def test_successful_source_update_defers_refresh_and_returns_handoff(self):
+        runtime = self.paths.home / "runtime"
+        (runtime / "bin").mkdir(parents=True)
+        fake_python = runtime / "bin/python"
+        fake_python.write_text("old runtime")
+        source = self.paths.home / "source-tree"
+        source.mkdir()
+        (source / "VERSION").write_text("1.0.1")
+        update = {
+            "status": "available", "origin": "source", "currentVersion": "1.0.0rc4",
+            "availableVersion": "1.0.1", "archiveUrl": "archive", "checksumUrl": "checksum",
+        }
+        archive_bytes = b"archive"
+        digest = __import__("hashlib").sha256(archive_bytes).hexdigest()
+
+        def download(url, destination):
+            destination.write_bytes(
+                (digest + "  thpm.tar.gz\n").encode() if url == "checksum" else archive_bytes
+            )
+
+        def stage(_source, destination):
+            (destination / "bin").mkdir(parents=True)
+            (destination / "bin/thpm").write_text("new runtime")
+
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with patch("thpm.update.check", return_value=update), patch(
+            "thpm.update._download", side_effect=download
+        ), patch("thpm.update._safe_extract", return_value=source), patch(
+            "thpm.update._stage_runtime", side_effect=stage
+        ), patch("thpm.update.sys.executable", str(fake_python)), patch(
+            "thpm.update.subprocess.run", return_value=completed
+        ) as run:
+            result = updater.apply(self.paths)
+        self.assertEqual(result["status"], "updated")
+        self.assertTrue(result["refreshRequired"])
+        self.assertEqual(result["refreshCommand"], "thpm reconcile --refresh")
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            [str(runtime / "bin/thpm"), "reconcile", "--defer-upgrade-refresh"],
+        )
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            [str(runtime / "bin/thpm"), "ui", "install"],
+        )
+        self.assertFalse(runtime.with_name("runtime.previous").exists())
+
     def test_aur_check_does_not_offer_an_older_repository_version(self):
         install = {"origin": "thpm", "package": "thpm", "repository": "oldjobobo/thpm", "installedVersion": "1.1.0-1"}
         response = {"results": [{"Version": "1.0.0-1"}]}
@@ -1151,7 +1425,15 @@ class UpdateTests(Sandbox):
              patch("thpm.update.subprocess.Popen") as launch:
             applied = updater.apply(self.paths)
         self.assertEqual(applied["status"], "started")
-        launch.assert_called_once_with(["/usr/bin/omarchy-launch-floating-terminal-with-presentation", "yay -S thpm"], start_new_session=True)
+        launch.assert_called_once_with(
+            [
+                "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
+                "yay -S thpm && thpm reconcile",
+            ],
+            start_new_session=True,
+        )
+        self.assertTrue(applied["refreshRequired"])
+        self.assertEqual(applied["refreshCommand"], "thpm reconcile --refresh")
 
 
 if __name__ == "__main__":

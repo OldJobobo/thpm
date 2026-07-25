@@ -257,11 +257,18 @@ def apply(paths: Paths) -> dict[str, object]:
         return update
     if update["origin"] in {"thpm", "thpm-git"}:
         package = str(update["origin"])
-        command = f"yay -S {package}"
+        command = f"yay -S {package} && thpm reconcile"
         launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
         if not launcher: raise RuntimeError("Omarchy's floating terminal launcher is unavailable")
-        subprocess.Popen([launcher, command], start_new_session=True)
-        return {**update, "status": "started", "command": command}
+        with _lock(paths):
+            subprocess.Popen([launcher, command], start_new_session=True)
+        return {
+            **update,
+            "status": "started",
+            "command": command,
+            "refreshRequired": True,
+            "refreshCommand": "thpm reconcile --refresh",
+        }
     with _lock(paths), tempfile.TemporaryDirectory(prefix="thpm-update-") as temporary:
         temp = Path(temporary); archive = temp / "release.tar.gz"; checksum = temp / "release.sha256"
         _download(str(update["archiveUrl"]), archive); _download(str(update["checksumUrl"]), checksum)
@@ -279,10 +286,26 @@ def apply(paths: Paths) -> dict[str, object]:
             staged.rename(runtime)
             # Updates must not rerun legacy migration or rewrite persisted plugin
             # state. Reconcile only the managed hook/templates, then refresh QML.
-            subprocess.run([str(runtime / "bin/thpm"), "reconcile"], check=True, capture_output=True, text=True)
+            subprocess.run(
+                [
+                    str(runtime / "bin/thpm"),
+                    "reconcile",
+                    "--defer-upgrade-refresh",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
             subprocess.run([str(runtime / "bin/thpm"), "ui", "install"], check=True, capture_output=True, text=True)
         except Exception:
             shutil.rmtree(runtime, ignore_errors=True); previous.rename(runtime); _restore_integrations(integration_backups); raise
         shutil.rmtree(previous, ignore_errors=True)
         paths.update_cache_file.unlink(missing_ok=True)
-        return {**update, "status": "updated", "restartShell": True}
+        refresh_required = not paths.canonical_palette_migration_marker.is_file()
+        return {
+            **update,
+            "status": "updated",
+            "restartShell": True,
+            "refreshRequired": refresh_required,
+            "refreshCommand": "thpm reconcile --refresh" if refresh_required else None,
+        }

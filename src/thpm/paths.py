@@ -47,6 +47,14 @@ class Paths:
         return self.thpm_state_dir / "ui.toml"
 
     @property
+    def canonical_palette_migration_marker(self) -> Path:
+        return self.thpm_state_dir / "migrations/canonical-palette-v1"
+
+    @property
+    def migration_lock_file(self) -> Path:
+        return self.runtime_dir / "thpm-migration.lock"
+
+    @property
     def legacy_compat_file(self) -> Path:
         return self.data_home / "thpm/lib/theme-env.sh"
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc6 - 2026-07-25
+
+- Make bare `thpm update` apply the available update instead of failing because an internal update subcommand was omitted.
+
 ## 1.0.0rc5 - 2026-07-25
 
 - Normalize Omarchy's canonical long palette keys to THPM's internal TUI schema with explicit canonical precedence, fixing Doctor and TUI on stock Omarchy themes.

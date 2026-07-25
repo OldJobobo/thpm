@@ -47,8 +47,9 @@ thpm doctor
 thpm run
 thpm ui open
 thpm tui
+thpm update
 thpm update check
-thpm update apply
+thpm update status
 thpm uninstall
 ```
 

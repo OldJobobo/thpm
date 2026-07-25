@@ -37,7 +37,8 @@ def parser() -> argparse.ArgumentParser:
     for name in ("state", "install", "remove", "status", "open"):
         sub = ui_sub.add_parser(name); sub.add_argument("--json", action="store_true")
     surface = ui_sub.add_parser("surface"); surface.add_argument("surface", nargs="?", choices=("gui", "tui", "toggle")); surface.add_argument("--json", action="store_true")
-    update = commands.add_parser("update"); update_sub = update.add_subparsers(dest="update_command", required=True)
+    update = commands.add_parser("update"); update.add_argument("--json", action="store_true")
+    update_sub = update.add_subparsers(dest="update_command")
     check = update_sub.add_parser("check"); check.add_argument("--force", action="store_true"); check.add_argument("--json", action="store_true")
     status = update_sub.add_parser("status"); status.add_argument("--json", action="store_true")
     apply = update_sub.add_parser("apply"); apply.add_argument("--json", action="store_true")
@@ -96,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         elif command == "hook-run": payload = service.hook_run(args.event, args.event_args)
         elif command == "update":
-            payload = service.update_apply() if args.update_command == "apply" else service.update_check(args.update_command == "check" and args.force)
+            payload = service.update_apply() if args.update_command in {None, "apply"} else service.update_check(args.update_command == "check" and args.force)
         elif command == "ui":
             if args.ui_command == "state": payload = service.state()
             elif args.ui_command == "install": payload = envelope("ui-install", summary="QML manager installed", result=ui.install(paths), errors=[])

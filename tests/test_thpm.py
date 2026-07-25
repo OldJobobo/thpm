@@ -680,6 +680,30 @@ class ServiceTests(Sandbox):
 
 
 class CliTests(unittest.TestCase):
+    def test_bare_update_applies_the_available_update(self):
+        response = {"ok": True, "summary": "THPM updated"}
+        with patch("thpm.cli.Service") as service_type, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            service_type.return_value.update_apply.return_value = response
+            exit_code = main(["update", "--json"])
+        self.assertEqual(exit_code, 0)
+        service_type.return_value.update_apply.assert_called_once_with()
+        service_type.return_value.update_check.assert_not_called()
+        self.assertEqual(json.loads(stdout.getvalue()), response)
+
+    def test_explicit_update_check_remains_available(self):
+        response = {"ok": True, "summary": "THPM is current"}
+        with patch("thpm.cli.Service") as service_type, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            service_type.return_value.update_check.return_value = response
+            exit_code = main(["update", "check", "--force", "--json"])
+        self.assertEqual(exit_code, 0)
+        service_type.return_value.update_check.assert_called_once_with(True)
+        service_type.return_value.update_apply.assert_not_called()
+        self.assertEqual(json.loads(stdout.getvalue()), response)
+
     def test_hook_command_forwards_event_and_all_arguments(self):
         response = {"ok": True, "summary": "applied theme tokyo-night"}
         with patch("thpm.cli.Service") as service_type, patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -1207,6 +1231,13 @@ class UpdateTests(Sandbox):
         super().setUp()
         self.paths.install_metadata.parent.mkdir(parents=True)
         self.paths.install_metadata.write_text('origin = "source"\nrepository = "oldjobobo/thpm"\n')
+        real_which = updater.shutil.which
+        which_patcher = patch(
+            "thpm.update.shutil.which",
+            side_effect=lambda command: None if command == "thpm" else real_which(command),
+        )
+        which_patcher.start()
+        self.addCleanup(which_patcher.stop)
 
     def release(self, version="1.0.1"):
         archive = f"thpm-{version}.tar.gz"
@@ -1257,10 +1288,10 @@ class UpdateTests(Sandbox):
     def test_rc_channel_selects_newest_prerelease(self):
         self.paths.install_metadata.parent.mkdir(parents=True, exist_ok=True)
         self.paths.install_metadata.write_text('origin = "source"\nchannel = "rc"\n')
-        releases = [self.release("1.0.0rc1"), self.release("1.0.0rc3"), {**self.release("2.0.0"), "draft": True}]
+        releases = [self.release("1.0.0rc1"), self.release("1.0.0rc7"), {**self.release("2.0.0"), "draft": True}]
         with patch("thpm.update._read_json", return_value=releases):
             result = updater.check(self.paths, force=True)
-        self.assertEqual(result["availableVersion"], "1.0.0rc3")
+        self.assertEqual(result["availableVersion"], "1.0.0rc7")
         self.assertEqual(result["channel"], "rc")
 
     def test_archive_path_traversal_is_rejected(self):
@@ -1289,7 +1320,7 @@ class UpdateTests(Sandbox):
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc5")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc6")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)

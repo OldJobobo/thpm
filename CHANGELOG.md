@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc9 - 2026-07-25
+
+- Run AUR upgrades synchronously in the invoking terminal, suppress routine package-manager confirmations, and reserve the floating Omarchy terminal for callers without a TTY.
+
 ## 1.0.0rc8 - 2026-07-25
 
 - Make detailed stage logs, changed paths, and captured command output the default human interface; add `--quiet` / `-q` as the explicit compact-mode opt-out while retaining `--verbose` compatibility.

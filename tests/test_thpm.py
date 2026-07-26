@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import io
 import json
 import os
-import io
-import asyncio
 import re
 import subprocess
 import tarfile
@@ -19,7 +20,13 @@ from textual.widgets import Button, Link
 from thpm import palette, ui
 from thpm import update as updater
 from thpm.cli import main
-from thpm.integrations import _browser_import, _reload, apply, apply_enabled, inspect_readiness
+from thpm.integrations import (
+    _browser_import,
+    _reload,
+    apply,
+    apply_enabled,
+    inspect_readiness,
+)
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.paths import Paths
 from thpm.presentation import Activity, render, reporter
@@ -28,7 +35,6 @@ from thpm.service import Service
 from thpm.state import StateError, load, save
 from thpm.templates import reconcile
 from thpm.tui import ThpmTui, omarchy_theme
-
 
 COLORS = {
     "mode": "dark", "bg": "#111111", "dark_bg": "#101010", "darker_bg": "#090909",
@@ -197,6 +203,15 @@ class StateTests(Sandbox):
             reconcile(self.paths, enabled)
         self.assertTrue((self.paths.themed_dir / "thpm-fish.fish.tpl").is_file())
         self.assertEqual(foreign.read_text(), "mine")
+
+    def test_reconcile_removes_obsolete_generated_zellij_template(self):
+        obsolete = self.paths.themed_dir / "thpm-zellij.kdl.tpl"
+        obsolete.parent.mkdir(parents=True)
+        obsolete.write_text("legacy generated fallback\n")
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(Path(__file__).parents[1] / "assets")}):
+            changed = reconcile(self.paths, load(self.paths))
+        self.assertFalse(obsolete.exists())
+        self.assertIn(str(obsolete), changed)
 
     def test_sensitive_plugins_are_opt_in_by_default(self):
         enabled = load(self.paths)
@@ -475,12 +490,17 @@ class ServiceTests(Sandbox):
         self.paths.hook_file.write_text("remove")
         self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
         self.paths.canonical_palette_migration_marker.write_text("done\n")
+        zellij_config = self.paths.config_home / "zellij/config.kdl"
+        zellij_config.parent.mkdir(parents=True)
+        zellij_config.write_text('theme "thpm-current"\n')
         with patch("thpm.service.ui.remove", return_value={"installed": False}):
-            Service(self.paths).uninstall()
+            payload = Service(self.paths).uninstall()
         self.assertTrue(foreign.exists())
         self.assertFalse(owned.exists())
         self.assertFalse(self.paths.hook_file.exists())
         self.assertFalse(self.paths.canonical_palette_migration_marker.exists())
+        self.assertEqual(zellij_config.read_text(), "")
+        self.assertIn("restart active Zellij sessions", str(payload["warnings"]))
 
     def test_sensitive_plugin_requires_service_confirmation(self):
         assets = Path(__file__).parents[1] / "assets"
@@ -493,6 +513,21 @@ class ServiceTests(Sandbox):
         self.assertFalse(pending["ok"])
         self.assertTrue(pending["confirmationRequired"])
         self.assertTrue(accepted["ok"])
+
+    def test_disabling_optional_asset_restores_previous_file(self):
+        source = self.paths.current_theme / "typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme")
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        apply("typora", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("typora", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(target.read_text(), "user default")
+        self.assertIn(str(target), payload["changed"])
 
     def test_disabling_gtk_compat_removes_only_managed_css(self):
         source = self.paths.current_theme / "gtk.css"
@@ -715,6 +750,20 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("Reading integration state", text)
         self.assertIn("Rendering managed templates", text)
         self.assertIn("Installing theme hook", text)
+        self.assertNotIn("•", text)
+        self.assertLessEqual(text.count("\n"), 1)
+
+    def test_activity_can_adjust_update_total_without_counting_current_stage_done(self):
+        output = io.StringIO()
+        console = Console(file=output, force_terminal=True, color_system="standard", width=100)
+        with Activity("update", verbose=True, console=console) as activity:
+            activity.step("Checking for an available release")
+            activity.set_total(2)
+            activity.step("Upgrading AUR package", "thpm")
+            task = activity._progress.tasks[activity._task]
+            self.assertEqual(task.total, 2)
+            self.assertEqual(task.completed, 1)
+        self.assertNotIn("•", output.getvalue())
 
     def test_activity_reporter_can_suspend_live_rendering_for_terminal_subprocesses(self):
         output = io.StringIO()
@@ -1004,33 +1053,57 @@ class IntegrationTests(Sandbox):
         self.assertEqual(target.read_bytes(), generated.read_bytes())
         self.assertIn(str(target), result.changed)
 
-    def test_zellij_selects_generated_theme_and_removes_legacy_block(self):
-        generated = self.paths.current_theme / "thpm-zellij.kdl"
-        generated.parent.mkdir(parents=True)
-        generated.write_text('themes { thpm-current { fg "#ffffff" } }\n')
+    def test_zellij_applies_theme_asset_and_removes_legacy_block(self):
+        theme_asset = self.paths.current_theme / "zellij.kdl"
+        theme_asset.parent.mkdir(parents=True)
+        theme_asset.write_text('themes { current { fg "#ffffff" } }\n')
         config = self.paths.config_home / "zellij/config.kdl"
         config.parent.mkdir(parents=True)
         config.write_text('theme "current"\n\n// thpm-zellij-theme-start\nthemes { current {} }\n// thpm-zellij-theme-end\n')
         result = apply("zellij", self.paths)
-        self.assertEqual((self.paths.config_home / "zellij/themes/thpm.kdl").read_bytes(), generated.read_bytes())
+        installed = self.paths.config_home / "zellij/themes/thpm.kdl"
+        self.assertEqual(
+            installed.read_text(), 'themes { thpm-current { fg "#ffffff" } }\n'
+        )
         self.assertEqual(config.read_text(), 'theme "thpm-current"\n')
         self.assertIn(str(config), result.changed)
+        self.assertIn("restart active Zellij sessions", result.warnings[0])
+        saved = json.loads(self.paths.zellij_theme_state_file.read_text())
+        self.assertEqual(saved["themeOption"], 'theme "current"')
 
-    def test_zellij_prefers_theme_asset_over_generated_fallback(self):
-        generated = self.paths.current_theme / "thpm-zellij.kdl"
-        generated.parent.mkdir(parents=True)
-        generated.write_text('themes { thpm-current { fg "#ffffff" } }\n')
+    def test_zellij_without_theme_asset_restores_previous_selection(self):
         theme_asset = self.paths.current_theme / "zellij.kdl"
+        theme_asset.parent.mkdir(parents=True)
         theme_asset.write_text(
             'themes { current { text_selected { background 36 55 46 } } }\n'
         )
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme "catppuccin"\npane_frames true\n')
+        apply("zellij", self.paths)
+        theme_asset.unlink()
+        generated = self.paths.current_theme / "thpm-zellij.kdl"
+        generated.write_text('themes { generated { fg "#ffffff" } }\n')
         result = apply("zellij", self.paths)
-        installed = self.paths.config_home / "zellij/themes/thpm.kdl"
-        self.assertEqual(
-            installed.read_text(),
-            'themes { thpm-current { text_selected { background 36 55 46 } } }\n',
-        )
-        self.assertIn(str(installed), result.changed)
+        self.assertEqual(config.read_text(), 'theme "catppuccin"\npane_frames true\n')
+        self.assertFalse((self.paths.config_home / "zellij/themes/thpm.kdl").exists())
+        self.assertFalse(self.paths.zellij_theme_state_file.exists())
+        self.assertIn("restart active Zellij sessions", result.warnings[0])
+
+    def test_zellij_hook_without_asset_runs_cleanup_instead_of_skipping(self):
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme "thpm-current"\n')
+        target = self.paths.config_home / "zellij/themes/thpm.kdl"
+        target.parent.mkdir(parents=True)
+        target.write_text('themes { thpm-current {} }\n')
+        with patch("thpm.integrations.shutil.which", return_value=None):
+            result = apply_enabled(self.paths, {"zellij": True})
+        zellij = next(item for item in result["results"] if item["id"] == "zellij")
+        self.assertEqual(zellij["status"], "applied")
+        self.assertEqual(config.read_text(), "")
+        self.assertFalse(target.exists())
+        self.assertIn("restart active Zellij sessions", str(zellij["warnings"]))
 
     def test_zellij_preserves_an_already_normalized_theme_asset(self):
         theme_asset = self.paths.current_theme / "zellij.kdl"
@@ -1039,6 +1112,302 @@ class IntegrationTests(Sandbox):
         apply("zellij", self.paths)
         installed = self.paths.config_home / "zellij/themes/thpm.kdl"
         self.assertEqual(installed.read_bytes(), theme_asset.read_bytes())
+
+    def test_zellij_without_asset_removes_legacy_selection_to_restore_default(self):
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme "thpm-current"\npane_frames true\n')
+        target = self.paths.config_home / "zellij/themes/thpm.kdl"
+        target.parent.mkdir(parents=True)
+        target.write_text('themes { thpm-current {} }\n')
+        result = apply("zellij", self.paths)
+        self.assertEqual(config.read_text(), "pane_frames true\n")
+        self.assertFalse(target.exists())
+        self.assertEqual(result.status, "applied")
+
+    def test_disabling_zellij_restores_selection_and_removes_managed_theme(self):
+        theme_asset = self.paths.current_theme / "zellij.kdl"
+        theme_asset.parent.mkdir(parents=True)
+        theme_asset.write_text('themes { current { fg "#ffffff" } }\n')
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme "default"\n')
+        apply("zellij", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("zellij", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(config.read_text(), 'theme "default"\n')
+        self.assertFalse((self.paths.config_home / "zellij/themes/thpm.kdl").exists())
+        self.assertIn("restart active Zellij sessions", str(payload["warnings"]))
+
+    def test_zellij_cleanup_removes_legacy_block_with_manual_selection(self):
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            'theme "catppuccin"\n// thpm-zellij-theme-start\n'
+            'themes { current {} }\n// thpm-zellij-theme-end\npane_frames true\n'
+        )
+        result = apply("zellij", self.paths)
+        self.assertEqual(config.read_text(), 'theme "catppuccin"\npane_frames true\n')
+        self.assertIn(str(config), result.changed)
+
+    def test_optional_assets_restore_the_files_they_displaced(self):
+        cases = {
+            "typora": ("typora.css", self.paths.config_home / "Typora/themes/omarchy.css"),
+            "swaync": ("colors.css", self.paths.config_home / "swaync/colors.css"),
+            "windsurf": (
+                "vscode-theme.json",
+                self.paths.home / ".windsurf/extensions/local.omarchy-theme/themes/omarchy.json",
+            ),
+            "cliamp": ("cliamp.toml", self.paths.config_home / "cliamp/themes/omarchy.toml"),
+            "zed-extra": ("zed.json", self.paths.config_home / "zed/themes/omarchy.json"),
+        }
+        with patch("thpm.integrations._reload", return_value=[]):
+            for plugin_id, (asset_name, target) in cases.items():
+                with self.subTest(plugin=plugin_id):
+                    source = self.paths.current_theme / asset_name
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_text(f"{plugin_id} theme")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(f"{plugin_id} user default")
+                    apply(plugin_id, self.paths)
+                    self.assertEqual(target.read_text(), f"{plugin_id} theme")
+                    source.unlink()
+                    result = apply(plugin_id, self.paths)
+                    self.assertEqual(target.read_text(), f"{plugin_id} user default")
+                    self.assertIn(str(target), result.changed)
+
+    def test_optional_asset_without_previous_file_is_removed_when_absent(self):
+        source = self.paths.current_theme / "typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme")
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        apply("typora", self.paths)
+        source.unlink()
+        result = apply("typora", self.paths)
+        self.assertFalse(target.exists())
+        self.assertIn(str(target), result.changed)
+
+    def test_optional_asset_interrupted_update_keeps_original_backup(self):
+        source = self.paths.current_theme / "typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme a")
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        apply("typora", self.paths)
+        source.write_text("theme b")
+        with patch(
+            "thpm.integrations.atomic_copy", side_effect=RuntimeError("interrupted")
+        ), self.assertRaisesRegex(RuntimeError, "interrupted"):
+            apply("typora", self.paths)
+        source.unlink()
+        apply("typora", self.paths)
+        self.assertEqual(target.read_text(), "user default")
+
+    def test_optional_asset_equal_bytes_normalizes_mode_and_cleans_up(self):
+        source = self.paths.current_theme / "typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("same")
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("same")
+        target.chmod(0o600)
+        apply("typora", self.paths)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+        source.unlink()
+        apply("typora", self.paths)
+        self.assertFalse(target.exists())
+
+    def test_optional_asset_missing_backup_fails_closed(self):
+        source = self.paths.current_theme / "typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme")
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        apply("typora", self.paths)
+        (self.paths.managed_asset_state_dir / "typora.backup").unlink()
+        source.unlink()
+        result = apply("typora", self.paths)
+        self.assertEqual(target.read_text(), "theme")
+        self.assertIn("backup is missing", result.warnings[0])
+
+    def test_optional_asset_corrupt_backup_and_state_schema_fail_closed(self):
+        source = self.paths.current_theme / "typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme")
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        apply("typora", self.paths)
+        backup = self.paths.managed_asset_state_dir / "typora.backup"
+        backup.write_text("corrupted")
+        source.unlink()
+        corrupted = apply("typora", self.paths)
+        self.assertEqual(target.read_text(), "theme")
+        self.assertIn("backup is missing or invalid", corrupted.warnings[0])
+
+        state = self.paths.managed_asset_state_dir / "typora.json"
+        state.write_text(json.dumps({"existed": True, "priorType": "bad"}))
+        invalid = apply("typora", self.paths)
+        self.assertEqual(target.read_text(), "theme")
+        self.assertIn("state is invalid", invalid.warnings[0])
+
+    def test_optional_asset_restores_previous_symlink(self):
+        source = self.paths.current_theme / "typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme")
+        original = self.paths.home / "my-typora.css"
+        original.write_text("user default")
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.symlink_to(original)
+        apply("typora", self.paths)
+        self.assertFalse(target.is_symlink())
+        source.unlink()
+        apply("typora", self.paths)
+        self.assertTrue(target.is_symlink())
+        self.assertEqual(target.readlink(), original)
+
+    def test_optional_asset_cleanup_preserves_a_user_modified_target(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme")
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        apply("cliamp", self.paths)
+        target.write_text("user changed this after THPM")
+        source.unlink()
+        result = apply("cliamp", self.paths)
+        self.assertEqual(target.read_text(), "user changed this after THPM")
+        self.assertIn("preserved user-modified file", result.warnings[0])
+
+    def test_branding_restores_missing_assets_independently(self):
+        about = self.paths.current_theme / "about.txt"
+        screensaver = self.paths.current_theme / "screensaver.txt"
+        about.parent.mkdir(parents=True)
+        about.write_text("theme about")
+        screensaver.write_text("theme screensaver")
+        about_target = self.paths.config_home / "omarchy/branding/about.txt"
+        screen_target = self.paths.config_home / "omarchy/branding/screensaver.txt"
+        about_target.parent.mkdir(parents=True)
+        about_target.write_text("user about")
+        screen_target.write_text("user screensaver")
+        apply("branding", self.paths)
+        about.unlink()
+        screensaver.write_text("new theme screensaver")
+        apply("branding", self.paths)
+        self.assertEqual(about_target.read_text(), "user about")
+        self.assertEqual(screen_target.read_text(), "new theme screensaver")
+
+    def test_swaync_cleanup_does_not_require_the_reload_command(self):
+        source = self.paths.current_theme / "colors.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme")
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        with patch("thpm.integrations._reload", return_value=[]):
+            apply("swaync", self.paths)
+        source.unlink()
+        with patch("thpm.integrations.shutil.which", return_value=None):
+            result = apply_enabled(self.paths, {"swaync": True})
+        swaync = next(item for item in result["results"] if item["id"] == "swaync")
+        self.assertEqual(swaync["status"], "applied")
+        self.assertEqual(target.read_text(), "user default")
+
+    def test_optional_asset_cleanup_does_not_require_the_application(self):
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        state = self.paths.managed_asset_state_dir / "typora.json"
+        target.parent.mkdir(parents=True)
+        target.write_text("theme")
+        state.parent.mkdir(parents=True)
+        state.write_text(
+            json.dumps(
+                {
+                    "existed": False,
+                    "managedSha256": hashlib.sha256(b"theme").hexdigest(),
+                    "managedMode": 0o644,
+                }
+            )
+        )
+        with patch("thpm.integrations.shutil.which", return_value=None):
+            result = apply_enabled(self.paths, {"typora": True})
+        typora = next(item for item in result["results"] if item["id"] == "typora")
+        self.assertEqual(typora["status"], "applied")
+        self.assertFalse(target.exists())
+
+    def test_zellij_rejects_unsafe_saved_theme_option(self):
+        config = self.paths.config_home / "zellij/config.kdl"
+        target = self.paths.config_home / "zellij/themes/thpm.kdl"
+        config.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        config.write_text('theme "thpm-current"\npane_frames true\n')
+        target.write_text("old theme")
+        self.paths.zellij_theme_state_file.parent.mkdir(parents=True)
+        self.paths.zellij_theme_state_file.write_text(
+            json.dumps(
+                {
+                    "configExisted": True,
+                    "themeOption": 'bogus }\ncorrupted true',
+                }
+            )
+        )
+        result = apply("zellij", self.paths)
+        self.assertEqual(config.read_text(), 'theme "thpm-current"\npane_frames true\n')
+        self.assertEqual(target.read_text(), "old theme")
+        self.assertIn("state is invalid", result.warnings[0])
+
+        self.paths.zellij_theme_state_file.write_text(
+            json.dumps(
+                {
+                    "configExisted": True,
+                    "themeOption": 'theme "safe" } corrupted true',
+                }
+            )
+        )
+        single_line = apply("zellij", self.paths)
+        self.assertEqual(config.read_text(), 'theme "thpm-current"\npane_frames true\n')
+        self.assertIn("state is invalid", single_line.warnings[0])
+
+    def test_invalid_zellij_state_with_source_does_not_change_installed_theme(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { next { fg "white" } }\n')
+        config = self.paths.config_home / "zellij/config.kdl"
+        target = self.paths.config_home / "zellij/themes/thpm.kdl"
+        config.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        config.write_text('theme "thpm-current"\n')
+        target.write_text("old theme")
+        self.paths.zellij_theme_state_file.parent.mkdir(parents=True)
+        self.paths.zellij_theme_state_file.write_text("not json")
+        with self.assertRaisesRegex(RuntimeError, "state is invalid"):
+            apply("zellij", self.paths)
+        self.assertEqual(target.read_text(), "old theme")
+
+    def test_invalid_zellij_state_and_legacy_block_fail_closed(self):
+        config = self.paths.config_home / "zellij/config.kdl"
+        target = self.paths.config_home / "zellij/themes/thpm.kdl"
+        config.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        config.write_text('theme "thpm-current"\n')
+        target.write_text("themes { thpm-current {} }\n")
+        self.paths.zellij_theme_state_file.parent.mkdir(parents=True)
+        self.paths.zellij_theme_state_file.write_text("not json")
+        invalid_state = apply("zellij", self.paths)
+        self.assertEqual(config.read_text(), 'theme "thpm-current"\n')
+        self.assertTrue(target.exists())
+        self.assertIn("state is invalid", invalid_state.warnings[0])
+
+        self.paths.zellij_theme_state_file.unlink()
+        config.write_text(
+            'theme "thpm-current"\n// thpm-zellij-theme-start\nthemes { current {} }\n'
+        )
+        malformed_block = apply("zellij", self.paths)
+        self.assertTrue(target.exists())
+        self.assertIn("block is incomplete", malformed_block.warnings[0])
 
     def test_app_reload_timeout_is_reported_without_stalling(self):
         with patch("thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"), patch(
@@ -1220,16 +1589,14 @@ class IntegrationTests(Sandbox):
         self.assertEqual(superfile.status, "applied")
         self.assertEqual(cava.status, "applied")
 
-    def test_optional_integrations_explain_why_they_skip(self):
+    def test_optional_integrations_without_assets_are_already_at_default(self):
         branding = apply("branding", self.paths)
         discord = apply("discord", self.paths)
         cliamp = apply("cliamp", self.paths)
-        self.assertEqual(branding.status, "skipped")
-        self.assertIn("branding assets", branding.message)
+        self.assertEqual(branding.status, "unchanged")
         self.assertEqual(discord.status, "skipped")
         self.assertIn("Discord client", discord.message)
-        self.assertEqual(cliamp.status, "skipped")
-        self.assertIn("cliamp.toml", cliamp.message)
+        self.assertEqual(cliamp.status, "unchanged")
 
     def test_nwg_dock_reports_restart_requirement(self):
         generated = self.paths.current_theme / "thpm-nwg-dock.css"
@@ -1523,10 +1890,14 @@ class UpdateTests(Sandbox):
         class TerminalProgress:
             def __init__(self):
                 self.events = []
+                self.totals = []
                 self.suspended = False
 
             def __call__(self, message, detail):
                 self.events.append((message, detail))
+
+            def set_total(self, total):
+                self.totals.append(total)
 
             @contextmanager
             def suspend(self):
@@ -1562,6 +1933,7 @@ class UpdateTests(Sandbox):
         launch.assert_not_called()
         self.assertFalse(applied["refreshRequired"])
         self.assertEqual(progress.events, [("Upgrading AUR package", "thpm")])
+        self.assertEqual(progress.totals, [2])
 
     def test_aur_apply_uses_terminal_fallback_without_a_tty(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}

@@ -15,7 +15,7 @@ _STAGE_TOTALS = {
     "install": 6,
     "reconcile": 4,
     "run": 2,
-    "update": 7,
+    "update": 8,
     "enable": 3,
     "disable": 3,
     "migrate": 4,
@@ -79,15 +79,22 @@ class Activity:
         self._last_message = message
         self._steps += 1
         if self._progress is not None and self._task is not None:
-            if self.verbose:
-                suffix = f" [dim]{detail}[/]" if detail else ""
-                self._progress.console.print(f"  [cyan]•[/] {message}{suffix}")
             total = int(self._progress.tasks[self._task].total or self._steps + 1)
-            completed = min(self._steps, max(total - 1, 0))
+            completed = min(max(self._steps - 1, 0), max(total - 1, 0))
             self._progress.update(self._task, description=message, completed=completed)
+            self._progress.refresh()
         elif self.verbose:
             suffix = f" [dim]{detail}[/]" if detail else ""
             self.console.print(f"  [cyan]•[/] {message}{suffix}")
+
+    def set_total(self, total: int) -> None:
+        """Adjust the stage count once an operation selects its execution path."""
+        if total < 1:
+            raise ValueError("progress total must be positive")
+        if self._progress is not None and self._task is not None:
+            completed = min(max(self._steps - 1, 0), max(total - 1, 0))
+            self._progress.update(self._task, total=total, completed=completed)
+            self._progress.refresh()
 
     @contextmanager
     def suspend(self) -> Iterator[None]:

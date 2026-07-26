@@ -5,11 +5,13 @@ from .paths import Paths
 from .registry import PLUGINS
 from .resources import asset
 
+OBSOLETE_TEMPLATES = {"thpm-zellij.kdl.tpl"}
+
 
 def reconcile(paths: Paths, enabled: dict[str, bool]) -> list[str]:
     changed: list[str] = []
     paths.themed_dir.mkdir(parents=True, exist_ok=True)
-    owned = {name for plugin in PLUGINS for name in plugin.templates}
+    owned = {name for plugin in PLUGINS for name in plugin.templates} | OBSOLETE_TEMPLATES
     wanted = {name for plugin in PLUGINS if enabled.get(plugin.id) for name in plugin.templates}
     for name in sorted(owned):
         target = paths.themed_dir / name

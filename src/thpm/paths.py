@@ -47,6 +47,14 @@ class Paths:
         return self.thpm_state_dir / "ui.toml"
 
     @property
+    def zellij_theme_state_file(self) -> Path:
+        return self.thpm_state_dir / "zellij-theme.json"
+
+    @property
+    def managed_asset_state_dir(self) -> Path:
+        return self.thpm_state_dir / "managed-assets"
+
+    @property
     def canonical_palette_migration_marker(self) -> Path:
         return self.thpm_state_dir / "migrations/canonical-palette-v1"
 

@@ -5,11 +5,20 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import __version__
+from . import __version__, ui
 from .compat import cleanup_gtk, vscode_doctor_warnings
 from .files import atomic_copy, atomic_text
-from .integrations import apply_enabled
-from .migrate import archive as archive_legacy, artifacts as legacy_artifacts, inspect as inspect_legacy, needs_compat
+from .integrations import (
+    OPTIONAL_ASSET_PLUGINS,
+    ZELLIJ_RESTART_WARNING,
+    apply_enabled,
+    cleanup_optional_assets,
+    cleanup_zellij,
+)
+from .migrate import archive as archive_legacy
+from .migrate import artifacts as legacy_artifacts
+from .migrate import inspect as inspect_legacy
+from .migrate import needs_compat
 from .omarchy import capabilities, run
 from .palette import load as load_palette
 from .paths import Paths
@@ -18,8 +27,8 @@ from .resources import asset
 from .snapshot import build as build_snapshot
 from .state import StateError, load, migration_lock, mutation_lock, save
 from .templates import reconcile as reconcile_templates
-from .update import apply as apply_update, check as check_update
-from . import ui
+from .update import apply as apply_update
+from .update import check as check_update
 
 SCHEMA_VERSION = 1
 CANONICAL_PALETTE_MIGRATION = "canonical-palette-v1"
@@ -126,6 +135,7 @@ class Service:
         if value and plugin.confirmation and not confirmed:
             return envelope(operation, False, summary=f"confirmation required to enable {plugin_id}",
                 confirmationRequired=True, plugin=view, errors=[])
+        warnings: list[dict[str, str]] = []
         with mutation_lock(self.paths):
             enabled = load(self.paths)
             enabled[plugin_id] = value
@@ -136,6 +146,24 @@ class Service:
             changed = reconcile_templates(self.paths, enabled)
             if not value and plugin_id == "gtk-css-compat":
                 changed.extend(cleanup_gtk(self.paths))
+            elif not value and plugin_id == "zellij":
+                cleanup_changed, cleanup_warnings = cleanup_zellij(self.paths)
+                changed.extend(cleanup_changed)
+                warnings.extend(
+                    {"plugin": "zellij", "message": message}
+                    for message in cleanup_warnings
+                )
+                if cleanup_changed:
+                    warnings.append({"plugin": "zellij", "message": ZELLIJ_RESTART_WARNING})
+            elif not value and plugin_id in OPTIONAL_ASSET_PLUGINS:
+                cleanup_changed, cleanup_warnings = cleanup_optional_assets(
+                    self.paths, plugin_id
+                )
+                changed.extend(cleanup_changed)
+                warnings.extend(
+                    {"plugin": plugin_id, "message": message}
+                    for message in cleanup_warnings
+                )
         errors: list[dict[str, str]] = []
         refreshed = False
         if value and refresh:
@@ -150,7 +178,7 @@ class Service:
         if errors:
             summary += "; theme refresh failed"
         return envelope(operation, not errors, summary=summary, changed=changed, refreshed=refreshed,
-            plugins=self.views(), errors=errors)
+            plugins=self.views(), errors=errors, warnings=warnings)
 
     def doctor(self, plugin_id: str | None = None) -> dict[str, object]:
         errors: list[dict[str, str]] = []
@@ -266,11 +294,29 @@ class Service:
         )
 
     def uninstall(self) -> dict[str, object]:
+        warnings: list[dict[str, str]] = []
         with migration_lock(self.paths):
             with mutation_lock(self.paths):
                 disabled = {plugin_id: False for plugin_id in BY_ID}
                 changed = reconcile_templates(self.paths, disabled)
                 changed.extend(cleanup_gtk(self.paths))
+                for plugin_id in OPTIONAL_ASSET_PLUGINS:
+                    cleanup_changed, cleanup_warnings = cleanup_optional_assets(
+                        self.paths, plugin_id
+                    )
+                    changed.extend(cleanup_changed)
+                    warnings.extend(
+                        {"plugin": plugin_id, "message": message}
+                        for message in cleanup_warnings
+                    )
+                zellij_changed, zellij_warnings = cleanup_zellij(self.paths)
+                changed.extend(zellij_changed)
+                warnings.extend(
+                    {"plugin": "zellij", "message": message}
+                    for message in zellij_warnings
+                )
+                if zellij_changed:
+                    warnings.append({"plugin": "zellij", "message": ZELLIJ_RESTART_WARNING})
                 if self.paths.hook_file.exists():
                     self.paths.hook_file.unlink()
                     changed.append(str(self.paths.hook_file))
@@ -289,7 +335,7 @@ class Service:
                     self.paths.install_metadata.unlink()
             except OSError:
                 pass
-        return envelope("uninstall", summary="THPM integration files removed", changed=changed, ui=ui_result, errors=[])
+        return envelope("uninstall", summary="THPM integration files removed", changed=changed, ui=ui_result, errors=[], warnings=warnings)
 
     def hook_run(self, event: str, event_args: list[str] | tuple[str, ...] = ()) -> dict[str, object]:
         if event != "theme-set":

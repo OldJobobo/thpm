@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -27,7 +29,6 @@ GENERATED = {
     "spotify": "thpm-spicetify.ini",
     "superfile": "thpm-superfile.toml",
     "vicinae": "thpm-vicinae.toml",
-    "zellij": "thpm-zellij.kdl",
     "nwg-dock": "thpm-nwg-dock.css",
     "cava": "thpm-cava.ini",
     "firefox": "thpm-firefox.css",
@@ -42,7 +43,298 @@ ZELLIJ_MANAGED_END = "// thpm-zellij-theme-end"
 ZELLIJ_THEME_DECLARATION = re.compile(
     r'(?m)^(?P<prefix>[ \t]*themes[ \t]*\{\s*)(?P<name>"(?:\\.|[^"\\])*"|[^\s{}]+)(?P<suffix>[ \t]*\{)'
 )
+ZELLIJ_THEME_OPTION = re.compile(
+    r'^(?P<indent>[ \t]*)theme[ \t]+"(?P<name>[^"\n]*)"[ \t]*(?://[^\n]*)?$',
+    re.MULTILINE,
+)
 UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
+ZELLIJ_RESTART_WARNING = "restart active Zellij sessions to load the updated theme"
+OPTIONAL_ASSET_PLUGINS = {
+    "branding",
+    "typora",
+    "swaync",
+    "windsurf",
+    "cliamp",
+    "zed-extra",
+}
+
+
+def _optional_asset_targets(
+    paths: Paths, plugin_id: str
+) -> tuple[tuple[str, str, Path], ...]:
+    config = paths.config_home
+    targets = {
+        "branding": (
+            ("branding-about", "about.txt", config / "omarchy/branding/about.txt"),
+            (
+                "branding-screensaver",
+                "screensaver.txt",
+                config / "omarchy/branding/screensaver.txt",
+            ),
+        ),
+        "typora": (("typora", "typora.css", config / "Typora/themes/omarchy.css"),),
+        "swaync": (("swaync", "colors.css", config / "swaync/colors.css"),),
+        "windsurf": (
+            (
+                "windsurf",
+                "vscode-theme.json",
+                paths.home
+                / ".windsurf/extensions/local.omarchy-theme/themes/omarchy.json",
+            ),
+        ),
+        "cliamp": (("cliamp", "cliamp.toml", config / "cliamp/themes/omarchy.toml"),),
+        "zed-extra": (("zed-extra", "zed.json", config / "zed/themes/omarchy.json"),),
+    }
+    return targets.get(plugin_id, ())
+
+
+def _asset_state_paths(paths: Paths, key: str) -> tuple[Path, Path]:
+    root = paths.managed_asset_state_dir
+    return root / f"{key}.json", root / f"{key}.backup"
+
+
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _valid_digest(value: object, *, empty: bool = False) -> bool:
+    if empty and value == "":
+        return True
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _valid_mode(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 0o777
+
+
+def _read_asset_state(path: Path) -> dict[str, object] | None:
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        saved = json.loads(path.read_text())
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(saved, dict) or not isinstance(saved.get("existed"), bool):
+        return None
+    if "managedSha256" in saved and not _valid_digest(saved["managedSha256"]):
+        return None
+    if "managedMode" in saved and not _valid_mode(saved["managedMode"]):
+        return None
+    if "pendingSha256" in saved and not _valid_digest(saved["pendingSha256"]):
+        return None
+    if saved["existed"]:
+        if saved.get("priorType") == "file":
+            if not _valid_digest(saved.get("priorSha256")) or not _valid_mode(
+                saved.get("priorMode")
+            ):
+                return None
+        elif saved.get("priorType") == "symlink":
+            if not isinstance(saved.get("linkTarget"), str) or not saved["linkTarget"]:
+                return None
+        else:
+            return None
+    return saved
+
+
+def _clear_asset_state(paths: Paths, key: str) -> None:
+    state, backup = _asset_state_paths(paths, key)
+    state.unlink(missing_ok=True)
+    backup.unlink(missing_ok=True)
+
+
+def _valid_backup(path: Path, expected_digest: str) -> bool:
+    try:
+        return (
+            path.is_file()
+            and not path.is_symlink()
+            and _digest(path.read_bytes()) == expected_digest
+        )
+    except OSError:
+        return False
+
+
+def _install_optional_asset(
+    paths: Paths, key: str, source: Path, target: Path
+) -> bool:
+    """Install one opt-in asset while preserving the file THPM displaced."""
+    state_file, backup = _asset_state_paths(paths, key)
+    source_data = source.read_bytes()
+    source_digest = _digest(source_data)
+    target_data = target.read_bytes() if target.is_file() else None
+    target_digest = _digest(target_data) if target_data is not None else ""
+    target_mode = (
+        target.stat().st_mode & 0o777
+        if target_data is not None and not target.is_symlink()
+        else 0
+    )
+    saved = _read_asset_state(state_file)
+    if state_file.exists() and saved is None:
+        raise RuntimeError(f"optional asset restoration state is invalid: {state_file}")
+    try:
+        managed_mode = int(saved.get("managedMode", 0)) if saved else 0
+        prior_mode = int(saved.get("priorMode", 0)) if saved else 0
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"optional asset restoration state is invalid: {state_file}"
+        ) from exc
+
+    managed_match = bool(saved) and (
+        not target.is_symlink()
+        and target_digest == str(saved.get("managedSha256", ""))
+        and target_mode == managed_mode
+    )
+    pending_match = bool(saved) and (
+        not target.is_symlink()
+        and target_digest == str(saved.get("pendingSha256", ""))
+        and target_mode == 0o644
+    )
+    prior_match = bool(saved) and bool(saved.get("pendingSha256")) and (
+        (
+            saved.get("priorType") == "symlink"
+            and target.is_symlink()
+            and str(target.readlink()) == str(saved.get("linkTarget", ""))
+        )
+        or (
+            saved.get("priorType") == "file"
+            and not target.is_symlink()
+            and target_digest == str(saved.get("priorSha256", ""))
+            and target_mode == prior_mode
+        )
+        or (not bool(saved.get("existed")) and not target.exists())
+    )
+
+    if saved is None or not (managed_match or pending_match or prior_match):
+        # A changed target belongs to the user again. Start a fresh takeover so it can
+        # be restored later. Equal source/target without state is a pre-state THPM
+        # install, so do not preserve that stale copy as the user's default.
+        _clear_asset_state(paths, key)
+        if target.exists() and not target.is_file() and not target.is_symlink():
+            raise RuntimeError(f"optional asset target is not a file: {target}")
+        if target.is_symlink():
+            saved = {
+                "existed": True,
+                "priorType": "symlink",
+                "linkTarget": str(target.readlink()),
+            }
+        else:
+            existed = target_data is not None and target_data != source_data
+            if existed and target_data is not None:
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                backup.write_bytes(target_data)
+            saved = {
+                "existed": existed,
+                "priorType": "file",
+                "priorSha256": target_digest if existed else "",
+                "priorMode": target_mode if existed else 0o644,
+            }
+
+    # A pending digest makes either side of the atomic target replacement recognizable
+    # after interruption, so the original backup is never mistaken for stale output.
+    saved["pendingSha256"] = source_digest
+    atomic_text(state_file, json.dumps(saved, separators=(",", ":")) + "\n")
+    changed = (
+        target_data != source_data or target.is_symlink() or target_mode != 0o644
+    )
+    if changed:
+        atomic_copy(source, target)
+    saved["managedSha256"] = source_digest
+    saved["managedMode"] = 0o644
+    saved.pop("pendingSha256", None)
+    atomic_text(state_file, json.dumps(saved, separators=(",", ":")) + "\n")
+    return changed
+
+
+def _cleanup_optional_asset(
+    paths: Paths, key: str, target: Path
+) -> tuple[list[str], list[str]]:
+    """Restore one displaced file, preserving targets changed outside THPM."""
+    state_file, backup = _asset_state_paths(paths, key)
+    invalid = f"could not restore optional asset because state is invalid: {state_file}"
+    saved = _read_asset_state(state_file)
+    if saved is None:
+        return [], [invalid] if state_file.exists() else []
+    try:
+        managed_mode = int(saved.get("managedMode", 0))
+        prior_mode = int(saved.get("priorMode", 0o644))
+    except (TypeError, ValueError):
+        return [], [invalid]
+    if bool(saved.get("existed")):
+        if saved.get("priorType") == "file" and not _valid_backup(
+            backup, str(saved.get("priorSha256", ""))
+        ):
+            return [], [f"could not restore optional asset because backup is missing or invalid: {backup}"]
+        if saved.get("priorType") == "symlink" and not isinstance(
+            saved.get("linkTarget"), str
+        ):
+            return [], [invalid]
+
+    target_data = target.read_bytes() if target.is_file() else None
+    target_digest = _digest(target_data) if target_data is not None else ""
+    target_mode = (
+        target.stat().st_mode & 0o777
+        if target_data is not None and not target.is_symlink()
+        else 0
+    )
+    managed_match = (
+        target_data is not None
+        and not target.is_symlink()
+        and target_digest
+        in {str(saved.get("managedSha256", "")), str(saved.get("pendingSha256", ""))}
+        and target_mode in {managed_mode, 0o644}
+    )
+    prior_match = bool(saved.get("pendingSha256")) and (
+        (
+            saved.get("priorType") == "symlink"
+            and target.is_symlink()
+            and str(target.readlink()) == str(saved.get("linkTarget", ""))
+        )
+        or (
+            saved.get("priorType") == "file"
+            and not target.is_symlink()
+            and target_digest == str(saved.get("priorSha256", ""))
+            and target_mode == prior_mode
+        )
+        or (not bool(saved.get("existed")) and not target.exists())
+    )
+    if prior_match:
+        _clear_asset_state(paths, key)
+        return [], []
+    if (target.exists() or target.is_symlink()) and not managed_match:
+        _clear_asset_state(paths, key)
+        label = "file" if target_data is not None else "path"
+        return [], [f"preserved user-modified {label} instead of restoring it: {target}"]
+
+    changed: list[str] = []
+    if bool(saved.get("existed")) and saved.get("priorType") == "symlink":
+        if target.exists() or target.is_symlink():
+            target.unlink()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(str(saved["linkTarget"]))
+        changed.append(str(target))
+    elif bool(saved.get("existed")):
+        atomic_copy(backup, target, prior_mode)
+        changed.append(str(target))
+    elif target.exists() or target.is_symlink():
+        target.unlink()
+        changed.append(str(target))
+    _clear_asset_state(paths, key)
+    return changed, []
+
+
+def cleanup_optional_assets(
+    paths: Paths, plugin_id: str
+) -> tuple[list[str], list[str]]:
+    changed: list[str] = []
+    warnings: list[str] = []
+    for key, _asset_name, target in _optional_asset_targets(paths, plugin_id):
+        item_changed, item_warnings = _cleanup_optional_asset(paths, key, target)
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+    return changed, warnings
 
 
 def _ensure_generated_output_is_rendered(source: Path) -> None:
@@ -131,7 +423,13 @@ def inspect_readiness(
         name for name in plugin.theme_assets if (paths.current_theme / name).is_file()
     ]
 
-    if plugin_id == "gtk-css-compat":
+    if plugin_id == "zellij" and not assets:
+        # Cleanup must remain actionable after Zellij is uninstalled.
+        missing = []
+    elif plugin_id in OPTIONAL_ASSET_PLUGINS and not assets:
+        # Missing opt-in assets mean "restore defaults", not "unavailable".
+        missing = []
+    elif plugin_id == "gtk-css-compat":
         missing = []
     elif plugin_id == "vscode-local-compat":
         ready, missing = vscode_readiness(paths)
@@ -142,8 +440,6 @@ def inspect_readiness(
         or command_path("Hermes")
     ):
         missing = []
-    elif plugin_id == "branding" and not assets:
-        missing.append("about.txt or screensaver.txt in the active theme")
     elif plugin_id in {"discord", "discord-system24"} and not any(
         path.is_dir() for path in _discord_directories(paths)
     ):
@@ -160,7 +456,7 @@ def inspect_readiness(
             missing.append(str(installer))
     elif (
         plugin.kind == "apply"
-        and plugin_id != "steam"
+        and plugin_id not in OPTIONAL_ASSET_PLUGINS | {"steam", "zellij"}
         and plugin.theme_assets
         and not assets
     ):
@@ -241,17 +537,77 @@ def _browser_import(paths: Paths, plugin_id: str, base: Path) -> tuple[list[str]
     return changed, bool(changed)
 
 
+def _read_zellij_state(path: Path) -> dict[str, object] | None:
+    if not path.is_file():
+        return None
+    try:
+        saved = json.loads(path.read_text())
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(saved, dict):
+        return None
+    option = saved.get("themeOption")
+    if not isinstance(saved.get("configExisted"), bool) or not isinstance(option, str):
+        return None
+    if option and (
+        "\n" in option
+        or ZELLIJ_THEME_OPTION.fullmatch(option) is None
+        or ZELLIJ_THEME_OPTION.fullmatch(option).group("name") == "thpm-current"
+    ):
+        return None
+    return saved
+
+
+def _validate_zellij_takeover(paths: Paths, source: Path) -> None:
+    content = source.read_text()
+    if not ZELLIJ_THEME_DECLARATION.search(content):
+        raise ValueError(f"Zellij theme has no theme declaration: {source}")
+    config = paths.config_home / "zellij/config.kdl"
+    existing = config.read_text() if config.is_file() else ""
+    if (ZELLIJ_MANAGED_START in existing) != (ZELLIJ_MANAGED_END in existing):
+        raise RuntimeError("Zellij legacy THPM block is incomplete")
+    if ZELLIJ_MANAGED_START in existing:
+        existing = remove_managed_block(
+            existing, ZELLIJ_MANAGED_START, ZELLIJ_MANAGED_END
+        )
+    selected = ZELLIJ_THEME_OPTION.search(existing)
+    state = paths.zellij_theme_state_file
+    if state.exists() and _read_zellij_state(state) is None and (
+        selected is None or selected.group("name") == "thpm-current"
+    ):
+        raise RuntimeError(f"Zellij restoration state is invalid: {state}")
+
+
 def _select_zellij_theme(paths: Paths) -> tuple[Path, bool]:
     config = paths.config_home / "zellij/config.kdl"
-    original = config.read_text() if config.is_file() else ""
+    config_existed = config.is_file()
+    original = config.read_text() if config_existed else ""
     existing = original
     if ZELLIJ_MANAGED_START in existing or ZELLIJ_MANAGED_END in existing:
         existing = remove_managed_block(
             existing, ZELLIJ_MANAGED_START, ZELLIJ_MANAGED_END
         )
-    theme = re.compile(r'^(?P<indent>\s*)theme\s+"[^"]*".*$', re.MULTILINE)
-    if theme.search(existing):
-        updated = theme.sub(
+    selected = ZELLIJ_THEME_OPTION.search(existing)
+    state_file = paths.zellij_theme_state_file
+    saved = _read_zellij_state(state_file)
+    if state_file.exists() and saved is None and (
+        selected is None or selected.group("name") == "thpm-current"
+    ):
+        raise RuntimeError(f"Zellij restoration state is invalid: {state_file}")
+    if saved is None:
+        previous = ""
+        if selected and selected.group("name") != "thpm-current":
+            previous = selected.group(0)
+        atomic_text(
+            state_file,
+            json.dumps(
+                {"configExisted": config_existed, "themeOption": previous},
+                separators=(",", ":"),
+            )
+            + "\n",
+        )
+    if selected:
+        updated = ZELLIJ_THEME_OPTION.sub(
             lambda match: f'{match.group("indent")}theme "thpm-current"',
             existing,
             count=1,
@@ -265,6 +621,46 @@ def _select_zellij_theme(paths: Paths) -> tuple[Path, bool]:
     if updated != original:
         atomic_text(config, updated)
     return config, updated != original
+
+
+def cleanup_zellij(paths: Paths) -> tuple[list[str], list[str]]:
+    """Relinquish THPM's Zellij selection and restore the previous/default state."""
+    config = paths.config_home / "zellij/config.kdl"
+    target = paths.config_home / "zellij/themes/thpm.kdl"
+    state = paths.zellij_theme_state_file
+    saved = _read_zellij_state(state)
+    if state.exists() and saved is None:
+        return [], [f"preserved Zellij configuration because restoration state is invalid: {state}"]
+    original = config.read_text() if config.is_file() else ""
+    if (ZELLIJ_MANAGED_START in original) != (ZELLIJ_MANAGED_END in original):
+        return [], ["preserved Zellij configuration because its legacy THPM block is incomplete"]
+
+    changed: list[str] = []
+    config_existed = bool(saved.get("configExisted", True)) if saved else True
+    previous = str(saved.get("themeOption", "")) if saved else ""
+    if config.is_file():
+        updated = original
+        if ZELLIJ_MANAGED_START in updated:
+            updated = remove_managed_block(
+                updated, ZELLIJ_MANAGED_START, ZELLIJ_MANAGED_END
+            )
+        selected = ZELLIJ_THEME_OPTION.search(updated)
+        if selected and selected.group("name") == "thpm-current":
+            updated = ZELLIJ_THEME_OPTION.sub(previous, updated, count=1)
+        updated = updated.lstrip("\n")
+        if updated and not updated.endswith("\n"):
+            updated += "\n"
+        if updated != original:
+            if not config_existed and not updated.strip():
+                config.unlink()
+            else:
+                atomic_text(config, updated)
+            changed.append(str(config))
+    if target.exists():
+        target.unlink()
+        changed.append(str(target))
+    state.unlink(missing_ok=True)
+    return changed, []
 
 
 def _install_zellij_theme(source: Path, target: Path) -> bool:
@@ -368,23 +764,21 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
     }
 
     if plugin_id == "zellij":
-        source = next(
-            (
-                paths.current_theme / name
-                for name in ("zellij.kdl", GENERATED[plugin_id])
-                if (paths.current_theme / name).is_file()
-            ),
-            None,
-        )
-        if source is None:
-            raise RuntimeError("zellij: no theme asset or generated theme was found")
-        if source.name == GENERATED[plugin_id]:
-            _ensure_generated_output_is_rendered(source)
+        source = paths.current_theme / "zellij.kdl"
+        if not source.is_file():
+            cleanup_changed, cleanup_warnings = cleanup_zellij(paths)
+            changed.extend(cleanup_changed)
+            warnings.extend(cleanup_warnings)
+            if cleanup_changed:
+                warnings.append(ZELLIJ_RESTART_WARNING)
+            return _result(plugin_id, changed, [], warnings)
+        _validate_zellij_takeover(paths, source)
         if _install_zellij_theme(source, targets[plugin_id]):
             changed.append(str(targets[plugin_id]))
         config_file, config_changed = _select_zellij_theme(paths)
         if config_changed:
             changed.append(str(config_file))
+        warnings.append(ZELLIJ_RESTART_WARNING)
     elif plugin_id in targets:
         source_names = candidates.get(plugin_id, (GENERATED[plugin_id],))
         source, copied = _copy_first(paths, source_names, targets[plugin_id])
@@ -394,19 +788,20 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
             changed.append(str(targets[plugin_id]))
         if plugin_id == "nwg-dock":
             warnings.append("restart nwg-dock-hyprland to see theme changes")
-    elif plugin_id == "branding":
-        for source_name in ("about.txt", "screensaver.txt"):
-            target = config / "omarchy/branding" / source_name
-            source, copied = _copy_first(paths, (source_name,), target)
-            if source is not None and copied:
-                changed.append(str(target))
-        if not any(
-            (paths.current_theme / name).is_file()
-            for name in ("about.txt", "screensaver.txt")
-        ):
-            return ApplyResult(
-                plugin_id, "skipped", message="active theme has no branding assets"
-            )
+    elif plugin_id in OPTIONAL_ASSET_PLUGINS:
+        for key, asset_name, target in _optional_asset_targets(paths, plugin_id):
+            source = paths.current_theme / asset_name
+            if source.is_file():
+                if _install_optional_asset(paths, key, source, target):
+                    changed.append(str(target))
+            else:
+                item_changed, item_warnings = _cleanup_optional_asset(
+                    paths, key, target
+                )
+                changed.extend(item_changed)
+                warnings.extend(item_warnings)
+        if plugin_id == "swaync" and not shutil.which("swaync-client"):
+            return _result(plugin_id, changed, [], warnings)
     elif plugin_id in {"discord", "discord-system24"}:
         source_names = (
             ("vencord.theme.css", GENERATED[plugin_id])
@@ -431,28 +826,6 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
             _, copied = _copy_first(paths, source_names, target)
             if copied:
                 changed.append(str(target))
-    elif plugin_id == "typora":
-        source, copied = _copy_first(
-            paths, ("typora.css",), config / "Typora/themes/omarchy.css"
-        )
-        if source is None:
-            raise RuntimeError("typora: active theme has no typora.css")
-        if copied:
-            changed.append(str(config / "Typora/themes/omarchy.css"))
-    elif plugin_id == "swaync":
-        target = config / "swaync/colors.css"
-        source, copied = _copy_first(paths, ("colors.css",), target)
-        if source is None:
-            raise RuntimeError("swaync: active theme has no colors.css")
-        if copied:
-            changed.append(str(target))
-    elif plugin_id == "windsurf":
-        target = home / ".windsurf/extensions/local.omarchy-theme/themes/omarchy.json"
-        source, copied = _copy_first(paths, ("vscode-theme.json",), target)
-        if source is None:
-            raise RuntimeError("windsurf: active theme has no vscode-theme.json")
-        if copied:
-            changed.append(str(target))
     elif plugin_id in {"firefox", "zen"}:
         base = home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
         browser_paths, browser_changed = _browser_import(paths, plugin_id, base)
@@ -483,22 +856,6 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
             )
             raise RuntimeError(f"steam: steam-adwaita failed: {detail}")
         return _result(plugin_id, [], ["steam-adwaita --color-theme omarchy"])
-    elif plugin_id == "cliamp":
-        target = config / "cliamp/themes/omarchy.toml"
-        source, copied = _copy_first(paths, ("cliamp.toml",), target)
-        if source is None:
-            return ApplyResult(
-                plugin_id, "skipped", message="active theme has no cliamp.toml"
-            )
-        if copied:
-            changed.append(str(target))
-    elif plugin_id == "zed-extra":
-        target = config / "zed/themes/omarchy.json"
-        source, copied = _copy_first(paths, ("zed.json",), target)
-        if source is None:
-            raise RuntimeError("zed-extra: active theme has no zed.json")
-        if copied:
-            changed.append(str(target))
 
     try:
         actions = _reload(plugin_id)

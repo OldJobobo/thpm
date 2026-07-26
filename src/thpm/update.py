@@ -262,6 +262,9 @@ def apply(
     update = check(paths, force=True)
     if update["status"] != "available":
         return update
+    set_total = getattr(progress, "set_total", None)
+    if callable(set_total):
+        set_total(2 if update["origin"] in {"thpm", "thpm-git"} else 8)
     if update["origin"] in {"thpm", "thpm-git"}:
         package = str(update["origin"])
         yay = shutil.which("yay")

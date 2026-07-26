@@ -9,11 +9,14 @@ from . import __version__, ui
 from .compat import cleanup_gtk, vscode_doctor_warnings
 from .files import atomic_copy, atomic_text
 from .integrations import (
+    MANAGED_OUTPUT_PLUGINS,
     OPTIONAL_ASSET_PLUGINS,
     ZELLIJ_RESTART_WARNING,
     apply_enabled,
+    cleanup_managed_outputs,
     cleanup_optional_assets,
     cleanup_zellij,
+    reload_restored_integration,
 )
 from .migrate import archive as archive_legacy
 from .migrate import artifacts as legacy_artifacts
@@ -138,8 +141,12 @@ class Service:
         warnings: list[dict[str, str]] = []
         with mutation_lock(self.paths):
             enabled = load(self.paths)
+            was_enabled = bool(enabled.get(plugin_id))
             enabled[plugin_id] = value
             conflict = {"discord": "discord-system24", "discord-system24": "discord"}.get(plugin_id)
+            shared_output_in_use = bool(
+                not value and not was_enabled and conflict and enabled.get(conflict)
+            )
             if value and conflict:
                 enabled[conflict] = False
             save(self.paths, enabled)
@@ -157,7 +164,23 @@ class Service:
                     warnings.append({"plugin": "zellij", "message": ZELLIJ_RESTART_WARNING})
             elif not value and plugin_id in OPTIONAL_ASSET_PLUGINS:
                 cleanup_changed, cleanup_warnings = cleanup_optional_assets(
-                    self.paths, plugin_id
+                    self.paths, plugin_id, assume_legacy=True
+                )
+                changed.extend(cleanup_changed)
+                _actions, reload_warnings = reload_restored_integration(
+                    plugin_id, cleanup_changed
+                )
+                warnings.extend(
+                    {"plugin": plugin_id, "message": message}
+                    for message in cleanup_warnings + reload_warnings
+                )
+            elif (
+                not value
+                and plugin_id in MANAGED_OUTPUT_PLUGINS
+                and not shared_output_in_use
+            ):
+                cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
+                    self.paths, plugin_id, assume_legacy=True
                 )
                 changed.extend(cleanup_changed)
                 warnings.extend(
@@ -300,9 +323,25 @@ class Service:
                 disabled = {plugin_id: False for plugin_id in BY_ID}
                 changed = reconcile_templates(self.paths, disabled)
                 changed.extend(cleanup_gtk(self.paths))
-                for plugin_id in OPTIONAL_ASSET_PLUGINS:
+                for plugin_id in sorted(OPTIONAL_ASSET_PLUGINS):
                     cleanup_changed, cleanup_warnings = cleanup_optional_assets(
-                        self.paths, plugin_id
+                        self.paths,
+                        plugin_id,
+                        assume_legacy=True,
+                    )
+                    changed.extend(cleanup_changed)
+                    _actions, reload_warnings = reload_restored_integration(
+                        plugin_id, cleanup_changed
+                    )
+                    warnings.extend(
+                        {"plugin": plugin_id, "message": message}
+                        for message in cleanup_warnings + reload_warnings
+                    )
+                for plugin_id in sorted(MANAGED_OUTPUT_PLUGINS):
+                    cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
+                        self.paths,
+                        plugin_id,
+                        assume_legacy=True,
                     )
                     changed.extend(cleanup_changed)
                     warnings.extend(

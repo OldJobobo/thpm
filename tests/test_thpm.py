@@ -493,6 +493,13 @@ class ServiceTests(Sandbox):
         zellij_config = self.paths.config_home / "zellij/config.kdl"
         zellij_config.parent.mkdir(parents=True)
         zellij_config.write_text('theme "thpm-current"\n')
+        fish_source = self.paths.current_theme / "thpm-fish.fish"
+        fish_source.parent.mkdir(parents=True)
+        fish_source.write_text("theme output")
+        fish_target = self.paths.config_home / "fish/conf.d/thpm-theme.fish"
+        fish_target.parent.mkdir(parents=True)
+        fish_target.write_text("user output")
+        apply("fish", self.paths)
         with patch("thpm.service.ui.remove", return_value={"installed": False}):
             payload = Service(self.paths).uninstall()
         self.assertTrue(foreign.exists())
@@ -500,7 +507,27 @@ class ServiceTests(Sandbox):
         self.assertFalse(self.paths.hook_file.exists())
         self.assertFalse(self.paths.canonical_palette_migration_marker.exists())
         self.assertEqual(zellij_config.read_text(), "")
+        self.assertEqual(fish_target.read_text(), "user output")
+        self.assertFalse(fish_source.exists())
         self.assertIn("restart active Zellij sessions", str(payload["warnings"]))
+
+    def test_uninstall_removes_legacy_system24_output_despite_shared_marker(self):
+        source = self.paths.current_theme / "thpm-vencord-system24.theme.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("legacy system24")
+        directory = self.paths.config_home / "Vencord/themes"
+        directory.mkdir(parents=True)
+        target = directory / "vencord.theme.css"
+        target.write_text("legacy system24")
+        enabled = load(self.paths)
+        enabled["discord"] = False
+        enabled["discord-system24"] = True
+        save(self.paths, enabled)
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            payload = Service(self.paths).uninstall()
+        self.assertTrue(payload["ok"])
+        self.assertFalse(target.exists())
+        self.assertFalse(source.exists())
 
     def test_sensitive_plugin_requires_service_confirmation(self):
         assets = Path(__file__).parents[1] / "assets"
@@ -528,6 +555,72 @@ class ServiceTests(Sandbox):
         self.assertTrue(payload["ok"])
         self.assertEqual(target.read_text(), "user default")
         self.assertIn(str(target), payload["changed"])
+
+    def test_disabling_generated_integration_restores_previous_output(self):
+        source = self.paths.current_theme / "thpm-fish.fish"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme output")
+        target = self.paths.config_home / "fish/conf.d/thpm-theme.fish"
+        target.parent.mkdir(parents=True)
+        target.write_text("user output")
+        apply("fish", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("fish", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(target.read_text(), "user output")
+        self.assertFalse(source.exists())
+
+    def test_generated_upgrade_does_not_preserve_an_old_theme_as_user_default(self):
+        installed = self.paths.config_home / "omarchy/themes/old"
+        installed.mkdir(parents=True)
+        (installed / "thpm-fish.fish").write_text("old theme output")
+        source = self.paths.current_theme / "thpm-fish.fish"
+        source.parent.mkdir(parents=True)
+        source.write_text("new theme output")
+        target = self.paths.config_home / "fish/conf.d/thpm-theme.fish"
+        target.parent.mkdir(parents=True)
+        target.write_text("old theme output")
+        apply("fish", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            Service(self.paths).set_enabled("fish", False, refresh=False)
+        self.assertFalse(target.exists())
+
+    def test_disabling_legacy_generated_output_removes_positive_match(self):
+        source = self.paths.current_theme / "thpm-fish.fish"
+        source.parent.mkdir(parents=True)
+        source.write_text("legacy theme output")
+        target = self.paths.config_home / "fish/conf.d/thpm-theme.fish"
+        target.parent.mkdir(parents=True)
+        target.write_text("legacy theme output")
+        enabled = load(self.paths)
+        enabled["fish"] = False
+        save(self.paths, enabled)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("fish", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertFalse(target.exists())
+        self.assertFalse(source.exists())
+
+    def test_disabling_swaync_restores_and_reloads(self):
+        source = self.paths.current_theme / "colors.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme")
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        with patch("thpm.integrations._reload", return_value=[]):
+            apply("swaync", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"
+        ), patch("thpm.integrations._reload", return_value=["swaync-client --reload-css"]) as reload_app:
+            payload = Service(self.paths).set_enabled("swaync", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(target.read_text(), "user default")
+        reload_app.assert_called_once_with("swaync")
 
     def test_disabling_gtk_compat_removes_only_managed_css(self):
         source = self.paths.current_theme / "gtk.css"
@@ -654,6 +747,22 @@ class ServiceTests(Sandbox):
         warnings = [item for item in payload["warnings"] if item.get("plugin") == "fish"]
         self.assertTrue(warnings)
         self.assertIn("unresolved placeholder", warnings[0]["message"])
+
+    def test_disabling_inactive_discord_variant_keeps_active_shared_theme(self):
+        source = self.paths.current_theme / "thpm-vencord.theme.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("active discord theme")
+        directory = self.paths.config_home / "Vencord/themes"
+        directory.mkdir(parents=True)
+        target = directory / "vencord.theme.css"
+        apply("discord", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled(
+                "discord-system24", False, refresh=False
+            )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(target.read_text(), "active discord theme")
 
     def test_discord_plugins_remain_mutually_exclusive(self):
         assets = Path(__file__).parents[1] / "assets"
@@ -1019,6 +1128,29 @@ class IntegrationTests(Sandbox):
         (extension / "package.json").write_text(json.dumps(manifest))
         (extension / "themes/theme.json").write_text(json.dumps({"name": "Dos-Moos", "type": "dark", "colors": {}}))
 
+    def test_disabling_browser_restores_stylesheet_and_removes_import(self):
+        base = self.paths.home / ".mozilla/firefox"
+        profile = base / "profile.default"
+        profile.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        source = self.paths.current_theme / "thpm-firefox.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme css")
+        managed = profile / "chrome/thpm-firefox.css"
+        managed.parent.mkdir(parents=True)
+        managed.write_text("user css")
+        apply("firefox", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        enabled = load(self.paths)
+        enabled["firefox"] = True
+        save(self.paths, enabled)
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("firefox", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(managed.read_text(), "user css")
+        self.assertFalse((profile / "chrome/userChrome.css").exists())
+        self.assertFalse(source.exists())
+
     def test_browser_profile_cannot_escape_profile_root(self):
         generated = self.paths.current_theme / "thpm-firefox.css"
         generated.parent.mkdir(parents=True)
@@ -1028,6 +1160,22 @@ class IntegrationTests(Sandbox):
         (base / "profiles.ini").write_text("[Install1]\nDefault=../../escape\n")
         with self.assertRaisesRegex(ValueError, "escapes"):
             _browser_import(self.paths, "firefox", base)
+
+    def test_discord_cleanup_restores_displaced_theme(self):
+        source = self.paths.current_theme / "thpm-vencord.theme.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme output")
+        directory = self.paths.config_home / "Vencord/themes"
+        directory.mkdir(parents=True)
+        target = directory / "vencord.theme.css"
+        target.write_text("user theme")
+        apply("discord", self.paths)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("discord", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(target.read_text(), "user theme")
+        self.assertFalse(source.exists())
 
     def test_vencord_asset_copy_does_not_require_palette(self):
         self.paths.current_theme.mkdir(parents=True)
@@ -1177,6 +1325,27 @@ class IntegrationTests(Sandbox):
                     result = apply(plugin_id, self.paths)
                     self.assertEqual(target.read_text(), f"{plugin_id} user default")
                     self.assertIn(str(target), result.changed)
+
+    def test_legacy_optional_output_is_removed_only_when_it_matches_a_theme_asset(self):
+        installed_theme = self.paths.config_home / "omarchy/themes/old"
+        installed_theme.mkdir(parents=True)
+        (installed_theme / "colors.css").write_text("old managed colors")
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("old managed colors")
+        with patch("thpm.integrations.shutil.which", return_value=None):
+            result = apply("swaync", self.paths)
+        self.assertFalse(target.exists())
+        self.assertIn(str(target), result.changed)
+
+        marker = self.paths.managed_asset_state_dir / "swaync.legacy-checked"
+        marker.unlink()
+        target.write_text("user colors")
+        with patch("thpm.integrations.shutil.which", return_value=None):
+            preserved = apply("swaync", self.paths)
+        self.assertTrue(target.exists())
+        self.assertEqual(target.read_text(), "user colors")
+        self.assertEqual(preserved.status, "unchanged")
 
     def test_optional_asset_without_previous_file_is_removed_when_absent(self):
         source = self.paths.current_theme / "typora.css"

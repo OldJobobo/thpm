@@ -57,6 +57,7 @@ OPTIONAL_ASSET_PLUGINS = {
     "cliamp",
     "zed-extra",
 }
+MANAGED_OUTPUT_PLUGINS = set(GENERATED) | {"discord", "discord-system24"}
 
 
 def _optional_asset_targets(
@@ -88,9 +89,59 @@ def _optional_asset_targets(
     return targets.get(plugin_id, ())
 
 
+def _standard_output_targets(paths: Paths) -> dict[str, Path]:
+    config = paths.config_home
+    return {
+        "fish": config / "fish/conf.d/thpm-theme.fish",
+        "fzf": config / "fish/conf.d/thpm-fzf.fish",
+        "qt6ct": config / "qt6ct/colors/thpm.conf",
+        "spotify": config / "spicetify/Themes/Omarchy/color.ini",
+        "superfile": config / "superfile/theme/thpm.toml",
+        "vicinae": config / "vicinae/themes/thpm.toml",
+        "nwg-dock": config / "nwg-dock-hyprland/thpm.css",
+        "cava": config / "cava/themes/thpm",
+        "hermes": config / "Hermes/omarchy-theme.json",
+        "qutebrowser": config / "qutebrowser/thpm_theme.py",
+        "heroic": config / "heroic/themes/thpm.css",
+    }
+
+
 def _asset_state_paths(paths: Paths, key: str) -> tuple[Path, Path]:
     root = paths.managed_asset_state_dir
     return root / f"{key}.json", root / f"{key}.backup"
+
+
+def _asset_legacy_marker(paths: Paths, key: str) -> Path:
+    return paths.managed_asset_state_dir / f"{key}.legacy-checked"
+
+
+def _target_key(prefix: str, target: Path) -> str:
+    return f"{prefix}-{hashlib.sha256(str(target).encode()).hexdigest()[:16]}"
+
+
+def _matches_sources(target: Path, sources: tuple[Path, ...]) -> bool:
+    if not target.is_file() or target.is_symlink():
+        return False
+    try:
+        target_digest = _digest(target.read_bytes())
+        return any(
+            source.is_file()
+            and not source.is_symlink()
+            and _digest(source.read_bytes()) == target_digest
+            for source in sources
+        )
+    except OSError:
+        return False
+
+
+def _matches_installed_theme_asset(paths: Paths, target: Path, asset_name: str) -> bool:
+    if not target.is_file() or target.is_symlink():
+        return False
+    try:
+        root = paths.config_home / "omarchy/themes"
+        return _matches_sources(target, tuple(root.glob(f"*/{asset_name}")))
+    except OSError:
+        return False
 
 
 def _digest(data: bytes) -> str:
@@ -158,7 +209,12 @@ def _valid_backup(path: Path, expected_digest: str) -> bool:
 
 
 def _install_optional_asset(
-    paths: Paths, key: str, source: Path, target: Path
+    paths: Paths,
+    key: str,
+    source: Path,
+    target: Path,
+    *,
+    legacy_owned: bool = False,
 ) -> bool:
     """Install one opt-in asset while preserving the file THPM displaced."""
     state_file, backup = _asset_state_paths(paths, key)
@@ -172,6 +228,8 @@ def _install_optional_asset(
         else 0
     )
     saved = _read_asset_state(state_file)
+    had_state = saved is not None
+    legacy_marker = _asset_legacy_marker(paths, key)
     if state_file.exists() and saved is None:
         raise RuntimeError(f"optional asset restoration state is invalid: {state_file}")
     try:
@@ -221,7 +279,12 @@ def _install_optional_asset(
                 "linkTarget": str(target.readlink()),
             }
         else:
-            existed = target_data is not None and target_data != source_data
+            legacy_takeover = not had_state and not legacy_marker.exists() and legacy_owned
+            existed = (
+                target_data is not None
+                and target_data != source_data
+                and not legacy_takeover
+            )
             if existed and target_data is not None:
                 backup.parent.mkdir(parents=True, exist_ok=True)
                 backup.write_bytes(target_data)
@@ -231,6 +294,9 @@ def _install_optional_asset(
                 "priorSha256": target_digest if existed else "",
                 "priorMode": target_mode if existed else 0o644,
             }
+
+    if not legacy_marker.exists():
+        atomic_text(legacy_marker, "checked\n")
 
     # A pending digest makes either side of the atomic target replacement recognizable
     # after interruption, so the original backup is never mistaken for stale output.
@@ -249,14 +315,30 @@ def _install_optional_asset(
 
 
 def _cleanup_optional_asset(
-    paths: Paths, key: str, target: Path
+    paths: Paths,
+    key: str,
+    target: Path,
+    *,
+    legacy_owned: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Restore one displaced file, preserving targets changed outside THPM."""
     state_file, backup = _asset_state_paths(paths, key)
     invalid = f"could not restore optional asset because state is invalid: {state_file}"
     saved = _read_asset_state(state_file)
     if saved is None:
-        return [], [invalid] if state_file.exists() else []
+        if state_file.exists():
+            return [], [invalid]
+        marker = _asset_legacy_marker(paths, key)
+        changed: list[str] = []
+        if not marker.exists():
+            if legacy_owned and (target.exists() or target.is_symlink()):
+                if target.is_file() or target.is_symlink():
+                    target.unlink()
+                    changed.append(str(target))
+                else:
+                    return [], [f"preserved non-file legacy output path: {target}"]
+            atomic_text(marker, "checked\n")
+        return changed, []
     try:
         managed_mode = int(saved.get("managedMode", 0))
         prior_mode = int(saved.get("priorMode", 0o644))
@@ -326,12 +408,17 @@ def _cleanup_optional_asset(
 
 
 def cleanup_optional_assets(
-    paths: Paths, plugin_id: str
+    paths: Paths, plugin_id: str, *, assume_legacy: bool = False
 ) -> tuple[list[str], list[str]]:
     changed: list[str] = []
     warnings: list[str] = []
-    for key, _asset_name, target in _optional_asset_targets(paths, plugin_id):
-        item_changed, item_warnings = _cleanup_optional_asset(paths, key, target)
+    for key, asset_name, target in _optional_asset_targets(paths, plugin_id):
+        legacy_owned = assume_legacy and _matches_installed_theme_asset(
+            paths, target, asset_name
+        )
+        item_changed, item_warnings = _cleanup_optional_asset(
+            paths, key, target, legacy_owned=legacy_owned
+        )
         changed.extend(item_changed)
         warnings.extend(item_warnings)
     return changed, warnings
@@ -515,7 +602,17 @@ def _browser_import(paths: Paths, plugin_id: str, base: Path) -> tuple[list[str]
         raise ValueError(f"browser profile escapes its profile root: {profile}")
     chrome = profile_path / "chrome"
     managed = chrome / f"thpm-{plugin_id}.css"
-    _, css_changed = _copy_first(paths, candidates, managed)
+    if source.name in set(GENERATED.values()):
+        _ensure_generated_output_is_rendered(source)
+    css_changed = _install_optional_asset(
+        paths,
+        _target_key(f"browser-{plugin_id}", managed),
+        source,
+        managed,
+        legacy_owned=_matches_sources(
+            managed, _current_plugin_sources(paths, plugin_id)
+        ),
+    )
     user_chrome = chrome / "userChrome.css"
     start, end = "/* thpm-import-start */", "/* thpm-import-end */"
     existing = user_chrome.read_text() if user_chrome.exists() else ""
@@ -576,6 +673,116 @@ def _validate_zellij_takeover(paths: Paths, source: Path) -> None:
         selected is None or selected.group("name") == "thpm-current"
     ):
         raise RuntimeError(f"Zellij restoration state is invalid: {state}")
+
+
+def _current_plugin_sources(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
+    source_plugins = (
+        ("discord", "discord-system24")
+        if plugin_id in {"discord", "discord-system24"}
+        else (plugin_id,)
+    )
+    names = [
+        name
+        for source_plugin in source_plugins
+        for name in (
+            *BY_ID[source_plugin].theme_assets,
+            *([GENERATED[source_plugin]] if source_plugin in GENERATED else []),
+        )
+    ]
+    installed = paths.config_home / "omarchy/themes"
+    return tuple(paths.current_theme / name for name in names) + tuple(
+        candidate
+        for name in names
+        for candidate in installed.glob(f"*/{name}")
+    )
+
+
+def _cleanup_browser(paths: Paths, plugin_id: str, *, assume_legacy: bool) -> tuple[list[str], list[str]]:
+    base = paths.home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
+    sources = _current_plugin_sources(paths, plugin_id)
+    changed: list[str] = []
+    warnings: list[str] = []
+    start, end = "/* thpm-import-start */", "/* thpm-import-end */"
+    for chrome in (path for path in base.rglob("chrome") if path.is_dir()):
+        managed = chrome / f"thpm-{plugin_id}.css"
+        item_changed, item_warnings = _cleanup_optional_asset(
+            paths,
+            _target_key(f"browser-{plugin_id}", managed),
+            managed,
+            legacy_owned=assume_legacy and _matches_sources(managed, sources),
+        )
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+        user_chrome = chrome / "userChrome.css"
+        if user_chrome.is_file():
+            existing = user_chrome.read_text()
+            if (start in existing) != (end in existing):
+                warnings.append(f"preserved incomplete THPM browser import block: {user_chrome}")
+            elif start in existing:
+                updated = remove_managed_block(existing, start, end)
+                if updated != existing:
+                    if updated.strip():
+                        atomic_text(user_chrome, updated)
+                    else:
+                        user_chrome.unlink()
+                    changed.append(str(user_chrome))
+    return changed, warnings
+
+
+def cleanup_managed_outputs(
+    paths: Paths, plugin_id: str, *, assume_legacy: bool = False
+) -> tuple[list[str], list[str]]:
+    """Restore or remove output deployed by a generated/hybrid integration."""
+    changed: list[str] = []
+    warnings: list[str] = []
+    targets = _standard_output_targets(paths)
+    if plugin_id in targets:
+        target = targets[plugin_id]
+        item_changed, item_warnings = _cleanup_optional_asset(
+            paths,
+            f"generated-{plugin_id}",
+            target,
+            legacy_owned=assume_legacy
+            and _matches_sources(target, _current_plugin_sources(paths, plugin_id)),
+        )
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+    elif plugin_id in {"discord", "discord-system24"}:
+        for directory in _discord_directories(paths):
+            target = directory / "vencord.theme.css"
+            item_changed, item_warnings = _cleanup_optional_asset(
+                paths,
+                _target_key("discord", target),
+                target,
+                legacy_owned=assume_legacy
+                and _matches_sources(
+                    target, _current_plugin_sources(paths, plugin_id)
+                ),
+            )
+            changed.extend(item_changed)
+            warnings.extend(item_warnings)
+    elif plugin_id in {"firefox", "zen"}:
+        item_changed, item_warnings = _cleanup_browser(
+            paths, plugin_id, assume_legacy=assume_legacy
+        )
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+    generated = GENERATED.get(plugin_id)
+    if generated:
+        rendered = paths.current_theme / generated
+        if rendered.is_file():
+            rendered.unlink()
+            changed.append(str(rendered))
+    return changed, warnings
+
+
+def reload_restored_integration(plugin_id: str, changed: list[str]) -> tuple[list[str], list[str]]:
+    if plugin_id != "swaync" or not changed or not shutil.which("swaync-client"):
+        return [], []
+    try:
+        return _reload("swaync"), []
+    except RuntimeError as exc:
+        return [], [str(exc)]
 
 
 def _select_zellij_theme(paths: Paths) -> tuple[Path, bool]:
@@ -744,20 +951,8 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
     changed: list[str] = []
     warnings: list[str] = []
     home, config = paths.home, paths.config_home
-    targets: dict[str, Path] = {
-        "fish": config / "fish/conf.d/thpm-theme.fish",
-        "fzf": config / "fish/conf.d/thpm-fzf.fish",
-        "qt6ct": config / "qt6ct/colors/thpm.conf",
-        "spotify": config / "spicetify/Themes/Omarchy/color.ini",
-        "superfile": config / "superfile/theme/thpm.toml",
-        "vicinae": config / "vicinae/themes/thpm.toml",
-        "zellij": config / "zellij/themes/thpm.kdl",
-        "nwg-dock": config / "nwg-dock-hyprland/thpm.css",
-        "cava": config / "cava/themes/thpm",
-        "hermes": config / "Hermes/omarchy-theme.json",
-        "qutebrowser": config / "qutebrowser/thpm_theme.py",
-        "heroic": config / "heroic/themes/thpm.css",
-    }
+    targets = _standard_output_targets(paths)
+    zellij_target = config / "zellij/themes/thpm.kdl"
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),
         "cava": ("cava_theme", GENERATED["cava"]),
@@ -773,30 +968,52 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
                 warnings.append(ZELLIJ_RESTART_WARNING)
             return _result(plugin_id, changed, [], warnings)
         _validate_zellij_takeover(paths, source)
-        if _install_zellij_theme(source, targets[plugin_id]):
-            changed.append(str(targets[plugin_id]))
+        if _install_zellij_theme(source, zellij_target):
+            changed.append(str(zellij_target))
         config_file, config_changed = _select_zellij_theme(paths)
         if config_changed:
             changed.append(str(config_file))
         warnings.append(ZELLIJ_RESTART_WARNING)
     elif plugin_id in targets:
         source_names = candidates.get(plugin_id, (GENERATED[plugin_id],))
-        source, copied = _copy_first(paths, source_names, targets[plugin_id])
+        source = next(
+            (
+                paths.current_theme / name
+                for name in source_names
+                if (paths.current_theme / name).is_file()
+            ),
+            None,
+        )
         if source is None:
             raise RuntimeError(f"{plugin_id}: expected theme output was not found")
-        if copied:
+        if source.name in set(GENERATED.values()):
+            _ensure_generated_output_is_rendered(source)
+        if _install_optional_asset(
+            paths,
+            f"generated-{plugin_id}",
+            source,
+            targets[plugin_id],
+            legacy_owned=_matches_sources(
+                targets[plugin_id], _current_plugin_sources(paths, plugin_id)
+            ),
+        ):
             changed.append(str(targets[plugin_id]))
         if plugin_id == "nwg-dock":
             warnings.append("restart nwg-dock-hyprland to see theme changes")
     elif plugin_id in OPTIONAL_ASSET_PLUGINS:
         for key, asset_name, target in _optional_asset_targets(paths, plugin_id):
             source = paths.current_theme / asset_name
+            legacy_owned = _matches_installed_theme_asset(
+                paths, target, asset_name
+            )
             if source.is_file():
-                if _install_optional_asset(paths, key, source, target):
+                if _install_optional_asset(
+                    paths, key, source, target, legacy_owned=legacy_owned
+                ):
                     changed.append(str(target))
             else:
                 item_changed, item_warnings = _cleanup_optional_asset(
-                    paths, key, target
+                    paths, key, target, legacy_owned=legacy_owned
                 )
                 changed.extend(item_changed)
                 warnings.extend(item_warnings)
@@ -817,14 +1034,31 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
                 "skipped",
                 message="no supported Discord client theme directory was found",
             )
-        if not any((paths.current_theme / name).is_file() for name in source_names):
+        source = next(
+            (
+                paths.current_theme / name
+                for name in source_names
+                if (paths.current_theme / name).is_file()
+            ),
+            None,
+        )
+        if source is None:
             raise RuntimeError(
                 f"{plugin_id}: no theme asset or generated stylesheet was found"
             )
+        if source.name in set(GENERATED.values()):
+            _ensure_generated_output_is_rendered(source)
         for directory in directories:
             target = directory / "vencord.theme.css"
-            _, copied = _copy_first(paths, source_names, target)
-            if copied:
+            if _install_optional_asset(
+                paths,
+                _target_key("discord", target),
+                source,
+                target,
+                legacy_owned=_matches_sources(
+                    target, _current_plugin_sources(paths, plugin_id)
+                ),
+            ):
                 changed.append(str(target))
     elif plugin_id in {"firefox", "zen"}:
         base = home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")

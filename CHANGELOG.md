@@ -4,7 +4,7 @@
 
 ## 1.0.0rc13 - 2026-07-28
 
-- Make the normal CLI, TUI, and graphical-manager enable flow for Zed confirm, install, and select **THPM Current** transactionally instead of requiring a separate setup command.
+- Make the normal CLI, TUI, and graphical-manager enable flow for Zed install and select **THPM Current** transactionally instead of requiring a separate setup command.
 
 ## 1.0.0rc12 - 2026-07-28
 

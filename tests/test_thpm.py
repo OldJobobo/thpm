@@ -1194,14 +1194,10 @@ class ZedTests(Sandbox):
         settings.write_text('{"theme": "Old"}\n')
         service = Service(self.paths)
 
-        pending = service.set_enabled("zed-extra", True, refresh=False)
-        completed = service.set_enabled(
-            "zed-extra", True, confirmed=True, refresh=False
-        )
+        completed = service.set_enabled("zed-extra", True, refresh=False)
 
-        self.assertFalse(pending["ok"])
-        self.assertTrue(pending["confirmationRequired"])
         self.assertTrue(completed["ok"])
+        self.assertNotIn("confirmationRequired", completed)
         self.assertEqual(zed_status(self.paths)["selectedTheme"], THEME_NAME)
         self.assertTrue(load(self.paths)["zed-extra"])
 

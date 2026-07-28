@@ -15,7 +15,7 @@ omarchy update aur pkgs    # update an installed AUR package
 
 Themes can ship a full `zed.json` or compatibility `aether.zed.json` palette. THPM validates the authored theme and installs it under the stable **THPM Current** name, while leaving Omazed completely independent as the generated-color fallback.
 
-Enable **Zed authored theme** from the graphical manager, TUI, or CLI and THPM now completes the whole job: it asks for confirmation, backs up your Zed settings, installs the theme, and selects **THPM Current**. You no longer need to discover and run a separate setup command after enabling it. `thpm zed status` shows the selected source, synchronization state, current Zed selection, and Omazed availability.
+Enable **Zed authored theme** from the graphical manager, TUI, or CLI and THPM now completes the whole job: it backs up your Zed settings, installs the theme, and selects **THPM Current**. You no longer need to discover and run a separate setup command after enabling it. `thpm zed status` shows the selected source, synchronization state, current Zed selection, and Omazed availability.
 
 ### Integrations are safer to enable, disable, and change between themes
 

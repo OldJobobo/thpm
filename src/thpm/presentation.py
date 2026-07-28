@@ -7,7 +7,14 @@ from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 from rich.text import Text
 
@@ -149,6 +156,21 @@ def _print_details(console: Console, payload: dict[str, Any], *, verbose: bool) 
         command = result.get("command") or result.get("refreshCommand")
         if command:
             console.print(f"  [yellow]Next:[/] [bold]{command}[/]")
+        if payload.get("operation") in {"zed-status", "zed-setup"}:
+            omazed = result.get("omazed") if isinstance(result.get("omazed"), dict) else {}
+            rows = (
+                ("Source", result.get("source") or "none"),
+                ("Target", result.get("target") or "unknown"),
+                ("Synchronized", "yes" if result.get("synchronized") else "no"),
+                ("Selected", result.get("selectedTheme") or "none"),
+                ("Omazed", "available" if omazed.get("command") or omazed.get("outputExists") else "unavailable"),
+            )
+            table = Table(show_header=False, box=None, pad_edge=False)
+            table.add_column("Field", style="bold cyan")
+            table.add_column("Value")
+            for label, value in rows:
+                table.add_row(label, str(value))
+            console.print(table)
 
     results = payload.get("results")
     if isinstance(results, list) and results:

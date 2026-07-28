@@ -15,9 +15,11 @@ from .integrations import (
     apply_enabled,
     cleanup_managed_outputs,
     cleanup_optional_assets,
+    cleanup_zed_assets,
     cleanup_zellij,
     reload_restored_integration,
 )
+from .integrations import apply as apply_integration
 from .migrate import archive as archive_legacy
 from .migrate import artifacts as legacy_artifacts
 from .migrate import inspect as inspect_legacy
@@ -32,9 +34,39 @@ from .state import StateError, load, migration_lock, mutation_lock, save
 from .templates import reconcile as reconcile_templates
 from .update import apply as apply_update
 from .update import check as check_update
+from .zed import ZedThemeError
+from .zed import configure_settings as configure_zed_settings
+from .zed import status as zed_status
+from .zed import validate_settings_edit as validate_zed_settings_edit
 
 SCHEMA_VERSION = 1
 CANONICAL_PALETTE_MIGRATION = "canonical-palette-v1"
+
+
+def _snapshot_file(path: Path) -> tuple[str, bytes | str, int]:
+    if path.is_symlink():
+        return ("symlink", str(path.readlink()), 0)
+    if path.is_file():
+        return ("file", path.read_bytes(), path.stat().st_mode & 0o777)
+    if path.exists():
+        raise RuntimeError(f"rollback path is not a file: {path}")
+    return ("missing", b"", 0)
+
+
+def _restore_file(path: Path, snapshot: tuple[str, bytes | str, int]) -> None:
+    kind, content, mode = snapshot
+    if path.exists() or path.is_symlink():
+        if not path.is_file() and not path.is_symlink():
+            raise RuntimeError(f"rollback path is not a file: {path}")
+        path.unlink()
+    if kind == "missing":
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "symlink":
+        path.symlink_to(str(content))
+        return
+    path.write_bytes(bytes(content))
+    path.chmod(mode)
 
 
 def _source_activation_in_progress() -> bool:
@@ -127,6 +159,105 @@ class Service:
             errors=[],
         )
 
+    def zed_status(self) -> dict[str, object]:
+        result = zed_status(self.paths)
+        return envelope(
+            "zed-status",
+            summary="Zed authored theme status",
+            result=result,
+            warnings=[{"plugin": "zed-extra", "message": message} for message in result["warnings"]],
+            errors=[],
+        )
+
+    def zed_setup(self, *, confirmed: bool = False) -> dict[str, object]:
+        view = next(item for item in self.views() if item["id"] == "zed-extra")
+        if not view["available"] or not view["themeAssets"]:
+            return envelope(
+                "zed-setup",
+                False,
+                summary="no valid authored Zed theme is available",
+                result=zed_status(self.paths),
+                errors=[{"message": "the active theme must provide a valid zed.json or aether.zed.json"}],
+            )
+        if not confirmed:
+            return envelope(
+                "zed-setup",
+                False,
+                summary="confirmation required to configure Zed",
+                confirmationRequired=True,
+                plugin=view,
+                errors=[],
+            )
+        settings = self.paths.config_home / "zed/settings.json"
+        rollback_paths = [
+            settings,
+            self.paths.zed_settings_backup_file,
+            self.paths.config_home / "zed/themes/thpm-current.json",
+            self.paths.config_home / "zed/themes/omarchy.json",
+        ]
+        rollback_paths.extend(
+            self.paths.managed_asset_state_dir / f"{key}.{suffix}"
+            for key in ("zed-extra", "zed-thpm-current")
+            for suffix in ("json", "backup", "legacy-checked")
+        )
+        try:
+            validate_zed_settings_edit(self.paths)
+            snapshots = {path: _snapshot_file(path) for path in rollback_paths}
+        except (OSError, RuntimeError, UnicodeError, ZedThemeError, ValueError) as exc:
+            return envelope(
+                "zed-setup",
+                False,
+                summary=f"unable to configure Zed: {exc}",
+                result=zed_status(self.paths),
+                errors=[{"message": str(exc)}],
+            )
+
+        was_enabled = bool(load(self.paths).get("zed-extra"))
+        try:
+            with mutation_lock(self.paths):
+                settings_changed = configure_zed_settings(self.paths)
+                enabled = load(self.paths)
+                enabled["zed-extra"] = True
+                save(self.paths, enabled)
+                changed = reconcile_templates(self.paths, enabled)
+                result = apply_integration("zed-extra", self.paths)
+                changed.extend(result.changed)
+        except (OSError, RuntimeError, UnicodeError, ZedThemeError, ValueError) as exc:
+            try:
+                with mutation_lock(self.paths):
+                    for path, snapshot in snapshots.items():
+                        _restore_file(path, snapshot)
+                    enabled = load(self.paths)
+                    enabled["zed-extra"] = was_enabled
+                    save(self.paths, enabled)
+                    reconcile_templates(self.paths, enabled)
+            except (OSError, RuntimeError, UnicodeError, ValueError) as rollback_exc:
+                return envelope(
+                    "zed-setup",
+                    False,
+                    summary=f"unable to configure Zed: {exc}; rollback failed: {rollback_exc}",
+                    result=zed_status(self.paths),
+                    errors=[{"message": str(exc)}, {"message": f"rollback failed: {rollback_exc}"}],
+                )
+            return envelope(
+                "zed-setup",
+                False,
+                summary=f"unable to configure Zed: {exc}",
+                result=zed_status(self.paths),
+                errors=[{"message": str(exc)}],
+            )
+        if settings_changed:
+            changed.append(str(settings))
+        status = zed_status(self.paths)
+        return envelope(
+            "zed-setup",
+            summary="Zed now uses THPM Current",
+            changed=changed,
+            result=status,
+            warnings=[{"plugin": "zed-extra", "message": message} for message in result.warnings + status["warnings"]],
+            errors=[],
+        )
+
     def set_enabled(self, plugin_id: str, value: bool, *, confirmed: bool = False, refresh: bool = True) -> dict[str, object]:
         operation = "plugin-enable" if value else "plugin-disable"
         plugin = BY_ID.get(plugin_id)
@@ -162,6 +293,15 @@ class Service:
                 )
                 if cleanup_changed:
                     warnings.append({"plugin": "zellij", "message": ZELLIJ_RESTART_WARNING})
+            elif not value and plugin_id == "zed-extra":
+                cleanup_changed, cleanup_warnings = cleanup_zed_assets(
+                    self.paths, assume_legacy=True
+                )
+                changed.extend(cleanup_changed)
+                warnings.extend(
+                    {"plugin": plugin_id, "message": message}
+                    for message in cleanup_warnings
+                )
             elif not value and plugin_id in OPTIONAL_ASSET_PLUGINS:
                 cleanup_changed, cleanup_warnings = cleanup_optional_assets(
                     self.paths, plugin_id, assume_legacy=True
@@ -324,11 +464,16 @@ class Service:
                 changed = reconcile_templates(self.paths, disabled)
                 changed.extend(cleanup_gtk(self.paths))
                 for plugin_id in sorted(OPTIONAL_ASSET_PLUGINS):
-                    cleanup_changed, cleanup_warnings = cleanup_optional_assets(
-                        self.paths,
-                        plugin_id,
-                        assume_legacy=True,
-                    )
+                    if plugin_id == "zed-extra":
+                        cleanup_changed, cleanup_warnings = cleanup_zed_assets(
+                            self.paths, assume_legacy=True
+                        )
+                    else:
+                        cleanup_changed, cleanup_warnings = cleanup_optional_assets(
+                            self.paths,
+                            plugin_id,
+                            assume_legacy=True,
+                        )
                     changed.extend(cleanup_changed)
                     _actions, reload_warnings = reload_restored_integration(
                         plugin_id, cleanup_changed

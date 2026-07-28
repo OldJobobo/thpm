@@ -45,6 +45,8 @@ thpm enable firefox
 thpm disable firefox
 thpm doctor
 thpm run
+thpm zed status
+thpm zed setup
 thpm ui open
 thpm tui
 thpm update
@@ -64,6 +66,12 @@ The TUI uses the active Omarchy semantic palette and falls back to a readable bu
 Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Hook and JSON output distinguish applied, unchanged, skipped, and failed integrations, and Doctor flags enabled plugins that are no longer actionable. THPM-generated fallbacks are refused if Omarchy leaves an unresolved `{{ ... }}` placeholder, preventing malformed generated content from being copied into application configuration; explicit theme-provided assets keep their existing precedence. Conditional GTK CSS and validated local VS Code theme fallbacks cover Quattro native-ownership gaps only when the active theme requests them. Omarchy-native integrations are shown read-only so ownership stays clear. Disabling an integration stops future synchronization and removes its THPM template, but deliberately preserves configuration already installed into an application. Likewise, uninstall removes THPM's hook, templates, and control surfaces without deleting application configuration that may have been modified by the user.
 
 The two Discord choices are mutually exclusive: `discord` provides the compact palette mapping, while `discord-system24` provides the full System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template.
+
+### Zed authored themes
+
+Omarchy's optional `omazed` package is the generated-color fallback for Zed. THPM does not modify Omazed's executable, hook, or `~/.config/zed/themes/omazed.json`. Instead, the opt-in `zed-extra` integration installs a richer authored asset when the active theme provides `zed.json` or, as a compatibility fallback, `aether.zed.json`. Canonical `zed.json` wins when both exist.
+
+THPM validates the authored JSON and normalizes its single dark or light theme to the stable name **THPM Current** at `~/.config/zed/themes/thpm-current.json`. Run `thpm zed setup` once to enable the integration, back up `settings.json` under THPM state, and safely select that stable name without discarding JSONC comments or keys outside the replaced theme value. Normal theme hooks update only the managed theme file and never rewrite Zed settings. Use `thpm zed status` to see the selected source, synchronization state, current Zed selection, and whether Omazed is available. If an authored asset disappears, THPM relinquishes its file and reports the Omazed fallback honestly; select **Omazed** in Zed if you want to switch to generated colors.
 
 ## Development
 

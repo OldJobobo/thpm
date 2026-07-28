@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.0.0rc12 - 2026-07-28
+
+- Add validated authored Zed theme support with `zed.json` / `aether.zed.json` precedence, a stable **THPM Current** identity, restorable installation, fail-closed legacy migration, and strict separation from the independently owned Omazed fallback.
+- Add `thpm zed status` diagnostics and a confirmed one-time `thpm zed setup` flow that backs up and safely updates JSONC settings without letting normal theme hooks rewrite them.
+- Let the graphical manager use the native Omarchy floating-window background and compositor-owned border instead of drawing duplicate outer window chrome.
+- Preserve and restore optional, generated, browser, Discord, and Zellij outputs when integrations are disabled, themes stop providing assets, or THPM is uninstalled; preserve user-modified targets and positively identify legacy managed files before cleanup.
+- Correct AUR updater progress totals after package installation selects its reconciliation path.
+
 ## 1.0.0rc11 - 2026-07-25
 
 - Suspend THPM's Rich live progress display while Yay owns the terminal so package output remains readable and sudo password prompts remain visible and usable.

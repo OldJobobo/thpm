@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -19,6 +21,11 @@ from .files import atomic_copy, atomic_text, remove_managed_block
 from .models import ApplyResult
 from .paths import Paths
 from .registry import BY_ID, PLUGINS
+from .zed import ZedThemeError
+from .zed import legacy_target as zed_legacy_target
+from .zed import normalized as normalized_zed_theme
+from .zed import source as zed_source
+from .zed import target as zed_target
 
 GENERATED = {
     "fish": "thpm-fish.fish",
@@ -84,7 +91,6 @@ def _optional_asset_targets(
             ),
         ),
         "cliamp": (("cliamp", "cliamp.toml", config / "cliamp/themes/omarchy.toml"),),
-        "zed-extra": (("zed-extra", "zed.json", config / "zed/themes/omarchy.json"),),
     }
     return targets.get(plugin_id, ())
 
@@ -424,6 +430,66 @@ def cleanup_optional_assets(
     return changed, warnings
 
 
+def _cleanup_legacy_zed_asset(
+    paths: Paths, *, assume_legacy: bool = False
+) -> tuple[list[str], list[str]]:
+    legacy = zed_legacy_target(paths)
+    legacy_owned = assume_legacy and _matches_sources(
+        legacy, _current_plugin_sources(paths, "zed-extra")
+    )
+    return _cleanup_optional_asset(
+        paths, "zed-extra", legacy, legacy_owned=legacy_owned
+    )
+
+
+def cleanup_zed_assets(
+    paths: Paths, *, assume_legacy: bool = False
+) -> tuple[list[str], list[str]]:
+    """Relinquish the stable authored theme and migrate the former Omarchy target."""
+    changed, warnings = _cleanup_optional_asset(
+        paths, "zed-thpm-current", zed_target(paths)
+    )
+    legacy_changed, legacy_warnings = _cleanup_legacy_zed_asset(
+        paths, assume_legacy=assume_legacy
+    )
+    changed.extend(legacy_changed)
+    warnings.extend(legacy_warnings)
+    return changed, warnings
+
+
+def _apply_zed_asset(paths: Paths) -> ApplyResult:
+    source = zed_source(paths)
+    if source is None:
+        changed, warnings = cleanup_zed_assets(paths, assume_legacy=True)
+        return _result("zed-extra", changed, [], warnings)
+
+    # Validate and normalize completely before cleaning up or replacing any target.
+    content, _appearance = normalized_zed_theme(source)
+    legacy_changed, warnings = _cleanup_legacy_zed_asset(
+        paths, assume_legacy=True
+    )
+    paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix=".zed-current-", suffix=".json", dir=paths.thpm_state_dir, text=True
+    )
+    rendered = Path(temporary)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        changed = _install_optional_asset(
+            paths,
+            "zed-thpm-current",
+            rendered,
+            zed_target(paths),
+        )
+    finally:
+        rendered.unlink(missing_ok=True)
+    paths_changed = list(legacy_changed)
+    if changed:
+        paths_changed.append(str(zed_target(paths)))
+    return _result("zed-extra", paths_changed, [], warnings)
+
+
 def _ensure_generated_output_is_rendered(source: Path) -> None:
     match = UNRESOLVED_PLACEHOLDER.search(source.read_text())
     if match:
@@ -513,6 +579,17 @@ def inspect_readiness(
     if plugin_id == "zellij" and not assets:
         # Cleanup must remain actionable after Zellij is uninstalled.
         missing = []
+    elif plugin_id == "zed-extra":
+        # Missing authored assets relinquish THPM ownership even if Zed was removed;
+        # an available source still requires the application and valid JSON.
+        source = zed_source(paths)
+        if source is None:
+            missing = []
+        else:
+            try:
+                normalized_zed_theme(source)
+            except ZedThemeError as exc:
+                missing.append(str(exc))
     elif plugin_id in OPTIONAL_ASSET_PLUGINS and not assets:
         # Missing opt-in assets mean "restore defaults", not "unavailable".
         missing = []
@@ -947,6 +1024,8 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
         return apply_gtk(paths)
     if plugin_id == "vscode-local-compat":
         return apply_vscode_local(paths)
+    if plugin_id == "zed-extra":
+        return _apply_zed_asset(paths)
     paths.current_theme.mkdir(parents=True, exist_ok=True)
     changed: list[str] = []
     warnings: list[str] = []

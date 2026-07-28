@@ -40,6 +40,9 @@ def parser() -> argparse.ArgumentParser:
     for name in ("state", "install", "remove", "status", "open"):
         sub = ui_sub.add_parser(name); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
     surface = ui_sub.add_parser("surface"); surface.add_argument("surface", nargs="?", choices=("gui", "tui", "toggle")); surface.add_argument("--json", action="store_true"); surface.add_argument("-v", "--verbose", action="store_true", default=True); surface.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+    zed = commands.add_parser("zed", help="inspect or configure the authored Zed theme override"); zed_sub = zed.add_subparsers(dest="zed_command", required=True)
+    zed_status = zed_sub.add_parser("status", help="show authored-theme and Omazed fallback diagnostics"); zed_status.add_argument("--json", action="store_true"); zed_status.add_argument("-v", "--verbose", action="store_true", default=True); zed_status.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+    zed_setup = zed_sub.add_parser("setup", help="select THPM Current with a one-time settings backup"); zed_setup.add_argument("--yes", action="store_true"); zed_setup.add_argument("--json", action="store_true"); zed_setup.add_argument("-v", "--verbose", action="store_true", default=True); zed_setup.add_argument("-q", "--quiet", action="store_false", dest="verbose")
     update = commands.add_parser("update"); update.add_argument("--json", action="store_true"); update.add_argument("-v", "--verbose", action="store_true", default=True); update.add_argument("-q", "--quiet", action="store_false", dest="verbose")
     update_sub = update.add_subparsers(dest="update_command")
     check = update_sub.add_parser("check"); check.add_argument("--force", action="store_true"); check.add_argument("--json", action="store_true"); check.add_argument("-v", "--verbose", action="store_true", default=True); check.add_argument("-q", "--quiet", action="store_false", dest="verbose")
@@ -74,6 +77,15 @@ def _set_enabled(service: Service, args: argparse.Namespace, value: bool, json_m
     return payload
 
 
+def _zed_setup(service: Service, args: argparse.Namespace, json_mode: bool) -> dict[str, object]:
+    payload = service.zed_setup(confirmed=bool(args.yes))
+    if payload.get("confirmationRequired") and not json_mode and sys.stdin.isatty():
+        answer = input("Configure Zed to use THPM Current and back up its settings? [y/N] ")
+        if answer.strip().lower() in {"y", "yes"}:
+            payload = service.zed_setup(confirmed=True)
+    return payload
+
+
 def _execute(
     service: Service,
     paths: Paths,
@@ -97,6 +109,8 @@ def _execute(
         run_tui(service=service, paths=paths)
         return None
     if command == "hook-run": return service.hook_run(args.event, args.event_args)
+    if command == "zed":
+        return service.zed_status() if args.zed_command == "status" else _zed_setup(service, args, json_mode)
     if command == "update":
         if args.update_command in {None, "apply"}: return service.update_apply()
         return service.update_check(args.update_command == "check" and args.force)

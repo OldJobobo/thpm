@@ -12,6 +12,7 @@ from .integrations import inspect_applicability, inspect_readiness
 from .models import PluginView
 from .paths import Paths
 from .registry import NATIVE, PLUGINS
+from .zed import status as zed_status
 
 
 def _compat_synchronized(plugin_id: str, paths: Paths) -> bool:
@@ -62,6 +63,10 @@ def build(paths: Paths, enabled: dict[str, bool]) -> list[PluginView]:
             warnings.append("enabled but not actionable: " + ", ".join(missing))
         elif is_enabled and applicable and not _compat_synchronized(plugin.id, paths):
             warnings.append("requested compatibility output is not synchronized")
+        if plugin.id == "zed-extra" and is_enabled and applicable:
+            warnings.extend(
+                message for message in zed_status(paths)["warnings"] if message not in warnings
+            )
         result.append(
             PluginView(
                 id=plugin.id,

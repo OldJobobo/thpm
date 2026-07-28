@@ -17,7 +17,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("zellij", "Zellij", "Terminal", "Apply an optional theme-provided Zellij theme and otherwise preserve Zellij defaults.", "apply", ("zellij",), theme_assets=("zellij.kdl",), default_enabled=False),
     Plugin("typora", "Typora", "Writing", "Install optional Typora CSS and restore the prior file when absent.", "apply", ("typora",), theme_assets=("typora.css",)),
     Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Install dock colors; restart the dock to apply them.", "hybrid", ("nwg-dock-hyprland",), templates=("thpm-nwg-dock.css.tpl",)),
-    Plugin("zed-extra", "Zed extras", "Editors", "Apply optional Zed extras and restore the prior file when absent.", "apply", ("zeditor",), theme_assets=("zed.json",), default_enabled=False),
+    Plugin("zed-extra", "Zed authored theme", "Editors", "Install a validated zed.json or aether.zed.json override as the stable THPM Current theme.", "apply", ("zeditor",), theme_assets=("zed.json", "aether.zed.json"), default_enabled=False),
     Plugin("swaync", "SwayNC", "Desktop", "Install optional SwayNC colors, restore prior defaults when absent, and reload.", "apply", ("swaync-client",), theme_assets=("colors.css",)),
     Plugin("windsurf", "Windsurf", "Editors", "Install the Omarchy editor theme and restore the prior file when absent.", "apply", ("windsurf",), theme_assets=("vscode-theme.json",)),
     Plugin("cava", "Cava", "Media", "Install and reload a Cava gradient.", "hybrid", ("cava",), theme_assets=("cava_theme",), templates=("thpm-cava.ini.tpl",)),

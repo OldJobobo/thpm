@@ -55,6 +55,10 @@ class Paths:
         return self.thpm_state_dir / "managed-assets"
 
     @property
+    def zed_settings_backup_file(self) -> Path:
+        return self.thpm_state_dir / "zed-settings.backup.json"
+
+    @property
     def canonical_palette_migration_marker(self) -> Path:
         return self.thpm_state_dir / "migrations/canonical-palette-v1"
 

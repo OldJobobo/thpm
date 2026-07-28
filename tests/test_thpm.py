@@ -35,6 +35,14 @@ from thpm.service import Service
 from thpm.state import StateError, load, save
 from thpm.templates import reconcile
 from thpm.tui import ThpmTui, omarchy_theme
+from thpm.zed import (
+    MAX_THEME_BYTES,
+    THEME_NAME,
+    ZedThemeError,
+    configure_settings,
+    normalized,
+)
+from thpm.zed import status as zed_status
 
 COLORS = {
     "mode": "dark", "bg": "#111111", "dark_bg": "#101010", "darker_bg": "#090909",
@@ -56,6 +64,15 @@ CANONICAL_NAMES = {
     "bright_fg": "bright_foreground",
 }
 CANONICAL_COLORS = {CANONICAL_NAMES.get(key, key): value for key, value in COLORS.items()}
+
+
+def zed_theme(name: str = "Source", appearance: str = "dark") -> str:
+    return json.dumps({
+        "$schema": "https://zed.dev/schema/themes/v0.1.0.json",
+        "name": name,
+        "author": "Theme Author",
+        "themes": [{"name": name, "appearance": appearance, "style": {"background": "#123456"}}],
+    }) + "\n"
 
 
 def resolver_output(colors: dict[str, str]) -> str:
@@ -401,6 +418,8 @@ class UiTests(Sandbox):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertIn("FloatingWindow {", qml)
         self.assertIn('title: "THPM Theme Hook Plugins"', qml)
+        self.assertIn("color: Color.popups.background", qml)
+        self.assertNotIn("id: card", qml)
         self.assertNotIn("PanelWindow {", qml)
         self.assertNotIn("WlrLayershell.", qml)
 
@@ -938,6 +957,23 @@ class CliTests(unittest.TestCase):
         service_type.return_value.hook_run.assert_called_once_with("theme-set", ["tokyo-night", "dark"])
         self.assertEqual(json.loads(stdout.getvalue()), response)
 
+    def test_zed_status_and_setup_json_envelopes(self):
+        status = {"ok": True, "operation": "zed-status", "result": {}}
+        setup = {"ok": True, "operation": "zed-setup", "result": {}}
+        with patch("thpm.cli.Service") as service_type, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            service_type.return_value.zed_status.return_value = status
+            self.assertEqual(main(["--json", "zed", "status"]), 0)
+            self.assertEqual(json.loads(stdout.getvalue()), status)
+        with patch("thpm.cli.Service") as service_type, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            service_type.return_value.zed_setup.return_value = setup
+            self.assertEqual(main(["--json", "zed", "setup", "--yes"]), 0)
+            service_type.return_value.zed_setup.assert_called_once_with(confirmed=True)
+            self.assertEqual(json.loads(stdout.getvalue()), setup)
+
     def test_tui_command_launches_alternate_frontend(self):
         with patch("thpm.tui.run_tui") as run_tui:
             exit_code = main(["tui"])
@@ -1107,6 +1143,285 @@ class TuiTests(Sandbox):
                     await pilot.pause()
             launch.assert_called_once_with("https://ko-fi.com/oldjobobo")
         asyncio.run(exercise())
+
+
+class ZedTests(Sandbox):
+    def setUp(self):
+        super().setUp()
+        command_probe = patch("thpm.snapshot.shutil.which", return_value="/usr/bin/zeditor")
+        command_probe.start()
+        self.addCleanup(command_probe.stop)
+
+    def write_zed(self, name: str = "zed.json", *, appearance: str = "dark") -> Path:
+        source = self.paths.current_theme / name
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(zed_theme(name, appearance))
+        return source
+
+    def test_authored_source_precedence_and_normalization(self):
+        canonical = self.write_zed("zed.json")
+        self.write_zed("aether.zed.json")
+        result = apply("zed-extra", self.paths)
+        target = self.paths.config_home / "zed/themes/thpm-current.json"
+        payload = json.loads(target.read_text())
+        self.assertEqual(payload["name"], THEME_NAME)
+        self.assertEqual(payload["themes"][0]["name"], THEME_NAME)
+        self.assertEqual(payload["author"], "Theme Author")
+        self.assertEqual(payload["themes"][0]["style"]["background"], "#123456")
+        self.assertIn(str(target), result.changed)
+        self.assertEqual(zed_status(self.paths)["source"], str(canonical))
+
+        unchanged = apply("zed-extra", self.paths)
+        self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(unchanged.changed, [])
+
+    def test_aether_source_is_supported_without_touching_aether_or_omazed(self):
+        self.write_zed("aether.zed.json")
+        aether = self.paths.config_home / "zed/themes/aether.json"
+        omazed = self.paths.config_home / "zed/themes/omazed.json"
+        aether.parent.mkdir(parents=True)
+        aether.write_text("aether user theme")
+        omazed.write_text("generated fallback")
+        apply("zed-extra", self.paths)
+        self.assertEqual(aether.read_text(), "aether user theme")
+        self.assertEqual(omazed.read_text(), "generated fallback")
+        self.assertTrue((self.paths.config_home / "zed/themes/thpm-current.json").is_file())
+
+    def test_disable_removes_authored_target_without_touching_omazed(self):
+        self.write_zed()
+        omazed = self.paths.config_home / "zed/themes/omazed.json"
+        omazed.parent.mkdir(parents=True)
+        omazed.write_text("generated fallback")
+        apply("zed-extra", self.paths)
+        payload = Service(self.paths).set_enabled("zed-extra", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertFalse((self.paths.config_home / "zed/themes/thpm-current.json").exists())
+        self.assertEqual(omazed.read_text(), "generated fallback")
+
+    def test_authored_source_requires_zed_but_missing_source_allows_cleanup(self):
+        self.write_zed()
+        available, missing, _warnings = inspect_readiness(
+            "zed-extra", self.paths, which=lambda _command: None
+        )
+        self.assertFalse(available)
+        self.assertIn("zeditor", missing)
+        (self.paths.current_theme / "zed.json").unlink()
+        available, missing, _warnings = inspect_readiness(
+            "zed-extra", self.paths, which=lambda _command: None
+        )
+        self.assertTrue(available)
+        self.assertEqual(missing, [])
+
+    def test_validation_failures_do_not_mutate_target(self):
+        target = self.paths.config_home / "zed/themes/thpm-current.json"
+        target.parent.mkdir(parents=True)
+        target.write_text("keep")
+        cases = [
+            "not json",
+            json.dumps([]),
+            json.dumps({"themes": []}),
+            json.dumps({"themes": [{"appearance": "dark", "style": {}}, {"appearance": "light", "style": {}}]}),
+            json.dumps({"themes": [{"appearance": "system", "style": {}}]}),
+            json.dumps({"themes": [{"appearance": "dark", "style": "bad"}]}),
+            '{"themes":[{"appearance":"dark","style":{"bad":NaN}}]}',
+        ]
+        for content in cases:
+            with self.subTest(content=content):
+                source = self.paths.current_theme / "zed.json"
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(content)
+                with self.assertRaises(ZedThemeError):
+                    apply("zed-extra", self.paths)
+                self.assertEqual(target.read_text(), "keep")
+        source.write_bytes(b"\xff")
+        with self.assertRaises(ZedThemeError):
+            apply("zed-extra", self.paths)
+        self.assertEqual(target.read_text(), "keep")
+        source.write_bytes(b"x" * (MAX_THEME_BYTES + 1))
+        with self.assertRaises(ZedThemeError):
+            apply("zed-extra", self.paths)
+        self.assertEqual(target.read_text(), "keep")
+
+    def test_symlinked_source_is_rejected(self):
+        real = self.paths.home / "theme.json"
+        real.write_text(zed_theme())
+        source = self.paths.current_theme / "zed.json"
+        source.parent.mkdir(parents=True)
+        source.symlink_to(real)
+        with self.assertRaisesRegex(ZedThemeError, "regular file"):
+            normalized(source)
+
+    def test_missing_source_restores_target_and_preserves_user_changes(self):
+        source = self.write_zed()
+        target = self.paths.config_home / "zed/themes/thpm-current.json"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        apply("zed-extra", self.paths)
+        source.unlink()
+        restored = apply("zed-extra", self.paths)
+        self.assertEqual(target.read_text(), "user default")
+        self.assertIn(str(target), restored.changed)
+
+        source = self.write_zed()
+        apply("zed-extra", self.paths)
+        target.write_text("user changed")
+        source.unlink()
+        preserved = apply("zed-extra", self.paths)
+        self.assertEqual(target.read_text(), "user changed")
+        self.assertIn("preserved user-modified file", preserved.warnings[0])
+
+    def test_legacy_omarchy_target_state_is_migrated_fail_closed(self):
+        legacy = self.paths.config_home / "zed/themes/omarchy.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("managed old")
+        state = self.paths.managed_asset_state_dir / "zed-extra.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({
+            "existed": False,
+            "managedSha256": hashlib.sha256(b"managed old").hexdigest(),
+            "managedMode": 0o644,
+        }))
+        self.write_zed()
+        result = apply("zed-extra", self.paths)
+        self.assertFalse(legacy.exists())
+        self.assertIn(str(legacy), result.changed)
+
+        legacy.write_text("user changed")
+        state.write_text("invalid")
+        preserved = apply("zed-extra", self.paths)
+        self.assertEqual(legacy.read_text(), "user changed")
+        self.assertIn("state is invalid", " ".join(preserved.warnings))
+
+    def test_missing_source_migrates_a_positively_matched_stateless_legacy_target(self):
+        installed = self.paths.config_home / "omarchy/themes/old"
+        installed.mkdir(parents=True)
+        content = zed_theme()
+        (installed / "zed.json").write_text(content)
+        legacy = self.paths.config_home / "zed/themes/omarchy.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(content)
+
+        result = apply("zed-extra", self.paths)
+
+        self.assertFalse(legacy.exists())
+        self.assertIn(str(legacy), result.changed)
+
+    def test_status_reads_jsonc_string_and_mode_object(self):
+        self.write_zed()
+        settings = self.paths.config_home / "zed/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text('// keep\n{"theme": "THPM Current", "x": [1, 2,],}\n')
+        self.assertEqual(zed_status(self.paths)["selectedTheme"], THEME_NAME)
+        settings.write_text('{"theme": {"mode": "system", "light": "Light", // note\n"dark": "Dark",},}\n')
+        self.assertEqual(zed_status(self.paths)["selectedTheme"], "Dark")
+        (self.paths.current_theme / "zed.json").write_text(zed_theme(appearance="light"))
+        self.assertEqual(zed_status(self.paths)["selectedTheme"], "Light")
+        settings.write_text('{"theme": "Name, }"}\n')
+        self.assertEqual(zed_status(self.paths)["selectedTheme"], "Name, }")
+
+    def test_setup_confirmation_backup_and_comment_preservation(self):
+        self.write_zed()
+        settings = self.paths.config_home / "zed/settings.json"
+        settings.parent.mkdir(parents=True)
+        original = '// user comment\n{\n  "project_panel": {"dock": "left"},\n  "theme": {"mode": "system", "light": "One Light", "dark": "Old"}\n}\n'
+        settings.write_text(original)
+        pending = Service(self.paths).zed_setup()
+        self.assertFalse(pending["ok"])
+        self.assertTrue(pending["confirmationRequired"])
+        self.assertEqual(settings.read_text(), original)
+        completed = Service(self.paths).zed_setup(confirmed=True)
+        self.assertTrue(completed["ok"])
+        self.assertIn("// user comment", settings.read_text())
+        self.assertIn('"project_panel": {"dock": "left"}', settings.read_text())
+        self.assertIn('"theme": "THPM Current"', settings.read_text())
+        self.assertEqual(self.paths.zed_settings_backup_file.read_text(), original)
+        self.assertTrue(load(self.paths)["zed-extra"])
+        backup = self.paths.zed_settings_backup_file.read_text()
+        configure_settings(self.paths)
+        self.assertEqual(self.paths.zed_settings_backup_file.read_text(), backup)
+
+    def test_setup_adds_missing_theme_key_without_dropping_comments(self):
+        self.write_zed()
+        settings = self.paths.config_home / "zed/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text('{\n  // keep this setting\n  "buffer_font_size": 15\n}\n')
+        result = Service(self.paths).zed_setup(confirmed=True)
+        self.assertTrue(result["ok"])
+        self.assertIn("// keep this setting", settings.read_text())
+        self.assertEqual(zed_status(self.paths)["selectedTheme"], THEME_NAME)
+
+    def test_setup_fails_before_enabling_when_settings_are_not_safe_to_edit(self):
+        self.write_zed()
+        settings = self.paths.config_home / "zed/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text('{"theme": "Old", broken}\n')
+        result = Service(self.paths).zed_setup(confirmed=True)
+        self.assertFalse(result["ok"])
+        self.assertFalse(load(self.paths)["zed-extra"])
+        self.assertFalse((self.paths.config_home / "zed/themes/thpm-current.json").exists())
+        self.assertEqual(settings.read_text(), '{"theme": "Old", broken}\n')
+
+        settings.write_text('{"unrelated": nope, "theme": "Old"}\n')
+        result = Service(self.paths).zed_setup(confirmed=True)
+        self.assertFalse(result["ok"])
+        self.assertFalse(load(self.paths)["zed-extra"])
+        self.assertEqual(settings.read_text(), '{"unrelated": nope, "theme": "Old"}\n')
+
+    def test_setup_rolls_back_settings_state_and_target_when_apply_fails(self):
+        self.write_zed()
+        settings = self.paths.config_home / "zed/settings.json"
+        settings.parent.mkdir(parents=True)
+        original = '// keep\n{"theme": "Old"}\n'
+        settings.write_text(original)
+
+        with patch("thpm.service.apply_integration", side_effect=RuntimeError("apply failed")):
+            result = Service(self.paths).zed_setup(confirmed=True)
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(load(self.paths)["zed-extra"])
+        self.assertEqual(settings.read_text(), original)
+        self.assertFalse((self.paths.config_home / "zed/themes/thpm-current.json").exists())
+
+    def test_setup_restores_legacy_target_and_backup_when_install_fails(self):
+        source = self.write_zed()
+        legacy = self.paths.config_home / "zed/themes/omarchy.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(source.read_bytes())
+        settings = self.paths.config_home / "zed/settings.json"
+        settings.write_text('{"theme": "Old"}\n')
+
+        with patch(
+            "thpm.integrations._install_optional_asset",
+            side_effect=RuntimeError("install failed"),
+        ):
+            result = Service(self.paths).zed_setup(confirmed=True)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(legacy.read_bytes(), source.read_bytes())
+        self.assertEqual(settings.read_text(), '{"theme": "Old"}\n')
+        self.assertFalse(self.paths.zed_settings_backup_file.exists())
+        self.assertFalse(
+            (self.paths.managed_asset_state_dir / "zed-extra.legacy-checked").exists()
+        )
+        self.assertFalse(load(self.paths)["zed-extra"])
+
+    def test_human_status_renders_zed_diagnostics(self):
+        stream = io.StringIO()
+        render(Service(self.paths).zed_status(), console=Console(file=stream, force_terminal=False))
+        output = stream.getvalue()
+        self.assertIn("Source", output)
+        self.assertIn("Target", output)
+        self.assertIn("Selected", output)
+        self.assertIn("Omazed", output)
+
+    def test_status_reports_omazed_fallback_without_claiming_automatic_selection(self):
+        fallback = self.paths.config_home / "zed/themes/omazed.json"
+        fallback.parent.mkdir(parents=True)
+        fallback.write_text("generated")
+        result = zed_status(self.paths, which=lambda command: "/usr/bin/omazed")
+        self.assertEqual(result["omazed"]["command"], "/usr/bin/omazed")
+        self.assertTrue(result["omazed"]["outputExists"])
+        self.assertIn("select Omazed", " ".join(result["warnings"]))
 
 
 class IntegrationTests(Sandbox):
@@ -1309,7 +1624,6 @@ class IntegrationTests(Sandbox):
                 self.paths.home / ".windsurf/extensions/local.omarchy-theme/themes/omarchy.json",
             ),
             "cliamp": ("cliamp.toml", self.paths.config_home / "cliamp/themes/omarchy.toml"),
-            "zed-extra": ("zed.json", self.paths.config_home / "zed/themes/omarchy.json"),
         }
         with patch("thpm.integrations._reload", return_value=[]):
             for plugin_id, (asset_name, target) in cases.items():
@@ -1923,7 +2237,7 @@ class UpdateTests(Sandbox):
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc11")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc12")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)

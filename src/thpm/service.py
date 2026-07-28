@@ -269,6 +269,8 @@ class Service:
         if value and plugin.confirmation and not confirmed:
             return envelope(operation, False, summary=f"confirmation required to enable {plugin_id}",
                 confirmationRequired=True, plugin=view, errors=[])
+        if value and plugin_id == "zed-extra":
+            return self.zed_setup(confirmed=True)
         warnings: list[dict[str, str]] = []
         with mutation_lock(self.paths):
             enabled = load(self.paths)

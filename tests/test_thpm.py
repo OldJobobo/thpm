@@ -232,7 +232,7 @@ class StateTests(Sandbox):
 
     def test_sensitive_plugins_are_opt_in_by_default(self):
         enabled = load(self.paths)
-        self.assertTrue(all(not enabled[plugin_id] for plugin_id in ("firefox", "zen", "steam")))
+        self.assertTrue(all(not enabled[plugin_id] for plugin_id in ("firefox", "zen", "steam", "zed-extra")))
         self.assertTrue(enabled["gtk-css-compat"])
         self.assertTrue(enabled["vscode-local-compat"])
 
@@ -1186,6 +1186,24 @@ class ZedTests(Sandbox):
         self.assertEqual(aether.read_text(), "aether user theme")
         self.assertEqual(omazed.read_text(), "generated fallback")
         self.assertTrue((self.paths.config_home / "zed/themes/thpm-current.json").is_file())
+
+    def test_enabling_through_normal_plugin_flow_selects_the_authored_theme(self):
+        self.write_zed()
+        settings = self.paths.config_home / "zed/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text('{"theme": "Old"}\n')
+        service = Service(self.paths)
+
+        pending = service.set_enabled("zed-extra", True, refresh=False)
+        completed = service.set_enabled(
+            "zed-extra", True, confirmed=True, refresh=False
+        )
+
+        self.assertFalse(pending["ok"])
+        self.assertTrue(pending["confirmationRequired"])
+        self.assertTrue(completed["ok"])
+        self.assertEqual(zed_status(self.paths)["selectedTheme"], THEME_NAME)
+        self.assertTrue(load(self.paths)["zed-extra"])
 
     def test_disable_removes_authored_target_without_touching_omazed(self):
         self.write_zed()
@@ -2237,7 +2255,7 @@ class UpdateTests(Sandbox):
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc12")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc13")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)

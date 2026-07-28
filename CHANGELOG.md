@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc13 - 2026-07-28
+
+- Make the normal CLI, TUI, and graphical-manager enable flow for Zed confirm, install, and select **THPM Current** transactionally instead of requiring a separate setup command.
+
 ## 1.0.0rc12 - 2026-07-28
 
 - Add validated authored Zed theme support with `zed.json` / `aether.zed.json` precedence, a stable **THPM Current** identity, restorable installation, fail-closed legacy migration, and strict separation from the independently owned Omazed fallback.

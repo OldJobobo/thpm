@@ -60,6 +60,7 @@ class Activity:
         self._task: int | None = None
         self._steps = 0
         self._last_message = _LABELS.get(operation, operation.replace("-", " ").title())
+        self._successful: bool | None = None
 
     def __enter__(self) -> Activity:
         if self.enabled:
@@ -115,11 +116,19 @@ class Activity:
             if active:
                 self._progress.start()
 
+    def finish(self, successful: bool) -> None:
+        self._successful = successful
+
     def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
         if self._progress is not None and self._task is not None:
-            task = self._progress.tasks[self._task]
-            self._progress.update(self._task, completed=task.total, description=self._last_message)
-            self._progress.refresh()
+            if _type is None and self._successful is not False:
+                task = self._progress.tasks[self._task]
+                self._progress.update(
+                    self._task,
+                    completed=task.total,
+                    description=self._last_message,
+                )
+                self._progress.refresh()
             self._progress.stop()
 
 

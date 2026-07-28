@@ -19,7 +19,7 @@ from textual.widgets import Button, Link
 
 from thpm import palette, ui
 from thpm import update as updater
-from thpm.cli import main
+from thpm.cli import _confirm, main
 from thpm.integrations import (
     _browser_import,
     _reload,
@@ -548,6 +548,39 @@ class ServiceTests(Sandbox):
         self.assertFalse(target.exists())
         self.assertFalse(source.exists())
 
+    def test_refresh_failure_reports_that_enablement_was_committed(self):
+        assets = Path(__file__).parents[1] / "assets"
+        failed = subprocess.CompletedProcess([], 1, "", "refresh failed")
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service.run", return_value=failed
+        ):
+            payload = Service(self.paths).set_enabled("branding", True)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["committed"])
+        self.assertTrue(payload["stateChanged"])
+        self.assertTrue(load(self.paths)["branding"])
+        self.assertIn("setting was saved", payload["summary"])
+
+    def test_enable_disable_reports_progress_instead_of_sitting_at_zero(self):
+        stages: list[str] = []
+        payload = Service(
+            self.paths, progress=lambda message, _detail=None: stages.append(message)
+        ).set_enabled("branding", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            stages,
+            [
+                "Checking integration",
+                "Updating integration state",
+                "Verifying integration state",
+            ],
+        )
+
+    def test_unknown_plugin_suggests_the_closest_valid_id(self):
+        payload = Service(self.paths).set_enabled("zed-etra", True, refresh=False)
+        self.assertFalse(payload["ok"])
+        self.assertIn("did you mean zed-extra?", payload["summary"])
+
     def test_sensitive_plugin_requires_service_confirmation(self):
         assets = Path(__file__).parents[1] / "assets"
         browser = self.paths.home / ".mozilla/firefox"
@@ -676,6 +709,24 @@ class ServiceTests(Sandbox):
         self.assertTrue(payload["migration"]["refreshed"])
         self.assertTrue(self.paths.canonical_palette_migration_marker.is_file())
         install_ui.assert_called_once_with(self.paths)
+        run.assert_called_once_with("theme", "refresh", check=False, timeout=180)
+
+    def test_reinstall_refreshes_even_after_one_time_migration_completed(self):
+        assets = Path(__file__).parents[1] / "assets"
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text("complete\n")
+        refreshed = subprocess.CompletedProcess([], 0, "", "")
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service.capabilities"
+        ) as caps, patch(
+            "thpm.service.ui.install", return_value={"installed": True}
+        ), patch("thpm.service.run", return_value=refreshed) as run:
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            payload = Service(self.paths).install()
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["migration"]["refreshed"])
         run.assert_called_once_with("theme", "refresh", check=False, timeout=180)
 
     def test_palette_upgrade_refresh_is_idempotent_and_retries_failures(self):
@@ -893,6 +944,16 @@ class PresentationTests(unittest.TestCase):
             self.assertEqual(task.completed, 1)
         self.assertNotIn("•", output.getvalue())
 
+    def test_activity_does_not_show_failed_operation_as_complete(self):
+        output = io.StringIO()
+        console = Console(
+            file=output, force_terminal=True, color_system="standard", width=100
+        )
+        with Activity("enable", console=console) as activity:
+            activity.step("Checking integration")
+            activity.finish(False)
+        self.assertNotIn("100%", output.getvalue())
+
     def test_activity_reporter_can_suspend_live_rendering_for_terminal_subprocesses(self):
         output = io.StringIO()
         console = Console(file=output, force_terminal=True, color_system="standard", width=100)
@@ -906,8 +967,54 @@ class PresentationTests(unittest.TestCase):
             self.assertTrue(activity._progress.live.is_started)
         self.assertIn("[sudo] password for user:", output.getvalue())
 
+    def test_confirmation_suspends_live_progress_while_waiting_for_input(self):
+        output = io.StringIO()
+        console = Console(
+            file=output, force_terminal=True, color_system="standard", width=100
+        )
+        with Activity("enable", console=console) as activity:
+            def answer(_message: str) -> str:
+                self.assertFalse(activity._progress.live.is_started)
+                return "yes"
+
+            with patch("builtins.input", side_effect=answer):
+                self.assertTrue(_confirm("Continue? ", activity))
+            self.assertTrue(activity._progress.live.is_started)
+
 
 class CliTests(unittest.TestCase):
+    def test_json_usage_errors_are_machine_readable(self):
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout, patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as stderr:
+            with self.assertRaisesRegex(SystemExit, "2"):
+                main(["--json", "not-a-command"])
+        payload = json.loads(stdout.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["operation"], "parse")
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_confirmation_eof_is_a_clean_decline(self):
+        with patch("builtins.input", side_effect=EOFError):
+            self.assertFalse(_confirm("Continue? "))
+
+    def test_confirmation_does_not_wait_when_output_is_redirected(self):
+        pending = {
+            "ok": False,
+            "summary": "confirmation required",
+            "confirmationRequired": True,
+            "errors": [],
+        }
+        with patch("thpm.cli.Service") as service_type, patch(
+            "thpm.cli.render"
+        ), patch("thpm.cli.sys.stdin.isatty", return_value=True), patch(
+            "thpm.cli.sys.stdout.isatty", return_value=False
+        ), patch("builtins.input") as input_prompt:
+            service_type.return_value.set_enabled.return_value = pending
+            exit_code = main(["enable", "firefox"])
+        self.assertEqual(exit_code, 1)
+        input_prompt.assert_not_called()
+
     def test_human_output_is_verbose_by_default(self):
         response = {"ok": True, "summary": "THPM is current", "errors": []}
         with patch("thpm.cli.Service") as service_type, patch("thpm.cli.render") as render_output:
@@ -932,7 +1039,7 @@ class CliTests(unittest.TestCase):
             service_type.return_value.update_apply.return_value = response
             exit_code = main(["update", "--json"])
         self.assertEqual(exit_code, 0)
-        service_type.return_value.update_apply.assert_called_once_with()
+        service_type.return_value.update_apply.assert_called_once_with(interactive=False)
         service_type.return_value.update_check.assert_not_called()
         self.assertEqual(json.loads(stdout.getvalue()), response)
 
@@ -973,6 +1080,33 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["--json", "zed", "setup", "--yes"]), 0)
             service_type.return_value.zed_setup.assert_called_once_with(confirmed=True)
             self.assertEqual(json.loads(stdout.getvalue()), setup)
+
+    def test_update_parent_options_survive_nested_subcommand_parsing(self):
+        response = {"ok": True, "summary": "THPM is current"}
+        with patch("thpm.cli.Service") as service_type, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            service_type.return_value.update_check.return_value = response
+            self.assertEqual(main(["update", "--json", "status"]), 0)
+        self.assertEqual(json.loads(stdout.getvalue()), response)
+
+    def test_update_parent_quiet_survives_nested_subcommand_parsing(self):
+        response = {"ok": True, "summary": "THPM is current"}
+        with patch("thpm.cli.Service") as service_type, patch(
+            "thpm.cli.render"
+        ) as render_output:
+            service_type.return_value.update_check.return_value = response
+            self.assertEqual(main(["update", "--quiet", "status"]), 0)
+        render_output.assert_called_once_with(response, verbose=False)
+
+    def test_json_tui_is_rejected_without_opening_textual(self):
+        with patch("thpm.tui.run_tui") as run_tui, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            exit_code = main(["tui", "--json"])
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(json.loads(stdout.getvalue())["ok"])
+        run_tui.assert_not_called()
 
     def test_tui_command_launches_alternate_frontend(self):
         with patch("thpm.tui.run_tui") as run_tui:
@@ -1192,7 +1326,10 @@ class ZedTests(Sandbox):
         settings = self.paths.config_home / "zed/settings.json"
         settings.parent.mkdir(parents=True)
         settings.write_text('{"theme": "Old"}\n')
-        service = Service(self.paths)
+        stages: list[str] = []
+        service = Service(
+            self.paths, progress=lambda message, _detail=None: stages.append(message)
+        )
 
         completed = service.set_enabled("zed-extra", True, refresh=False)
 
@@ -1200,6 +1337,14 @@ class ZedTests(Sandbox):
         self.assertNotIn("confirmationRequired", completed)
         self.assertEqual(zed_status(self.paths)["selectedTheme"], THEME_NAME)
         self.assertTrue(load(self.paths)["zed-extra"])
+        self.assertEqual(
+            stages,
+            [
+                "Checking Zed theme",
+                "Backing up Zed settings",
+                "Installing and selecting Zed theme",
+            ],
+        )
 
     def test_disable_removes_authored_target_without_touching_omazed(self):
         self.write_zed()
@@ -2311,7 +2456,7 @@ class UpdateTests(Sandbox):
         self.assertEqual(self.paths.hook_file.read_text(), "original hook")
         self.assertFalse(fake_root.with_name("runtime.previous").exists())
 
-    def test_successful_source_update_defers_refresh_and_returns_handoff(self):
+    def test_successful_source_update_refreshes_after_activation(self):
         runtime = self.paths.home / "runtime"
         (runtime / "bin").mkdir(parents=True)
         fake_python = runtime / "bin/python"
@@ -2345,8 +2490,8 @@ class UpdateTests(Sandbox):
         ) as run:
             result = updater.apply(self.paths)
         self.assertEqual(result["status"], "updated")
-        self.assertTrue(result["refreshRequired"])
-        self.assertEqual(result["refreshCommand"], "thpm reconcile --refresh")
+        self.assertFalse(result["refreshRequired"])
+        self.assertIsNone(result["refreshCommand"])
         self.assertEqual(
             run.call_args_list[0].args[0],
             [str(runtime / "bin/thpm"), "reconcile", "--defer-upgrade-refresh"],
@@ -2354,6 +2499,10 @@ class UpdateTests(Sandbox):
         self.assertEqual(
             run.call_args_list[1].args[0],
             [str(runtime / "bin/thpm"), "ui", "install"],
+        )
+        self.assertEqual(
+            run.call_args_list[2].args[0],
+            [str(runtime / "bin/thpm"), "reconcile", "--refresh"],
         )
         self.assertFalse(runtime.with_name("runtime.previous").exists())
 
@@ -2380,6 +2529,37 @@ class UpdateTests(Sandbox):
         self.assertEqual(existing.read_text(), "old")
         self.assertEqual(foreign.read_text(), "keep")
         self.assertFalse((self.paths.themed_dir / "thpm-added.tpl").exists())
+
+    def test_update_refresh_failure_is_reported_as_committed_partial_failure(self):
+        result = {
+            "status": "updated",
+            "origin": "source",
+            "refreshRequired": True,
+            "refreshCommand": "thpm reconcile --refresh",
+            "refreshError": "refresh failed",
+        }
+        with patch("thpm.service.apply_update", return_value=result):
+            payload = Service(self.paths).update_apply()
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["committed"])
+        self.assertIn("package updated", payload["summary"])
+        self.assertIn("refresh failed", payload["errors"][0]["message"])
+
+    def test_json_style_aur_apply_requires_a_terminal_without_launching_processes(self):
+        result = {
+            "status": "available",
+            "origin": "thpm",
+            "currentVersion": "1.0.0rc1",
+            "availableVersion": "1.0.1-1",
+        }
+        with patch("thpm.update.check", return_value=result), patch(
+            "thpm.update.subprocess.run"
+        ) as run, patch("thpm.update.subprocess.Popen") as launch:
+            applied = updater.apply(self.paths, interactive=False)
+        self.assertEqual(applied["status"], "requires-interactive")
+        self.assertEqual(applied["command"], "thpm update")
+        run.assert_not_called()
+        launch.assert_not_called()
 
     def test_aur_apply_runs_noninteractive_upgrade_in_current_terminal(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
@@ -2423,14 +2603,40 @@ class UpdateTests(Sandbox):
                 call(
                     ["/usr/bin/yay", "-S", "--noconfirm", "--needed", "thpm"],
                     check=True,
+                    timeout=updater.PACKAGE_UPDATE_TIMEOUT_SECONDS,
                 ),
-                call(["/usr/bin/thpm", "reconcile"], check=True),
+                call(
+                    ["/usr/bin/thpm", "reconcile", "--refresh"],
+                    check=True,
+                    timeout=updater.RECONCILE_TIMEOUT_SECONDS,
+                ),
             ],
         )
         launch.assert_not_called()
         self.assertFalse(applied["refreshRequired"])
         self.assertEqual(progress.events, [("Upgrading AUR package", "thpm")])
         self.assertEqual(progress.totals, [2])
+
+    def test_aur_reconcile_failure_reports_committed_package_and_handoff(self):
+        result = {
+            "status": "available",
+            "origin": "thpm",
+            "currentVersion": "1.0.0rc1",
+            "availableVersion": "1.0.1-1",
+        }
+        commands = {"yay": "/usr/bin/yay", "thpm": "/usr/bin/thpm"}
+        with patch("thpm.update.check", return_value=result), patch(
+            "thpm.update.shutil.which", side_effect=commands.get
+        ), patch("thpm.update.sys.stdin.isatty", return_value=True), patch(
+            "thpm.update.subprocess.run",
+            side_effect=[None, subprocess.CalledProcessError(1, "reconcile")],
+        ):
+            applied = updater.apply(self.paths)
+        self.assertEqual(applied["status"], "updated")
+        self.assertTrue(applied["packageCommitted"])
+        self.assertTrue(applied["refreshRequired"])
+        self.assertEqual(applied["refreshCommand"], "thpm reconcile --refresh")
+        self.assertIn("reconcile", applied["refreshError"])
 
     def test_aur_apply_uses_terminal_fallback_without_a_tty(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
@@ -2448,7 +2654,7 @@ class UpdateTests(Sandbox):
         launch.assert_called_once_with(
             [
                 "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
-                "yay -S --noconfirm --needed thpm && thpm reconcile",
+                "yay -S --noconfirm --needed thpm && thpm reconcile --refresh",
             ],
             start_new_session=True,
         )

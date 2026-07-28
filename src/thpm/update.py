@@ -15,9 +15,9 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Callable, Iterator
 
 from . import __version__
 from .files import atomic_text
@@ -30,6 +30,11 @@ CACHE_SECONDS = 86_400
 MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 4_000
 MAX_EXPANDED_BYTES = 512 * 1024 * 1024
+DOWNLOAD_DEADLINE_SECONDS = 300
+COMMAND_TIMEOUT_SECONDS = 30
+RECONCILE_TIMEOUT_SECONDS = 240
+PACKAGE_UPDATE_TIMEOUT_SECONDS = 3_600
+RUNTIME_STAGE_TIMEOUT_SECONDS = 600
 
 
 def _version(value: str) -> tuple[int, int, int, int, int]:
@@ -50,11 +55,21 @@ def _read_json(url: str) -> object:
 def origin(paths: Paths) -> dict[str, str]:
     executable = shutil.which("thpm")
     if executable and shutil.which("pacman"):
-        owner = subprocess.run(["pacman", "-Qqo", str(Path(executable).resolve())], text=True, capture_output=True)
+        owner = subprocess.run(
+            ["pacman", "-Qqo", str(Path(executable).resolve())],
+            text=True,
+            capture_output=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
         if owner.returncode == 0:
             package = owner.stdout.strip()
             if package in {"thpm", "thpm-git"}:
-                installed = subprocess.run(["pacman", "-Q", package], text=True, capture_output=True)
+                installed = subprocess.run(
+                    ["pacman", "-Q", package],
+                    text=True,
+                    capture_output=True,
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                )
                 installed_version = installed.stdout.strip().split(maxsplit=1)[1] if installed.returncode == 0 and len(installed.stdout.strip().split(maxsplit=1)) == 2 else __version__
                 return {"origin": package, "package": package, "repository": REPOSITORY, "installedVersion": installed_version}
     if paths.install_metadata.is_file():
@@ -149,18 +164,22 @@ def _arch_version_is_newer(available: str, installed: str) -> bool:
         text=True,
         capture_output=True,
         check=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
     )
     return int(completed.stdout.strip()) > 0
 
 
 def _download(url: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": f"thpm/{__version__}"})
+    deadline = time.monotonic() + DOWNLOAD_DEADLINE_SECONDS
     with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
         declared = response.headers.get("Content-Length")
         if declared and int(declared) > MAX_DOWNLOAD_BYTES:
             raise ValueError("release download exceeds the size limit")
         total = 0
         while chunk := response.read(1024 * 1024):
+            if time.monotonic() > deadline:
+                raise TimeoutError("release download exceeded the time limit")
             total += len(chunk)
             if total > MAX_DOWNLOAD_BYTES:
                 raise ValueError("release download exceeds the size limit")
@@ -205,15 +224,41 @@ def _safe_extract(archive: Path, destination: Path) -> Path:
 
 
 def _stage_runtime(source: Path, runtime: Path) -> None:
-    subprocess.run([sys.executable, "-m", "venv", str(runtime)], check=True)
-    subprocess.run([str(runtime / "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "rich>=14,<16", "textual>=8.2.8,<9"], check=True)
-    purelib = subprocess.run([str(runtime / "bin/python"), "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True, capture_output=True, check=True).stdout.strip()
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(runtime)],
+        check=True,
+        timeout=RUNTIME_STAGE_TIMEOUT_SECONDS,
+    )
+    subprocess.run(
+        [str(runtime / "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "rich>=14,<16", "textual>=8.2.8,<9"],
+        check=True,
+        timeout=RUNTIME_STAGE_TIMEOUT_SECONDS,
+    )
+    purelib = subprocess.run(
+        [str(runtime / "bin/python"), "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'],
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    ).stdout.strip()
     shutil.copytree(source / "src/thpm", Path(purelib) / "thpm")
     shutil.copytree(source / "assets", runtime / "share/thpm")
     shutil.copy2(source / "assets/bin/thpm", runtime / "bin/thpm")
     os.chmod(runtime / "bin/thpm", 0o755)
-    subprocess.run([str(runtime / "bin/thpm"), "--version"], check=True, capture_output=True, text=True)
-    subprocess.run([str(runtime / "bin/python"), "-c", "from thpm.tui import ThpmTui"], check=True, capture_output=True, text=True)
+    subprocess.run(
+        [str(runtime / "bin/thpm"), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    )
+    subprocess.run(
+        [str(runtime / "bin/python"), "-c", "from thpm.tui import ThpmTui"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    )
 
 
 def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | None]:
@@ -254,6 +299,8 @@ def _source_runtime() -> Path:
 def apply(
     paths: Paths,
     progress: Callable[[str, str | None], None] | None = None,
+    *,
+    interactive: bool = True,
 ) -> dict[str, object]:
     def step(message: str, detail: str | None = None) -> None:
         if progress is not None:
@@ -264,12 +311,19 @@ def apply(
         return update
     set_total = getattr(progress, "set_total", None)
     if callable(set_total):
-        set_total(2 if update["origin"] in {"thpm", "thpm-git"} else 8)
+        set_total(2 if update["origin"] in {"thpm", "thpm-git"} else 9)
     if update["origin"] in {"thpm", "thpm-git"}:
         package = str(update["origin"])
+        if not interactive:
+            return {
+                **update,
+                "status": "requires-interactive",
+                "command": "thpm update",
+                "error": "rerun thpm update in a terminal",
+            }
         yay = shutil.which("yay")
         if not yay: raise RuntimeError("yay is required to update an AUR installation")
-        command = f"yay -S --noconfirm --needed {package} && thpm reconcile"
+        command = f"yay -S --noconfirm --needed {package} && thpm reconcile --refresh"
         if sys.stdin.isatty():
             step("Upgrading AUR package", package)
             suspend = getattr(progress, "suspend", None)
@@ -278,14 +332,26 @@ def apply(
                 subprocess.run(
                     [yay, "-S", "--noconfirm", "--needed", package],
                     check=True,
+                    timeout=PACKAGE_UPDATE_TIMEOUT_SECONDS,
                 )
-                subprocess.run([shutil.which("thpm") or "thpm", "reconcile"], check=True)
+                refresh_error = ""
+                try:
+                    subprocess.run(
+                        [shutil.which("thpm") or "thpm", "reconcile", "--refresh"],
+                        check=True,
+                        timeout=RECONCILE_TIMEOUT_SECONDS,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    refresh_error = str(exc)
+            refresh_required = bool(refresh_error)
             return {
                 **update,
                 "status": "updated",
                 "command": None,
-                "refreshRequired": False,
-                "refreshCommand": None,
+                "packageCommitted": True,
+                "refreshRequired": refresh_required,
+                "refreshCommand": "thpm reconcile --refresh" if refresh_required else None,
+                "refreshError": refresh_error or None,
             }
         step("Opening AUR package upgrade", package)
         launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
@@ -332,18 +398,38 @@ def apply(
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=RECONCILE_TIMEOUT_SECONDS,
             )
             step("Refreshing control panel")
-            subprocess.run([str(runtime / "bin/thpm"), "ui", "install"], check=True, capture_output=True, text=True)
+            subprocess.run(
+                [str(runtime / "bin/thpm"), "ui", "install"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
         except Exception:
             shutil.rmtree(runtime, ignore_errors=True); previous.rename(runtime); _restore_integrations(integration_backups); raise
         shutil.rmtree(previous, ignore_errors=True)
         paths.update_cache_file.unlink(missing_ok=True)
-        refresh_required = not paths.canonical_palette_migration_marker.is_file()
+        step("Refreshing active theme")
+        refresh_error = ""
+        try:
+            subprocess.run(
+                [str(runtime / "bin/thpm"), "reconcile", "--refresh"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=RECONCILE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            refresh_error = str(exc)
+        refresh_required = bool(refresh_error)
         return {
             **update,
             "status": "updated",
             "restartShell": True,
             "refreshRequired": refresh_required,
             "refreshCommand": "thpm reconcile --refresh" if refresh_required else None,
+            "refreshError": refresh_error or None,
         }

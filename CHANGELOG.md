@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix CLI progress and confirmation handling so enable/disable commands show real stages, never hide prompts behind the progress display, report failures honestly, and suggest valid integration names for typos.
+- Make nested options and JSON errors consistent, reject interactive TUI launches in JSON mode, bound update subprocesses, and refresh active theme outputs after installs and updates.
+
 ## 1.0.0rc13 - 2026-07-28
 
 - Make the normal CLI, TUI, and graphical-manager enable flow for Zed install and select **THPM Current** transactionally instead of requiring a separate setup command.

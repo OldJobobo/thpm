@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import subprocess
 import sys
 from collections.abc import Callable
@@ -188,6 +189,7 @@ class Service:
                 plugin=view,
                 errors=[],
             )
+        self._step("Checking Zed theme")
         settings = self.paths.config_home / "zed/settings.json"
         rollback_paths = [
             settings,
@@ -213,9 +215,11 @@ class Service:
             )
 
         was_enabled = bool(load(self.paths).get("zed-extra"))
+        self._step("Backing up Zed settings")
         try:
             with mutation_lock(self.paths):
                 settings_changed = configure_zed_settings(self.paths)
+                self._step("Installing and selecting Zed theme")
                 enabled = load(self.paths)
                 enabled["zed-extra"] = True
                 save(self.paths, enabled)
@@ -262,7 +266,14 @@ class Service:
         operation = "plugin-enable" if value else "plugin-disable"
         plugin = BY_ID.get(plugin_id)
         if plugin is None:
-            return envelope(operation, False, summary=f"unknown plugin: {plugin_id}", errors=[{"message": "unknown plugin"}])
+            matches = difflib.get_close_matches(plugin_id, BY_ID, n=1, cutoff=0.6)
+            suggestion = f"; did you mean {matches[0]}?" if matches else ""
+            return envelope(
+                operation,
+                False,
+                summary=f"unknown plugin: {plugin_id}{suggestion}",
+                errors=[{"message": f"unknown plugin{suggestion}"}],
+            )
         view = next(item for item in self.views() if item["id"] == plugin_id)
         if value and not view["available"]:
             return envelope(operation, False, summary=f"{plugin_id} is unavailable", errors=[{"message": "required application or theme asset is unavailable"}])
@@ -270,8 +281,22 @@ class Service:
             return envelope(operation, False, summary=f"confirmation required to enable {plugin_id}",
                 confirmationRequired=True, plugin=view, errors=[])
         if value and plugin_id == "zed-extra":
-            return self.zed_setup(confirmed=True)
+            result = self.zed_setup(confirmed=True)
+            result.update(
+                operation=operation,
+                summary=(
+                    "zed-extra enabled"
+                    if result["ok"]
+                    else str(result.get("summary", "unable to enable zed-extra"))
+                ),
+                committed=bool(result["ok"]),
+                stateChanged=not bool(view["enabled"]) and bool(result["ok"]),
+                plugins=self.views(),
+            )
+            return result
+        self._step("Checking integration")
         warnings: list[dict[str, str]] = []
+        self._step("Updating integration state")
         with mutation_lock(self.paths):
             enabled = load(self.paths)
             was_enabled = bool(enabled.get(plugin_id))
@@ -332,6 +357,7 @@ class Service:
         errors: list[dict[str, str]] = []
         refreshed = False
         if value and refresh:
+            self._step("Refreshing active theme")
             try:
                 completed = run("theme", "refresh", check=False, timeout=180)
                 refreshed = completed.returncode == 0
@@ -339,11 +365,23 @@ class Service:
                     errors.append({"message": completed.stderr.strip() or "theme refresh failed"})
             except (OSError, subprocess.SubprocessError) as exc:
                 errors.append({"message": f"theme refresh failed: {exc}"})
+        else:
+            self._step("Verifying integration state")
         summary = f"{plugin_id} {'enabled' if value else 'disabled'}"
         if errors:
-            summary += "; theme refresh failed"
-        return envelope(operation, not errors, summary=summary, changed=changed, refreshed=refreshed,
-            plugins=self.views(), errors=errors, warnings=warnings)
+            summary += "; setting was saved, but theme refresh failed"
+        return envelope(
+            operation,
+            not errors,
+            summary=summary,
+            committed=True,
+            stateChanged=was_enabled != value,
+            changed=changed,
+            refreshed=refreshed,
+            plugins=self.views(),
+            errors=errors,
+            warnings=warnings,
+        )
 
     def doctor(self, plugin_id: str | None = None) -> dict[str, object]:
         errors: list[dict[str, str]] = []
@@ -440,7 +478,9 @@ class Service:
                 ui_result = ui.install(self.paths)
             self._step("Refreshing active theme")
             migration, errors = _refresh_templates(
-                self.paths, deferred=_source_activation_in_progress()
+                self.paths,
+                requested=True,
+                deferred=_source_activation_in_progress(),
             )
         summary = "THPM installed"
         if migration["refreshed"]:
@@ -563,11 +603,31 @@ class Service:
         errors = [{"message": str(result["error"])}] if result.get("error") else []
         return envelope("update-check", ok, summary=summary, result=result, errors=errors)
 
-    def update_apply(self) -> dict[str, object]:
+    def update_apply(self, *, interactive: bool = True) -> dict[str, object]:
         self._step("Checking for an available release")
-        result = apply_update(self.paths, progress=self.progress)
-        ok = result.get("status") in {"updated", "started", "current"}
-        summary = {"updated": "THPM updated", "started": "package update started", "current": "THPM is current"}.get(str(result.get("status")), "THPM update not applied")
+        result = apply_update(
+            self.paths, progress=self.progress, interactive=interactive
+        )
+        status = str(result.get("status"))
+        refresh_error = str(result.get("refreshError") or "")
+        ok = status in {"updated", "started", "current"} and not refresh_error
+        summary = {
+            "updated": "THPM updated",
+            "started": "package update terminal opened; completion is pending",
+            "current": "THPM is current",
+            "requires-interactive": "AUR updates require an interactive terminal",
+        }.get(status, "THPM update not applied")
+        if refresh_error:
+            summary += "; package updated, but active theme refresh failed"
         if result.get("refreshRequired"):
-            summary += "; run thpm reconcile --refresh to regenerate active theme outputs"
-        return envelope("update-apply", ok, summary=summary, result=result, errors=[] if ok else [{"message": str(result.get("error", result.get("status")))}])
+            summary += "; run thpm reconcile --refresh"
+        error = refresh_error or str(result.get("error", status))
+        return envelope(
+            "update-apply",
+            ok,
+            summary=summary,
+            committed=status == "updated",
+            pending=status == "started",
+            result=result,
+            errors=[] if ok else [{"message": error}],
+        )

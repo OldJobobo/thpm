@@ -1,8 +1,8 @@
 ## THPM 1.0.0rc13 is now available
 
-**THPM is built exclusively for Omarchy Quattro and supports Omarchy 4.x only.**
+**THPM is made for Omarchy Quattro and supports Omarchy 4.x.**
 
-### Install or upgrade through Omarchy
+### Install or upgrade
 
 ```sh
 omarchy pkg aur add thpm   # first installation
@@ -11,38 +11,50 @@ omarchy update aur pkgs    # update an installed AUR package
 
 ## What’s new since rc5
 
-### Authored Zed themes now work from the normal THPM controls
+### Zed themes now work through THPM
 
-Themes can ship a full `zed.json` or compatibility `aether.zed.json` palette. THPM validates the authored theme and installs it under the stable **THPM Current** name, while leaving Omazed completely independent as the generated-color fallback.
+Turn on **Zed authored theme** in THPM and it will install and select the matching Zed theme for you. Your existing Zed settings are backed up first.
 
-Enable **Zed authored theme** from the graphical manager, TUI, or CLI and THPM now completes the whole job: it backs up your Zed settings, installs the theme, and selects **THPM Current**. You no longer need to discover and run a separate setup command after enabling it. `thpm zed status` shows the selected source, synchronization state, current Zed selection, and Omazed availability.
+If you use Omazed, THPM leaves it available for themes that do not include their own Zed colors.
 
-### Integrations are safer to enable, disable, and change between themes
+### Safer theme switching
 
-THPM now remembers files displaced by optional and generated integrations. When an integration is disabled, removed, or no longer supplied by the active theme, THPM restores the previous file or relinquishes its own output. Files edited by the user are preserved, and older THPM outputs are removed only when they can be positively identified.
+THPM is now better at cleaning up after itself. If you disable an integration or switch to a theme that does not support it, THPM restores what was there before whenever possible.
 
-This restoration behavior covers optional application themes, generated outputs, browser styling, Discord themes, Zellij, and authored Zed themes.
+Your own changes are preserved instead of being overwritten or removed.
 
-### A calmer graphical manager
+### A cleaner graphical manager
 
-The graphical manager now lets Omarchy Shell and Hyprland own its outer background, border, and corner rounding. This removes the duplicate frame and keeps the manager visually consistent with the active Omarchy theme.
+The graphical manager now follows your Omarchy window style more closely, without the extra border and frame it had before.
 
-### Clearer command output
+### Better terminal feedback
 
-Interactive commands now have a proper terminal presentation with meaningful stages, progress, elapsed time, success and failure states, changed-file lists, and captured command output. Detailed results are shown by default; use `--quiet` for compact output. Redirected output, `NO_COLOR`, and JSON automation remain clean and predictable.
+THPM commands now show clearer progress, results, changed files, and useful errors. Use `--quiet` when you want shorter output.
 
-### Updates behave like normal terminal updates
+### Smoother updates
 
-Running bare `thpm update` now applies the available update directly. AUR upgrades stay in the terminal that launched them, package output remains readable, and sudo password prompts remain visible and usable. THPM temporarily gets out of Yay’s way, then resumes with reconciliation and an accurate completion report. Non-interactive callers still receive the Omarchy terminal fallback.
+Running `thpm update` now installs the available update directly. Package output and password prompts remain visible, and THPM gives you a clear result when the update is finished.
 
-### Consistent confirmations and availability reporting
+### Clearer app support
 
-The CLI, TUI, graphical manager, JSON API, and documentation now agree about which integrations need confirmation and which are actually available. THPM reports missing applications or theme assets instead of pretending an integration was applied.
+THPM now does a better job of telling you when an app is missing or when the current theme does not include support for an integration.
+
+### Testing still needed
+
+If you use any of these apps, feedback would be especially helpful:
+
+- Qt6ct
+- Vicinae
+- nwg-dock-hyprland
+- Windsurf
+- Qutebrowser
+- Heroic Games Launcher
+- Spicetify
 
 ### Special thanks
 
 Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//directive.
 
-This remains a release candidate. Please report Zed, restoration, update, or graphical-manager issues before the final 1.0.0 release.
+This remains a release candidate. Please report any issues you find.
 
 [View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc13)

@@ -53,18 +53,18 @@ Consequently, the project currently supports **enable/disable of built-in integr
 
 The GUI and TUI disable unavailable rows, and `Service.set_enabled()` independently rejects unavailable built-in plugins so policy remains identical for every caller.
 
-### 3. Disable is not remove or cleanup
+### 3. Disable performs guarded built-in cleanup, but is not package removal
 
-Disabling reconciles packaged templates, but it does not generally remove already-applied outputs, managed imports, selected themes, or other integration artifacts. This is acceptable for a toggle-only built-in registry, but it is insufficient for a package manager.
+Built-in integrations now have integration-specific cleanup. THPM removes managed templates and outputs, restores displaced files or prior selections when restoration data is valid, and preserves user-modified targets. GTK, Zellij, Zed, optional assets, browsers, and generated outputs participate in this lifecycle.
 
-A real remove operation needs a per-plugin ownership ledger, cleanup behavior, modification detection, and rollback.
+This is still not an external plugin-package removal transaction. A real package remove operation needs a complete per-plugin ownership ledger, removal plan, modification detection, and rollback across every owned effect.
 
 ### 4. Existing inputs are already more powerful than “theme data”
 
-Several theme-provided files can become executable or active application configuration:
+Several generated outputs and theme-provided files can become executable or active application configuration:
 
-- generated Fish and Qutebrowser files are code-like inputs;
-- browser CSS and Vencord CSS may load remote resources;
+- Fish and Qutebrowser outputs are generated from packaged THPM templates and palette data, but remain code-like outputs;
+- theme-provided browser CSS and Vencord CSS may load remote resources;
 - Zellij KDL and editor JSON affect application behavior;
 - Steam invokes an existing user-local `install.py`.
 
@@ -76,7 +76,7 @@ The self-updater’s release checksum catches corruption and accidental mismatch
 
 ### 6. The current safe extractor is a useful base, not a complete package extractor
 
-`update._safe_extract()` rejects links and traversal. A reusable plugin extractor should additionally reject devices/FIFOs, absolute and ambiguous paths, duplicate normalized names, case-colliding names, oversized files, excessive file counts, excessive expanded size, setuid/setgid bits, and unsupported archive formats.
+`update._safe_extract()` already rejects links and other special entries, traversal and escaping paths, duplicate normalized names, excessive member counts and expanded size, and privileged file modes. A reusable external-plugin extractor should build on it with package-specific checks such as case-colliding names, per-file limits, stricter path ambiguity handling, MIME/type policy, and supported archive-format enforcement.
 
 ## Terminology
 
@@ -391,7 +391,7 @@ All work remains in background workers and calls `Service`.
 
 Use the same staged flow through `thpm --json`. QML already passes argv arrays, which avoids shell interpolation. Add dedicated `Process` objects for check/add/remove and parse their result instead of discarding mutation output.
 
-The current `mutate` process refreshes state without surfacing the command response. Before package operations, make mutation results visible so policy errors, confirmation requirements, and cleanup warnings are not lost.
+The current `mutate` process parses the command response and surfaces its summary and failure state before refreshing the plugin list. Before package operations, expand that presentation to show detailed policy errors, confirmation plans, retained files, and cleanup warnings rather than reducing them to one summary line.
 
 A native file picker can come later; a source text field plus paste/drop support is enough for the first release. Never construct a command string from the source—continue passing each argument as a separate QML process argument.
 
@@ -420,13 +420,13 @@ Built-ins can migrate incrementally: wrap the current records in a `BuiltInCatal
 
 ## Delivery sequence
 
-### Phase 0 — close present policy gaps
+### Phase 0 — close present policy gaps (completed for built-ins)
 
-- enforce `confirmationRequired` in `Service`;
-- enforce availability/compatibility in `Service`;
-- make QML display mutation failures;
-- define add/remove/enable/disable terminology;
-- document current theme-asset trust assumptions.
+- `confirmationRequired` and availability/compatibility are enforced in `Service`;
+- QML displays mutation success or failure summaries;
+- built-in integrations use guarded cleanup and restoration where supported;
+- add/remove/enable/disable terminology and external-package ownership remain design work;
+- current theme-asset trust assumptions remain documented here.
 
 ### Phase 1 — package core and local source
 

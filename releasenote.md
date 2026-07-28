@@ -2,12 +2,23 @@
 
 **THPM is made for Omarchy Quattro and supports Omarchy 4.x.**
 
-### Install or upgrade
+### First installation
 
 ```sh
-omarchy pkg aur add thpm   # first installation
-omarchy update aur pkgs    # update an installed AUR package
+omarchy pkg aur add thpm
+thpm install
 ```
+
+The second command completes your user setup, including the theme hook and graphical manager.
+
+### Upgrade
+
+```sh
+omarchy update aur pkgs
+thpm ui install
+```
+
+The second command deploys the latest graphical-manager files from the updated package.
 
 ## What’s new since rc5
 

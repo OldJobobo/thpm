@@ -15,39 +15,62 @@ Pre-4.0 Omarchy path layouts are intentionally unsupported. Palette interpretati
 
 ## Install
 
-For a source checkout:
+### Omarchy / AUR
+
+Install the stable package, then complete the per-user setup:
+
+```bash
+omarchy pkg aur add thpm
+thpm install
+```
+
+The package installs THPM and its assets under `/usr`. The required `thpm install` step creates your theme hook and templates, migrates an older installation, and deploys the graphical manager and menu entry under your user configuration. Pacman cannot safely perform that per-user setup on its own. Use `thpm install --no-ui` only when you intentionally do not want the graphical manager; you can add it later with `thpm ui install`.
+
+To build locally instead, choose either the stable package or the development package; they conflict, so install only one:
+
+```bash
+(cd packaging/aur/thpm && makepkg -si)       # stable release
+# or
+(cd packaging/aur/thpm-git && makepkg -si)   # latest main branch
+thpm install
+```
+
+After a direct package-manager upgrade, synchronize both theme output and the graphical manager:
+
+```bash
+thpm reconcile --refresh
+thpm ui install
+```
+
+`thpm update` handles package reconciliation, but run `thpm ui install` afterward whenever a release includes graphical-manager changes.
+
+### Source checkout
 
 ```bash
 ./install.sh
 ```
 
-For Arch Linux, build either package from `packaging/aur`:
-
-```bash
-(cd packaging/aur/thpm && makepkg -si)
-```
-
-The source installer first migrates an existing `theme-hook-plugin-manager` installation, then installs THPM and its pinned Textual dependency range into a private Python runtime at `~/.local/share/thpm/runtime`. Pip runs only inside that isolated virtual environment, preserving Arch Linux's externally-managed system Python. The installer preserves enabled plugin state, archives recognized legacy files under `~/.local/state/thpm/legacy-backups/`, removes obsolete legacy launchers and control files, and installs the hook plus both control-panel launchers. Unrecognized user files are left in place. If a custom hook still sources the former helper path, THPM installs a small independently authored transition shim for its status helpers instead of retaining the old library.
-
-The AUR packages declare the former package name as replaced/conflicting, so pacman handles the package-level transition. Omarchy is listed as an optional host integration because its official packages come from Omarchy's own repository rather than the Arch repositories or the unrelated placeholder currently using the `omarchy` name on the AUR. THPM still requires Omarchy 4 to install and operate its theme integrations, verifies the needed command routes at runtime, and reports missing capabilities instead of partially installing. After installation, `thpm install` performs the per-user migration, installs the single hook, reconciles templates, installs the QML manager when Omarchy Shell is running, and completes any pending one-time template refresh migration.
-
-Upgrades from `1.0.0rc4` need one active-theme regeneration after the corrected templates are installed. `thpm install` and the first normal `thpm reconcile` perform this versioned, idempotent migration automatically and record success under `$XDG_STATE_HOME/thpm/migrations/`; a failed refresh remains pending and is retried. Built-in source updates—including upgrades launched by rc4's older updater—detect the rollbackable activation window, defer the refresh, and report the explicit handoff command after activation. Source installation performs the refresh only after runtime, launcher, and metadata activation can no longer roll back. AUR users who update the package without rerunning installation should run:
-
-```bash
-thpm reconcile --refresh
-```
+The source installer builds and validates a private runtime at `~/.local/share/thpm/runtime`, activates it with rollback protection, and then runs the per-user migration and integration setup. Pip runs only inside that isolated environment. Recognized legacy files are archived under `~/.local/state/thpm/legacy-backups/`; unrecognized user files are left alone.
 
 ## Use
 
+Common commands:
+
 ```bash
 thpm list
+thpm status
 thpm enable firefox
 thpm disable firefox
 thpm doctor
 thpm run
+thpm reconcile
+thpm reconcile --refresh
 thpm zed status
 thpm zed setup
+thpm ui status
+thpm ui install
 thpm ui open
+thpm ui remove
 thpm tui
 thpm update
 thpm update check
@@ -59,11 +82,11 @@ Interactive commands use a color-aware progress surface with an animated spinner
 
 For AUR installations, `thpm update` runs Yay synchronously in the invoking terminal with routine package confirmations disabled, then reconciles integrations after installation. Password authentication can still appear normally. Callers without a TTY use an Omarchy terminal fallback so authorization and package output remain visible.
 
-All service commands accept `--json`. The graphical control panel is available directly with `thpm ui open`, and the alternate terminal application with `thpm tui`. The graphical frontend is a normal compositor-managed window, so Hyprland controls its focus, movement, resizing, and workspace placement; a title-matched window rule can make it float by default. Omarchy Menu contains one **Theme Hook Plugins** entry; choose which frontend it opens from the **Menu launcher** control in either frontend's System section, with `thpm ui surface gui` or `thpm ui surface tui`, or flip it with `thpm ui surface toggle`. Run `thpm ui surface` without an argument to inspect the current target. Both frontends have an overview dashboard and dedicated Integrations, Doctor, and System sections for toggling plugins, checking health, reapplying or reconciling the active theme, and managing updates.
+Non-interactive service commands accept `--json`. The interactive `thpm tui` command intentionally rejects JSON mode. The graphical control panel is available directly with `thpm ui open`, and the alternate terminal application with `thpm tui`. The graphical frontend is a normal compositor-managed window, so Hyprland controls its focus, movement, resizing, and workspace placement; a title-matched window rule can make it float by default. Omarchy Menu contains one **Theme Hook Plugins** entry; choose which frontend it opens from the **Menu launcher** control in either frontend's System section, with `thpm ui surface gui` or `thpm ui surface tui`, or flip it with `thpm ui surface toggle`. Run `thpm ui surface` without an argument to inspect the current target. Both frontends have an overview dashboard and dedicated Integrations, Doctor, and System sections for toggling plugins, checking health, reapplying or reconciling the active theme, and managing updates.
 
 The TUI uses the active Omarchy semantic palette and falls back to a readable built-in dark theme if the palette is unavailable. Use `1`–`4` to change sections, `/` to search integrations, `Space` or `Enter` to toggle the selected integration, `r` to refresh, and `q` to quit. Mouse controls and normal Tab navigation are also supported. Terminals smaller than 80×24 show a resize prompt instead of a damaged layout.
 
-Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Hook and JSON output distinguish applied, unchanged, skipped, and failed integrations, and Doctor flags enabled plugins that are no longer actionable. THPM-generated fallbacks are refused if Omarchy leaves an unresolved `{{ ... }}` placeholder, preventing malformed generated content from being copied into application configuration; explicit theme-provided assets keep their existing precedence. Conditional GTK CSS and validated local VS Code theme fallbacks cover Quattro native-ownership gaps only when the active theme requests them. Omarchy-native integrations are shown read-only so ownership stays clear. Disabling an integration stops future synchronization and removes its THPM template, but deliberately preserves configuration already installed into an application. Likewise, uninstall removes THPM's hook, templates, and control surfaces without deleting application configuration that may have been modified by the user.
+Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Hook and JSON output distinguish applied, unchanged, skipped, and failed integrations, and Doctor flags enabled plugins that are no longer actionable. THPM-generated fallbacks are refused if Omarchy leaves an unresolved `{{ ... }}` placeholder, preventing malformed generated content from being copied into application configuration; explicit theme-provided assets keep their existing precedence. Conditional GTK CSS and validated local VS Code theme fallbacks cover Quattro native-ownership gaps only when the active theme requests them. Omarchy-native integrations are shown read-only so ownership stays clear. Disabling an integration stops future synchronization, removes its rendered THPM template, and restores displaced files or prior selections when THPM has restoration data. Unrelated and user-modified configuration is preserved. Uninstall applies the same guarded cleanup before removing THPM's hook, templates, and control surfaces.
 
 The two Discord choices are mutually exclusive: `discord` provides the compact palette mapping, while `discord-system24` provides the full System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template.
 
@@ -71,7 +94,7 @@ The two Discord choices are mutually exclusive: `discord` provides the compact p
 
 Omarchy's optional `omazed` package is the generated-color fallback for Zed. THPM does not modify Omazed's executable, hook, or `~/.config/zed/themes/omazed.json`. Instead, the opt-in `zed-extra` integration installs a richer authored asset when the active theme provides `zed.json` or, as a compatibility fallback, `aether.zed.json`. Canonical `zed.json` wins when both exist.
 
-THPM validates the authored JSON and normalizes its single dark or light theme to the stable name **THPM Current** at `~/.config/zed/themes/thpm-current.json`. Enabling the integration through THPM backs up `settings.json` under THPM state and safely selects that stable name without discarding JSONC comments or keys outside the replaced theme value. `thpm zed setup` provides the same operation directly. Normal theme hooks update only the managed theme file and never rewrite Zed settings. Use `thpm zed status` to see the selected source, synchronization state, current Zed selection, and whether Omazed is available. If an authored asset disappears, THPM relinquishes its file and reports the Omazed fallback honestly; select **Omazed** in Zed if you want to switch to generated colors.
+THPM validates the authored JSON and normalizes its single dark or light theme to the stable name **THPM Current** at `~/.config/zed/themes/thpm-current.json`. Run `thpm enable zed-extra` for ongoing synchronization on every theme change; it backs up `settings.json` and safely selects **THPM Current**. `thpm zed setup` only performs that installation and settings selection directly—it does not persistently enable the integration. Normal theme hooks update only the managed theme file and never rewrite Zed settings. Use `thpm zed status` to see the selected source, synchronization state, current Zed selection, and whether Omazed is available. If an authored asset disappears, THPM relinquishes its file and reports the Omazed fallback honestly; select **Omazed** in Zed if you want to switch to generated colors.
 
 ## Development
 
@@ -86,7 +109,7 @@ See [docs/architecture.md](docs/architecture.md), [docs/plugins.md](docs/plugins
 
 Source updates follow stable GitHub releases and require matching `thpm-<version>.tar.gz` and `thpm-<version>.tar.gz.sha256` assets. Build both from committed content with `scripts/release-assets.sh`. Package-managed installations hand updates back to AUR rather than overwriting pacman-owned files.
 
-The stable and VCS AUR submission trees are under `packaging/aur/thpm` and `packaging/aur/thpm-git`. Replace the stable package's `SKIP` checksum with the tagged archive's SHA-256 before submission, then regenerate `.SRCINFO` with `makepkg --printsrcinfo`.
+The stable and VCS AUR submission trees are under `packaging/aur/thpm` and `packaging/aur/thpm-git`. Update the stable package's SHA-256 to the tagged archive digest, then regenerate `.SRCINFO` with `makepkg --printsrcinfo`. Keep `SKIP` only for the VCS package.
 
 ## License
 

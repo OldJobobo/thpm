@@ -1,6 +1,6 @@
 # Quattro native-ownership compatibility plan
 
-Status: compatibility work released in THPM 1.0.0rc4; canonical palette schema correction prepared for 1.0.0rc5; upstream Omarchy follow-up remains pending
+Status: compatibility work released in THPM 1.0.0rc4 and canonical palette correction released in 1.0.0rc5; upstream Omarchy follow-up remains pending
 
 ## Goal
 
@@ -8,23 +8,25 @@ THPM 1.x remains an Omarchy 4/Quattro-native integration manager. It does not re
 
 The compatibility behavior continues to run through the single `90-thpm` dispatcher after Omarchy's native post-theme commands.
 
-## Verified gaps
+## Original verified gaps
+
+The following gaps describe the pre-rc4 state that motivated this work. They are retained as historical context; the shipped outcome is summarized later in this document.
 
 ### GTK CSS
 
-Quattro's `omarchy-theme-set-gnome` sets color mode, `Adwaita`/`Adwaita-dark`, and icons. It does not consume an active-theme `gtk.css`. Current THPM has no GTK adapter and reports only the narrower `native-gnome` record.
+Quattro's `omarchy-theme-set-gnome` set color mode, `Adwaita`/`Adwaita-dark`, and icons but did not consume an active-theme `gtk.css`. Before rc4, THPM had no GTK adapter and reported only the narrower `native-gnome` record.
 
 Legacy THPM's `10-gtk.sh` deployed theme CSS to GTK 3 and GTK 4 after Omarchy's native action. Retiring that adapter before native parity caused a real compatibility regression.
 
 ### Bundled local VS Code themes
 
-Quattro's `omarchy-theme-set-vscode` supports Marketplace extension IDs and its own generated `local.omarchy-theme` extension. A descriptor naming a theme-bundled `local.*` extension is still passed to `--install-extension` as if it were a Marketplace ID, and the requested theme name is selected even if installation fails.
+Quattro's `omarchy-theme-set-vscode` supported Marketplace extension IDs and its own generated `local.omarchy-theme` extension. A descriptor naming a theme-bundled `local.*` extension was passed to `--install-extension` as if it were a Marketplace ID, and the requested theme name could be selected even if installation failed.
 
-Legacy THPM's `30-vscode.sh` packaged a theme's `vscode-extension/` source as a VSIX, installed it, and used a source hash to avoid unnecessary reinstallations. Current THPM has no equivalent adapter and reports VS Code as wholly native-owned.
+Legacy THPM's `30-vscode.sh` packaged a theme's `vscode-extension/` source as a VSIX, installed it, and used a source hash to avoid unnecessary reinstallations. Before rc4, the new THPM implementation had no equivalent adapter and reported VS Code as wholly native-owned.
 
 ### Palette resolution
 
-THPM currently validates raw TOML against a fixed set of semantic keys. That is not the complete Quattro contract.
+Before rc5, THPM validated raw TOML against a fixed set of semantic keys. That was not the complete Quattro contract.
 
 Quattro's canonical consumer is `omarchy-theme-color --file COLORS --all`. It accepts canonical semantic files and applies Omarchy-owned aliases and derivations for:
 
@@ -33,7 +35,7 @@ Quattro's canonical consumer is `omarchy-theme-color --file COLORS --all`. It ac
 - missing shades and bright colors;
 - selection, muted, orange, brown, and related semantic roles.
 
-This is not only a third-party legacy-theme concern. Current stock Omarchy themes such as Last Horizon, Solitude, Vantablack, and White omit raw values that THPM requires. THPM rejects those raw files, while `omarchy-theme-color --all` resolves every value THPM needs.
+This is not only a third-party legacy-theme concern. Stock Omarchy themes such as Last Horizon, Solitude, Vantablack, and White omitted raw values that the earlier loader required. That loader rejected those raw files even though `omarchy-theme-color --all` resolved every value THPM needed.
 
 Therefore, calling the Omarchy resolver is the native implementation. Reimplementing its alias cascade in THPM or requiring every derived value to be written literally would create a second, drifting theme contract.
 
@@ -187,9 +189,9 @@ Do not report native records as unhealthy merely because an optional asset is ab
 - native records describe only native coverage;
 - all compatibility outcomes appear in CLI, JSON, TUI, and QML consistently.
 
-## Implementation outcome
+## Released implementation outcome
 
-The working-tree implementation now includes:
+The implementation released across rc4 and rc5 includes:
 
 - canonical palette resolution through `omarchy-theme-color --all`, with strict semantic fallback only when the resolver is absent;
 - conditional applicability in the shared plugin model and both frontends;
@@ -197,9 +199,9 @@ The working-tree implementation now includes:
 - data-only local editor source validation, identity and contribution checks, traversal/symlink/file/count/size limits, deterministic VSIX packaging, Omarchy toggle support, source markers, bounded installation, and registration verification;
 - narrowed native ownership descriptions, synchronization warnings, Doctor verification, and legacy migration aliases.
 
-Validation completed locally:
+Validation recorded for the original rc4/rc5 implementation snapshot:
 
-- all 92 behavioral tests pass;
+- all 92 behavioral tests available at that time passed;
 - every installed stock Omarchy theme resolves through the new palette loader;
 - representative local Aether theme bundles validate successfully;
 - a generated VSIX installs and registers in isolated VS Code user-data and extension directories;
@@ -210,4 +212,4 @@ No live GTK configuration or normal VS Code profile was modified during validati
 
 ## Upstream boundary
 
-Open corresponding Omarchy issues for official GTK CSS ownership, bundled local editor-extension handling, and capability reporting. Keep THPM fallbacks idempotent and conditional so they naturally become unchanged or removable when the installed Omarchy version gains equivalent native behavior.
+Upstream issue links are not recorded in this repository, so official GTK CSS ownership, bundled local editor-extension handling, and capability reporting remain outstanding follow-up items. Keep THPM fallbacks idempotent and conditional so they naturally become unchanged or removable when the installed Omarchy version gains equivalent native behavior.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 REQUIRED_ROUTES = {"omarchy hook", "omarchy hook install", "omarchy theme refresh", "omarchy shell", "omarchy plugin", "omarchy menu"}
@@ -15,8 +16,20 @@ class Capabilities:
     missing: tuple[str, ...]
 
 
-def run(*args: str, check: bool = True, timeout: int = 30) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["omarchy", *args], text=True, capture_output=True, check=check, timeout=timeout)
+def run(
+    *args: str,
+    check: bool = True,
+    timeout: int = 30,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["omarchy", *args],
+        text=True,
+        capture_output=True,
+        check=check,
+        timeout=timeout,
+        env=env,
+    )
 
 
 def capabilities() -> Capabilities:

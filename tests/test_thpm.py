@@ -895,6 +895,131 @@ class ServiceTests(Sandbox):
         self.assertEqual(payload["event"], "unknown")
         apply_plugins.assert_not_called()
 
+    def test_run_theme_returns_the_hook_integration_report(self):
+        hook_payload = {
+            "ok": True,
+            "themeName": "tokyo-night",
+            "counts": {
+                "applied": 1,
+                "unchanged": 1,
+                "skipped": 1,
+                "failed": 0,
+            },
+            "results": [
+                {"id": "fish", "status": "applied", "message": "updated", "changed": []},
+                {"id": "fzf", "status": "unchanged", "message": "already current", "changed": []},
+                {"id": "spotify", "status": "skipped", "message": "not installed", "changed": []},
+            ],
+            "changed": ["/tmp/fish-theme"],
+            "actions": ["fish reload"],
+            "warnings": [{"plugin": "spotify", "message": "not installed"}],
+            "errors": [],
+        }
+
+        def refresh(*_args, **kwargs):
+            Path(kwargs["env"]["THPM_HOOK_REPORT"]).write_text(json.dumps(hook_payload))
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with patch("thpm.service.run", side_effect=refresh):
+            payload = Service(self.paths).run_theme()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["themeName"], "tokyo-night")
+        self.assertEqual(payload["results"], hook_payload["results"])
+        self.assertEqual(payload["counts"], hook_payload["counts"])
+        self.assertEqual(payload["actions"], ["fish reload"])
+        self.assertIn("1 applied, 1 unchanged, 1 skipped, 0 failed", payload["summary"])
+        self.assertEqual(list(self.paths.runtime_dir.glob("thpm-hook-*.json")), [])
+
+    def test_run_theme_normalizes_partial_or_invalid_counts(self):
+        hook_payload = {
+            "ok": True,
+            "counts": {"applied": 1, "failed": "unknown"},
+            "results": [],
+            "errors": [],
+        }
+
+        def refresh(*_args, **kwargs):
+            Path(kwargs["env"]["THPM_HOOK_REPORT"]).write_text(
+                json.dumps(hook_payload)
+            )
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with patch("thpm.service.run", side_effect=refresh):
+            payload = Service(self.paths).run_theme()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["counts"],
+            {"applied": 1, "unchanged": 0, "skipped": 0, "failed": 0},
+        )
+
+    def test_run_theme_fails_when_an_integration_fails(self):
+        hook_payload = {
+            "ok": False,
+            "themeName": "tokyo-night",
+            "counts": {"applied": 0, "unchanged": 0, "skipped": 0, "failed": 1},
+            "results": [
+                {"id": "swaync", "status": "failed", "message": "reload timed out", "changed": []}
+            ],
+            "changed": [],
+            "warnings": [],
+            "errors": [{"plugin": "swaync", "message": "reload timed out"}],
+        }
+
+        def refresh(*_args, **kwargs):
+            Path(kwargs["env"]["THPM_HOOK_REPORT"]).write_text(json.dumps(hook_payload))
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with patch("thpm.service.run", side_effect=refresh):
+            payload = Service(self.paths).run_theme()
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["results"][0]["status"], "failed")
+        self.assertEqual(payload["errors"][0]["plugin"], "swaync")
+
+    def test_theme_hook_uses_stderr_for_human_reports_and_file_for_json(self):
+        hook = Path(__file__).parents[1] / "assets/hooks/90-thpm"
+        bin_dir = self.paths.home / "bin"
+        bin_dir.mkdir()
+        fake_thpm = bin_dir / "thpm"
+        fake_thpm.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ $1 == --json ]]; then\n"
+            "  printf '{\"ok\":true,\"results\":[]}'\n"
+            "else\n"
+            "  printf 'colored integration report\\n'\n"
+            "fi\n"
+        )
+        fake_thpm.chmod(0o755)
+        environment = os.environ.copy()
+        environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+
+        human = subprocess.run(
+            [str(hook), "tokyo-night"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=environment,
+        )
+        self.assertEqual(human.returncode, 0)
+        self.assertEqual(human.stdout, "")
+        self.assertIn("colored integration report", human.stderr)
+
+        report_path = self.paths.home / "hook-report.json"
+        environment["THPM_HOOK_REPORT"] = str(report_path)
+        machine = subprocess.run(
+            [str(hook), "tokyo-night"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=environment,
+        )
+        self.assertEqual(machine.returncode, 0)
+        self.assertEqual(machine.stdout, "")
+        self.assertEqual(machine.stderr, "")
+        self.assertEqual(json.loads(report_path.read_text()), {"ok": True, "results": []})
+
 
 class PresentationTests(unittest.TestCase):
     def test_verbose_result_groups_summary_changes_and_command_output(self):
@@ -917,6 +1042,36 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("Changed files", text)
         self.assertIn("/tmp/one", text)
         self.assertIn("renderer: complete", text)
+
+    def test_integration_outcomes_use_native_terminal_status_colors(self):
+        output = io.StringIO()
+        console = Console(
+            file=output,
+            force_terminal=True,
+            color_system="standard",
+            width=100,
+        )
+        render(
+            {
+                "ok": False,
+                "operation": "run",
+                "summary": "integration report",
+                "results": [
+                    {"status": "applied", "id": "fish", "message": "updated"},
+                    {"status": "unchanged", "id": "fzf", "message": "current"},
+                    {"status": "skipped", "id": "spotify", "message": "missing"},
+                    {"status": "failed", "id": "swaync", "message": "timed out"},
+                ],
+                "warnings": [],
+                "errors": [],
+            },
+            console=console,
+        )
+        text = output.getvalue()
+        self.assertIn("\x1b[1;32mapplied", text)
+        self.assertIn("\x1b[36munchanged", text)
+        self.assertIn("\x1b[33mskipped", text)
+        self.assertIn("\x1b[1;31mfailed", text)
 
     def test_activity_renders_real_reported_stages(self):
         output = io.StringIO()

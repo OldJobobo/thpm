@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import difflib
+import json
+import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -579,9 +582,102 @@ class Service:
 
     def run_theme(self) -> dict[str, object]:
         self._step("Sending refresh to Omarchy")
-        completed = run("theme", "refresh", check=False, timeout=180)
+        self.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix="thpm-hook-",
+            suffix=".json",
+            dir=self.paths.runtime_dir,
+            delete=False,
+        ) as report_file:
+            report_path = Path(report_file.name)
+        environment = os.environ.copy()
+        environment["THPM_HOOK_REPORT"] = str(report_path)
+        try:
+            completed = run(
+                "theme",
+                "refresh",
+                check=False,
+                timeout=180,
+                env=environment,
+            )
+            try:
+                hook_payload = json.loads(report_path.read_text())
+            except (OSError, ValueError):
+                hook_payload = None
+        finally:
+            report_path.unlink(missing_ok=True)
+
         self._step("Verifying refreshed integrations")
-        return envelope("run", completed.returncode == 0, summary="theme refreshed" if completed.returncode == 0 else "theme refresh failed", stdout=completed.stdout, errors=[] if completed.returncode == 0 else [{"message": completed.stderr.strip()}])
+        if not isinstance(hook_payload, dict):
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            errors = (
+                [{"message": detail or "theme refresh failed"}]
+                if completed.returncode != 0
+                else []
+            )
+            warnings = (
+                []
+                if errors
+                else [
+                    {
+                        "message": (
+                            "THPM hook did not report integration results; "
+                            "run thpm reconcile to reinstall it"
+                        )
+                    }
+                ]
+            )
+            return envelope(
+                "run",
+                not errors,
+                summary=(
+                    "theme refreshed without an integration report"
+                    if not errors
+                    else "theme refresh failed"
+                ),
+                stdout=completed.stdout,
+                errors=errors,
+                warnings=warnings,
+                results=[],
+            )
+
+        raw_counts = hook_payload.get("counts")
+        counts: dict[str, int] = {}
+        for status in ("applied", "unchanged", "skipped", "failed"):
+            value = raw_counts.get(status, 0) if isinstance(raw_counts, dict) else 0
+            counts[status] = (
+                value
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                else 0
+            )
+        errors = list(hook_payload.get("errors") or [])
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            errors.insert(0, {"message": detail or "theme refresh failed"})
+        ok = completed.returncode == 0 and bool(hook_payload.get("ok"))
+        subject = (
+            f"theme {hook_payload['themeName']}"
+            if hook_payload.get("themeName")
+            else "active theme"
+        )
+        summary = (
+            f"refreshed {subject}: {counts['applied']} applied, "
+            f"{counts['unchanged']} unchanged, {counts['skipped']} skipped, "
+            f"{counts['failed']} failed"
+        )
+        return envelope(
+            "run",
+            ok,
+            summary=summary,
+            themeName=hook_payload.get("themeName"),
+            counts=counts,
+            results=hook_payload.get("results") or [],
+            changed=hook_payload.get("changed") or [],
+            actions=hook_payload.get("actions") or [],
+            warnings=hook_payload.get("warnings") or [],
+            errors=errors,
+            stdout=completed.stdout,
+        )
 
     def migrate(self) -> dict[str, object]:
         enabled_updates, files = inspect_legacy(self.paths)

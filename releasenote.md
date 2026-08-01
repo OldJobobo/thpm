@@ -1,4 +1,4 @@
-## THPM 1.0.0rc14 is now available
+## THPM 1.0.0rc15 is now available
 
 **THPM is made for Omarchy Quattro and supports Omarchy 4.x.**
 
@@ -21,6 +21,12 @@ thpm ui install
 The second command deploys the latest graphical-manager files from the updated package.
 
 ## What’s new since rc5
+
+### Theme changes now show every integration result
+
+Terminal-driven Omarchy theme changes now print a compact, color-aware line for every enabled THPM integration. Each result is clearly marked as applied, unchanged, skipped, or failed.
+
+`thpm run` shows the same report without running integrations twice, and it now returns a failure when an integration genuinely fails instead of hiding the problem behind a successful theme refresh.
 
 ### Zed themes now work through THPM
 
@@ -72,4 +78,4 @@ Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//
 
 This remains a release candidate. Please report any issues you find.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc14)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc15)

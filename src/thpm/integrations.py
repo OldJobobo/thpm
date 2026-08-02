@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -60,7 +61,6 @@ ZELLIJ_THEME_DIR_OPTION = re.compile(
     re.MULTILINE,
 )
 UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
-ZELLIJ_RESTART_WARNING = "restart active Zellij sessions to load the updated theme"
 OPTIONAL_ASSET_PLUGINS = {
     "branding",
     "typora",
@@ -868,11 +868,41 @@ def _zellij_paths(paths: Paths) -> tuple[Path, Path]:
             raise ValueError(f"Zellij theme_dir is invalid: {config}") from exc
         directory = Path(os.path.expandvars(os.path.expanduser(raw_directory)))
         if not directory.is_absolute():
-            directory = config.parent / directory
+            raise ValueError(
+                f"Zellij theme_dir must be absolute for reliable live reload: {config}"
+            )
         theme_directory = directory.resolve()
     else:
+        default_config = paths.config_home / "zellij/config.kdl"
+        if config != default_config:
+            raise ValueError(
+                "custom Zellij config locations require an absolute root-level "
+                f"theme_dir: {config}"
+            )
         theme_directory = config.parent / "themes"
     return config, theme_directory / "thpm.kdl"
+
+
+def _zellij_config_tick_remaining_ns(path: Path) -> int | None:
+    destination = path.resolve() if path.is_symlink() else path
+    if not destination.is_file():
+        return None
+    previous_mtime_second = destination.stat().st_mtime_ns // 1_000_000_000
+    next_second_ns = (previous_mtime_second + 1) * 1_000_000_000
+    remaining_ns = next_second_ns - time.time_ns()
+    if remaining_ns > 1_100_000_000:
+        raise RuntimeError(
+            f"Zellij configuration has an unsupported future timestamp: {path}"
+        )
+    return remaining_ns
+
+
+def _wait_for_zellij_config_tick(path: Path) -> None:
+    remaining_ns = _zellij_config_tick_remaining_ns(path)
+    if remaining_ns is not None and remaining_ns >= 0:
+        # Zellij 0.44 only reports a strictly newer integer mtime. Wait before
+        # re-reading the config so edits made during the wait cannot be lost.
+        time.sleep((remaining_ns + 1_000_000) / 1_000_000_000)
 
 
 def _write_zellij_config(path: Path, content: str) -> None:
@@ -921,6 +951,7 @@ def _validate_zellij_takeover(paths: Paths, content: str, source: Path) -> None:
     if declaration is None:
         raise ValueError(f"Zellij theme has no theme declaration: {source}")
     config, target = _zellij_paths(paths)
+    _zellij_config_tick_remaining_ns(config)
     existing = config.read_text() if config.is_file() else ""
     try:
         existing = _remove_zellij_legacy_block(existing)
@@ -1054,14 +1085,43 @@ def reload_restored_integration(plugin_id: str, changed: list[str]) -> tuple[lis
         return [], [str(exc)]
 
 
-def _select_zellij_theme(paths: Paths, config: Path, target: Path) -> tuple[Path, bool]:
+def _zellij_selected_content(
+    content: str,
+) -> tuple[str, re.Match[str] | None, str]:
+    existing = _remove_zellij_legacy_block(content)
+    selected = _zellij_theme_option(existing)
+    if selected:
+        start, end = selected.span("value")
+        updated = existing[:start] + '"thpm-current"' + existing[end:]
+    else:
+        updated = 'theme "thpm-current"\n' + (
+            "\n" + existing.lstrip() if existing.strip() else ""
+        )
+    if not updated.endswith("\n"):
+        updated += "\n"
+    return existing, selected, updated
+
+
+def _select_zellij_theme(
+    paths: Paths, config: Path, target: Path, *, refresh: bool = False
+) -> tuple[Path, bool]:
     config_existed = config.exists() or config.is_symlink()
     original = config.read_text() if config_existed else ""
     try:
-        existing = _remove_zellij_legacy_block(original)
+        existing, selected, updated = _zellij_selected_content(original)
     except ValueError as exc:
         raise RuntimeError("Zellij legacy THPM block is invalid") from exc
-    selected = _zellij_theme_option(existing)
+    if refresh or updated != original:
+        _wait_for_zellij_config_tick(config)
+        # Re-read after the wait so a concurrent user edit is transformed or
+        # rejected rather than overwritten with stale pre-wait content.
+        config_existed = config.exists() or config.is_symlink()
+        original = config.read_text() if config_existed else ""
+        try:
+            existing, selected, updated = _zellij_selected_content(original)
+        except ValueError as exc:
+            raise RuntimeError("Zellij legacy THPM block is invalid") from exc
+
     state_file = paths.zellij_theme_state_file
     saved = _read_zellij_state(state_file)
     if state_file.exists() and saved is None and (
@@ -1085,20 +1145,13 @@ def _select_zellij_theme(paths: Paths, config: Path, target: Path) -> tuple[Path
             )
             + "\n",
         )
-    if selected:
-        start, end = selected.span("value")
-        updated = (
-            existing[:start] + '"thpm-current"' + existing[end:]
-        )
-    else:
-        updated = 'theme "thpm-current"\n' + (
-            "\n" + existing.lstrip() if existing.strip() else ""
-        )
-    if not updated.endswith("\n"):
-        updated += "\n"
-    if updated != original:
+    config_changed = updated != original
+    if config_changed or refresh:
+        # Zellij watches config.kdl, not files under theme_dir. Rewriting the
+        # selected config after installing a changed external theme makes
+        # running sessions reparse the newly completed theme file.
         _write_zellij_config(config, updated)
-    return config, updated != original
+    return config, config_changed or refresh
 
 
 def cleanup_zellij(paths: Paths) -> tuple[list[str], list[str]]:
@@ -1123,6 +1176,10 @@ def cleanup_zellij(paths: Paths) -> tuple[list[str], list[str]]:
             config, target = _zellij_paths(paths)
         except (OSError, UnicodeError, ValueError) as exc:
             return [], [f"preserved Zellij configuration because its paths are invalid: {exc}"]
+    try:
+        _wait_for_zellij_config_tick(config)
+    except RuntimeError as exc:
+        return [], [f"preserved Zellij configuration because it cannot be refreshed safely: {exc}"]
     original = config.read_text() if config.is_file() else ""
     try:
         without_legacy = _remove_zellij_legacy_block(original)
@@ -1446,20 +1503,17 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
             cleanup_changed, cleanup_warnings = cleanup_zellij(paths)
             changed.extend(cleanup_changed)
             warnings.extend(cleanup_warnings)
-            if cleanup_changed:
-                warnings.append(ZELLIJ_RESTART_WARNING)
             return _result(plugin_id, changed, [], warnings)
         _validate_zellij_takeover(paths, content, source if source.is_file() else colors)
         zellij_config, zellij_target = _zellij_paths(paths)
-        if _install_zellij_theme(paths, content, zellij_target):
+        theme_changed = _install_zellij_theme(paths, content, zellij_target)
+        if theme_changed:
             changed.append(str(zellij_target))
         config_file, config_changed = _select_zellij_theme(
-            paths, zellij_config, zellij_target
+            paths, zellij_config, zellij_target, refresh=theme_changed
         )
         if config_changed:
             changed.append(str(config_file))
-        if changed:
-            warnings.append(ZELLIJ_RESTART_WARNING)
     elif plugin_id in targets:
         source_names = candidates.get(plugin_id, (GENERATED[plugin_id],))
         source = next(

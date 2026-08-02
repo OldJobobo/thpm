@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restore live Zellij color updates by refreshing its watched `config.kdl` after an external managed theme changes, while preserving custom paths, safe restoration, and true no-op behavior.
+
 ## 1.0.0rc15 - 2026-07-31
 
 - Show a compact, color-aware outcome line for every enabled THPM integration during terminal-driven Omarchy theme changes and `thpm run`, while preserving structured JSON reporting and honest failure status.

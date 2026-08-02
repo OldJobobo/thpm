@@ -15,7 +15,6 @@ from .files import atomic_copy, atomic_text
 from .integrations import (
     MANAGED_OUTPUT_PLUGINS,
     OPTIONAL_ASSET_PLUGINS,
-    ZELLIJ_RESTART_WARNING,
     apply_enabled,
     cleanup_managed_outputs,
     cleanup_optional_assets,
@@ -321,8 +320,6 @@ class Service:
                     {"plugin": "zellij", "message": message}
                     for message in cleanup_warnings
                 )
-                if cleanup_changed:
-                    warnings.append({"plugin": "zellij", "message": ZELLIJ_RESTART_WARNING})
             elif not value and plugin_id == "zed-extra":
                 cleanup_changed, cleanup_warnings = cleanup_zed_assets(
                     self.paths, assume_legacy=True
@@ -544,8 +541,6 @@ class Service:
                     {"plugin": "zellij", "message": message}
                     for message in zellij_warnings
                 )
-                if zellij_changed:
-                    warnings.append({"plugin": "zellij", "message": ZELLIJ_RESTART_WARNING})
                 if self.paths.hook_file.exists():
                     self.paths.hook_file.unlink()
                     changed.append(str(self.paths.hook_file))

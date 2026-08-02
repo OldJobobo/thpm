@@ -9,6 +9,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -552,7 +553,7 @@ class ServiceTests(Sandbox):
         self.assertEqual(zellij_config.read_text(), "")
         self.assertEqual(fish_target.read_text(), "user output")
         self.assertFalse(fish_source.exists())
-        self.assertIn("restart active Zellij sessions", str(payload["warnings"]))
+        self.assertNotIn("restart active Zellij sessions", str(payload["warnings"]))
 
     def test_uninstall_removes_legacy_system24_output_despite_shared_marker(self):
         source = self.paths.current_theme / "thpm-vencord-system24.theme.css"
@@ -1868,7 +1869,7 @@ class IntegrationTests(Sandbox):
         )
         self.assertEqual(config.read_text(), 'theme "thpm-current"\n')
         self.assertIn(str(config), result.changed)
-        self.assertIn("restart active Zellij sessions", result.warnings[0])
+        self.assertEqual(result.warnings, [])
         saved = json.loads(self.paths.zellij_theme_state_file.read_text())
         self.assertEqual(saved["themeOption"], 'theme "current"')
 
@@ -1916,7 +1917,7 @@ class IntegrationTests(Sandbox):
         self.assertEqual(config.read_text(), 'theme "catppuccin"\npane_frames true\n')
         self.assertFalse((self.paths.config_home / "zellij/themes/thpm.kdl").exists())
         self.assertFalse(self.paths.zellij_theme_state_file.exists())
-        self.assertIn("restart active Zellij sessions", result.warnings[0])
+        self.assertEqual(result.warnings, [])
 
     def test_zellij_hook_without_asset_runs_cleanup_instead_of_skipping(self):
         config = self.paths.config_home / "zellij/config.kdl"
@@ -1932,7 +1933,7 @@ class IntegrationTests(Sandbox):
         self.assertEqual(config.read_text(), "")
         self.assertTrue(target.exists())
         self.assertIn("preserved untracked Zellij theme", str(zellij["warnings"]))
-        self.assertIn("restart active Zellij sessions", str(zellij["warnings"]))
+        self.assertNotIn("restart active Zellij sessions", str(zellij["warnings"]))
 
     def test_zellij_preserves_an_already_normalized_theme_asset(self):
         theme_asset = self.paths.current_theme / "zellij.kdl"
@@ -1969,7 +1970,7 @@ class IntegrationTests(Sandbox):
         self.assertTrue(payload["ok"])
         self.assertEqual(config.read_text(), 'theme "default"\n')
         self.assertFalse((self.paths.config_home / "zellij/themes/thpm.kdl").exists())
-        self.assertIn("restart active Zellij sessions", str(payload["warnings"]))
+        self.assertNotIn("restart active Zellij sessions", str(payload["warnings"]))
 
     def test_zellij_cleanup_removes_legacy_block_with_manual_selection(self):
         config = self.paths.config_home / "zellij/config.kdl"
@@ -2009,26 +2010,119 @@ class IntegrationTests(Sandbox):
         source.write_text('themes { source { fg "white" } }\n')
         config_dir = self.paths.home / "custom-zellij"
         config = config_dir / "config.kdl"
+        theme_dir = config_dir / "alternate-themes"
         config.parent.mkdir(parents=True)
-        config.write_text('theme_dir "alternate-themes"; /* keep */\ntheme "old";\n')
+        config.write_text(
+            f"theme_dir {json.dumps(str(theme_dir))}; /* keep */\ntheme \"old\";\n"
+        )
         with patch.dict(
             os.environ, {"ZELLIJ_CONFIG_DIR": str(config_dir)}, clear=True
         ):
             result = apply("zellij", self.paths)
-        target = config_dir / "alternate-themes/thpm.kdl"
+            source.write_text('themes { source { fg "black" } }\n')
+            refreshed = apply("zellij", self.paths)
+        target = theme_dir / "thpm.kdl"
         self.assertTrue(target.is_file())
         self.assertIn(str(target), result.changed)
+        self.assertIn(str(target), refreshed.changed)
+        self.assertIn(str(config), refreshed.changed)
         self.assertEqual(
             config.read_text(),
-            'theme_dir "alternate-themes"; /* keep */\ntheme "thpm-current";\n',
+            f"theme_dir {json.dumps(str(theme_dir))}; /* keep */\n"
+            'theme "thpm-current";\n',
         )
         self.assertFalse((self.paths.config_home / "zellij/config.kdl").exists())
         source.unlink()
         apply("zellij", self.paths)
         self.assertEqual(
-            config.read_text(), 'theme_dir "alternate-themes"; /* keep */\ntheme "old";\n'
+            config.read_text(),
+            f"theme_dir {json.dumps(str(theme_dir))}; /* keep */\ntheme \"old\";\n",
         )
         self.assertFalse(target.exists())
+
+    def test_zellij_uses_explicit_environment_config_file(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        config = self.paths.home / "explicit-zellij/config.kdl"
+        theme_dir = config.parent / "absolute-themes"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            f"theme_dir {json.dumps(str(theme_dir))}\ntheme \"old\"\n"
+        )
+
+        with patch.dict(
+            os.environ, {"ZELLIJ_CONFIG_FILE": str(config)}, clear=True
+        ):
+            apply("zellij", self.paths)
+            source.write_text('themes { source { fg "black" } }\n')
+            refreshed = apply("zellij", self.paths)
+
+        self.assertEqual(
+            config.read_text(),
+            f"theme_dir {json.dumps(str(theme_dir))}\ntheme \"thpm-current\"\n",
+        )
+        self.assertIn(str(config), refreshed.changed)
+        self.assertTrue((theme_dir / "thpm.kdl").is_file())
+
+    def test_zellij_rejects_ambiguous_custom_theme_locations(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        config = self.paths.home / "custom-zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+
+        config.write_text('theme "old"\n')
+        with patch.dict(
+            os.environ, {"ZELLIJ_CONFIG_FILE": str(config)}, clear=True
+        ), self.assertRaisesRegex(ValueError, "absolute root-level theme_dir"):
+            apply("zellij", self.paths)
+
+        config.write_text('theme_dir "relative-themes"\ntheme "old"\n')
+        with patch.dict(
+            os.environ, {"ZELLIJ_CONFIG_FILE": str(config)}, clear=True
+        ), self.assertRaisesRegex(ValueError, "theme_dir must be absolute"):
+            apply("zellij", self.paths)
+
+    def test_zellij_rereads_config_after_watcher_wait(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme "old"\n')
+
+        def user_edit(_path: Path) -> None:
+            config.write_text('theme "new-user-theme"\npane_frames false\n')
+
+        with patch(
+            "thpm.integrations._wait_for_zellij_config_tick",
+            side_effect=user_edit,
+        ):
+            apply("zellij", self.paths)
+
+        self.assertEqual(
+            config.read_text(), 'theme "thpm-current"\npane_frames false\n'
+        )
+        saved = json.loads(self.paths.zellij_theme_state_file.read_text())
+        self.assertEqual(saved["themeOption"], 'theme "new-user-theme"')
+
+    def test_zellij_rejects_future_dated_config_before_installing_theme(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme "old"\n')
+        future = time.time() + 10
+        os.utime(config, (future, future))
+
+        with self.assertRaisesRegex(RuntimeError, "unsupported future timestamp"):
+            apply("zellij", self.paths)
+
+        self.assertEqual(config.read_text(), 'theme "old"\n')
+        self.assertFalse((config.parent / "themes/thpm.kdl").exists())
+        self.assertFalse(self.paths.zellij_theme_state_file.exists())
 
     def test_zellij_preserves_symlink_and_config_mode(self):
         source = self.paths.current_theme / "zellij.kdl"
@@ -2043,6 +2137,11 @@ class IntegrationTests(Sandbox):
         config.symlink_to(real_config)
 
         apply("zellij", self.paths)
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(real_config.stat().st_mode & 0o777, 0o600)
+        source.write_text('themes { source { fg "black" } }\n')
+        refreshed = apply("zellij", self.paths)
+        self.assertIn(str(config), refreshed.changed)
         self.assertTrue(config.is_symlink())
         self.assertEqual(real_config.stat().st_mode & 0o777, 0o600)
         source.unlink()
@@ -2103,14 +2202,44 @@ class IntegrationTests(Sandbox):
         self.assertFalse(load(self.paths)["zellij"])
         self.assertIn("legacy THPM block is invalid", str(payload["warnings"]))
 
-    def test_zellij_unchanged_apply_does_not_request_restart(self):
+    def test_zellij_refreshes_config_for_changed_theme_and_preserves_noop(self):
         source = self.paths.current_theme / "zellij.kdl"
         source.parent.mkdir(parents=True)
         source.write_text('themes { source { fg "white" } }\n')
+        config = self.paths.config_home / "zellij/config.kdl"
         apply("zellij", self.paths)
+        first_inode = config.stat().st_ino
+
+        first_mtime_second = config.stat().st_mtime_ns // 1_000_000_000
+        source.write_text('themes { source { fg "black" } }\n')
+        refreshed = apply("zellij", self.paths)
+        second_mtime_second = config.stat().st_mtime_ns // 1_000_000_000
+        self.assertIn(str(config), refreshed.changed)
+        self.assertNotEqual(config.stat().st_ino, first_inode)
+        self.assertGreater(second_mtime_second, first_mtime_second)
+        self.assertEqual(config.read_text(), 'theme "thpm-current"\n')
+        self.assertEqual(refreshed.warnings, [])
+
+        source.write_text('themes { source { fg "red" } }\n')
+        second_refresh = apply("zellij", self.paths)
+        third_mtime_second = config.stat().st_mtime_ns // 1_000_000_000
+        self.assertIn(str(config), second_refresh.changed)
+        self.assertGreater(third_mtime_second, second_mtime_second)
+        self.assertLessEqual(
+            third_mtime_second, time.time_ns() // 1_000_000_000
+        )
+
+        while time.time_ns() // 1_000_000_000 <= third_mtime_second:
+            time.sleep(0.01)
+        config.write_text(config.read_text() + "pane_frames true\n")
+        external_mtime_second = config.stat().st_mtime_ns // 1_000_000_000
+        self.assertGreater(external_mtime_second, third_mtime_second)
+
+        refreshed_inode = config.stat().st_ino
         result = apply("zellij", self.paths)
         self.assertEqual(result.status, "unchanged")
         self.assertEqual(result.warnings, [])
+        self.assertEqual(config.stat().st_ino, refreshed_inode)
 
     def test_optional_assets_restore_the_files_they_displaced(self):
         cases = {

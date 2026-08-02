@@ -37,15 +37,21 @@ config="$sandbox/config/zellij/config.kdl"
 installed_theme="$sandbox/config/zellij/themes/thpm.kdl"
 expected_config="$sandbox/expected-config.kdl"
 expected_theme="$sandbox/expected-theme.kdl"
+selected_config="$sandbox/selected-config.kdl"
+hot_reload_report="$sandbox/hot-reload.json"
+hot_reload_log="$sandbox/hot-reload.log"
+hot_reload_pid=""
 applied=false
 
 export PYTHONPATH="$repo_dir/src"
 export THPM_ASSET_DIR="$repo_dir/assets"
+export HOME="$sandbox/home"
 export XDG_CONFIG_HOME="$sandbox/config"
 export XDG_STATE_HOME="$sandbox/state"
 export XDG_DATA_HOME="$sandbox/data"
 export XDG_CACHE_HOME="$sandbox/cache"
 export XDG_RUNTIME_DIR="$sandbox/run"
+unset ZELLIJ_CONFIG_FILE ZELLIJ_CONFIG_DIR
 
 restore() {
     local result=0
@@ -71,6 +77,10 @@ restore() {
 finish() {
     local result=$?
     trap - EXIT INT TERM
+    if [[ -n "$hot_reload_pid" ]]; then
+        kill "$hot_reload_pid" >/dev/null 2>&1 || true
+        wait "$hot_reload_pid" >/dev/null 2>&1 || true
+    fi
     zellij delete-session --force "$session" >/dev/null 2>&1 || true
     restore || result=1
     if [[ "$keep" == true ]]; then
@@ -83,6 +93,7 @@ finish() {
 trap finish EXIT INT TERM
 
 mkdir -p -- \
+    "$sandbox/home" \
     "$sandbox/config/zellij/themes" \
     "$sandbox/state/omarchy/current/theme" \
     "$sandbox/run"
@@ -159,13 +170,73 @@ grep -Fq 'thpm-current {' "$installed_theme" || {
     printf 'FAIL: installed theme was not normalized to thpm-current\n' >&2
     exit 1
 }
-zellij setup --check >/dev/null
+zellij_check="$(zellij setup --check 2>&1)"
+grep -Fq "[LOOKING FOR CONFIG FILE FROM]: \"$config\"" <<<"$zellij_check" || {
+    printf 'FAIL: Zellij did not select the sandbox config\n%s\n' "$zellij_check" >&2
+    exit 1
+}
+cp -- "$config" "$selected_config"
 printf 'PASS: local source applied a valid thpm-current theme.\n'
 
+apply_live_update() {
+    "$python_bin" - "$source_palette" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+replacements = {
+    '#002b36': '#1b1028',
+    '#00212a': '#140b20',
+    '#00191f': '#0d0716',
+    '#073642': '#342047',
+    '#586e75': '#6c3f83',
+    '#eee8d5': '#f7d7ff',
+    '#268bd2': '#ff4fd8',
+    '#2aa198': '#62e6ff',
+}
+for old, new in replacements.items():
+    content = content.replace(old, new)
+path.write_text(content)
+PY
+    "$python_bin" -m thpm --json hook-run theme-set zellij-live-test --quiet \
+        >"$hot_reload_report" 2>"$hot_reload_log"
+    cmp -s -- "$config" "$selected_config"
+    "$python_bin" - "$hot_reload_report" "$config" "$installed_theme" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+payload = json.loads(Path(sys.argv[1]).read_text())
+changed = set(payload.get("changed", []))
+missing = {sys.argv[2], sys.argv[3]} - changed
+if missing:
+    raise SystemExit(f"live update did not report rewritten paths: {sorted(missing)}")
+PY
+}
+
 if [[ "$launch" == true ]]; then
-    printf '\nLaunching Zellij with the isolated palette-generated test theme.\n'
+    printf '\nLaunching Zellij with the initial sandbox theme.\n'
+    printf 'Its colors should switch live after two seconds without restarting the session.\n'
     printf 'Exit the session with Ctrl-q to run the restoration check.\n\n'
+    (
+        sleep 2
+        apply_live_update
+    ) &
+    hot_reload_pid=$!
     zellij --session "$session"
+    wait "$hot_reload_pid"
+    hot_reload_pid=""
+    printf 'Did the running session visibly switch colors? [y/N] '
+    read -r observed </dev/tty || observed=""
+    case "$observed" in
+        y|Y|yes|YES|Yes) ;;
+        *) printf 'FAIL: live color reload was not visually confirmed.\n' >&2; exit 1 ;;
+    esac
+    printf 'PASS: the running Zellij session visibly reloaded its colors.\n'
+else
+    apply_live_update
+    printf 'PASS: a later theme update refreshed watched config.kdl without changing its content.\n'
 fi
 
 restore

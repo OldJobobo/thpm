@@ -105,7 +105,11 @@ bash -n install.sh uninstall.sh assets/hooks/90-thpm
 qmllint assets/qml/Panel.qml.in  # when Qt tooling is installed
 ```
 
-See [docs/architecture.md](docs/architecture.md), [docs/plugins.md](docs/plugins.md), and the [Quattro compatibility plan](docs/quattro-compatibility-plan.md) for the contracts and native-ownership boundary.
+Run `scripts/zellij-live-test.sh` to apply the checkout's Zellij adapter in an isolated XDG sandbox, open a real themed Zellij session, switch its colors while it is running, and verify restoration on exit. Use `--no-launch` to verify the watched-config refresh and cleanup without opening an interactive session, or `--keep` to retain the restored sandbox for inspection.
+
+Run `scripts/local-arch-package.sh` to package the exact current working tree without creating a release or publishing to AUR. Pass `--install` to install that artifact through pacman so `/usr/bin/thpm`, packaged assets, hooks, and the graphical manager use the local build. The default local package release is `99`, making it visibly distinct from the published package; rebuild the published package with `yay -S thpm --rebuild` to roll back.
+
+Start with the [visual architecture map](docs/architecture-map.md), then see [docs/architecture.md](docs/architecture.md), [docs/plugins.md](docs/plugins.md), and the [Quattro compatibility plan](docs/quattro-compatibility-plan.md) for the detailed contracts and native-ownership boundary.
 
 Source updates follow stable GitHub releases and require matching `thpm-<version>.tar.gz` and `thpm-<version>.tar.gz.sha256` assets. Build both from committed content with `scripts/release-assets.sh`. Package-managed installations hand updates back to AUR rather than overwriting pacman-owned files.
 

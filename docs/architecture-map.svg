@@ -1,0 +1,299 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1160" viewBox="0 0 1600 1160" role="img" aria-labelledby="title desc">
+  <title id="title">THPM architecture map</title>
+  <desc id="desc">A layered map showing THPM interfaces converging on one service, its registry and state control plane, the Omarchy template and theme-hook pipeline, application adapters, ownership boundaries, and safety contracts.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#15303a" stroke-width="1" opacity="0.42"/>
+      <circle cx="1" cy="1" r="1" fill="#294752" opacity="0.5"/>
+    </pattern>
+    <filter id="signalGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrowCyan" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#55d6d0"/>
+    </marker>
+    <marker id="arrowMint" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#8bd49c"/>
+    </marker>
+    <marker id="arrowCoral" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#ff8b73"/>
+    </marker>
+    <style>
+      .bg { fill: #071018; }
+      .frame { fill: #0a161e; stroke: #28424c; stroke-width: 1.5; }
+      .panel { fill: #0d1b24; stroke: #2b4651; stroke-width: 1.5; }
+      .panel-cyan { fill: #0b252b; stroke: #55d6d0; stroke-width: 2; }
+      .panel-mint { fill: #10261f; stroke: #8bd49c; stroke-width: 2; }
+      .panel-gold { fill: #292317; stroke: #e7c66c; stroke-width: 2; }
+      .panel-coral { fill: #2b1b1b; stroke: #ff8b73; stroke-width: 2; }
+      .panel-blue { fill: #111f35; stroke: #76a9ff; stroke-width: 2; }
+      .title { fill: #f1faf7; font: 700 44px "DejaVu Sans", sans-serif; letter-spacing: -1px; }
+      .subtitle { fill: #9cb4b7; font: 400 18px "DejaVu Sans", sans-serif; }
+      .eyebrow { fill: #55d6d0; font: 700 12px "DejaVu Sans", sans-serif; letter-spacing: 2.4px; }
+      .section { fill: #9cb4b7; font: 700 12px "DejaVu Sans", sans-serif; letter-spacing: 2px; }
+      .label { fill: #edf7f4; font: 700 17px "DejaVu Sans", sans-serif; }
+      .label-sm { fill: #edf7f4; font: 700 14px "DejaVu Sans", sans-serif; }
+      .label-xs { fill: #edf7f4; font: 700 12.5px "DejaVu Sans", sans-serif; }
+      .body { fill: #b7c9ca; font: 400 13px "DejaVu Sans", sans-serif; }
+      .body-sm { fill: #a9bfc1; font: 400 11.5px "DejaVu Sans", sans-serif; }
+      .mono { fill: #e7c66c; font: 500 12px "DejaVu Sans Mono", monospace; }
+      .mono-sm { fill: #c9d8d8; font: 500 10.5px "DejaVu Sans Mono", monospace; }
+      .number { fill: #071018; font: 800 13px "DejaVu Sans", sans-serif; text-anchor: middle; dominant-baseline: middle; }
+      .signal { fill: none; stroke: #55d6d0; stroke-width: 3; marker-end: url(#arrowCyan); }
+      .signal-thin { fill: none; stroke: #55d6d0; stroke-width: 2; marker-end: url(#arrowCyan); }
+      .omarchy { fill: none; stroke: #8bd49c; stroke-width: 3; marker-end: url(#arrowMint); }
+      .effect { fill: none; stroke: #ff8b73; stroke-width: 3; marker-end: url(#arrowCoral); }
+      .inspect { fill: none; stroke: #76a9ff; stroke-width: 1.8; stroke-dasharray: 6 6; marker-end: url(#arrowCyan); opacity: 0.9; }
+      .divider { stroke: #29444e; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="1160" rx="24"/>
+  <rect width="1600" height="1160" rx="24" fill="url(#grid)"/>
+  <rect x="20" y="20" width="1560" height="1120" rx="18" fill="none" stroke="#29444e" stroke-width="2"/>
+
+  <!-- Header -->
+  <text x="54" y="70" class="eyebrow">OMARCHY 4 · THEME INTEGRATION CONTROL PLANE</text>
+  <text x="54" y="121" class="title">THPM / architecture map</text>
+  <text x="54" y="151" class="subtitle">One plugin state model. Three interfaces. One Omarchy-owned render step. Isolated application adapters.</text>
+
+  <g transform="translate(1055 64)">
+    <rect width="490" height="82" rx="12" class="frame"/>
+    <circle cx="22" cy="25" r="5" fill="#55d6d0"/><text x="36" y="29" class="body-sm">THPM control</text>
+    <circle cx="150" cy="25" r="5" fill="#e7c66c"/><text x="164" y="29" class="body-sm">state / files</text>
+    <circle cx="288" cy="25" r="5" fill="#8bd49c"/><text x="302" y="29" class="body-sm">Omarchy-owned</text>
+    <circle cx="22" cy="56" r="5" fill="#ff8b73"/><text x="36" y="60" class="body-sm">application side effect</text>
+    <path d="M288 56h42" class="inspect"/><text x="344" y="60" class="body-sm">inspection / response</text>
+  </g>
+
+  <!-- Interface layer -->
+  <rect x="42" y="180" width="1516" height="178" rx="16" class="frame"/>
+  <text x="62" y="204" class="section">01 · INTERFACES — DIFFERENT SURFACES, SAME OPERATIONS</text>
+
+  <g transform="translate(64 226)">
+    <rect width="176" height="104" rx="12" class="panel"/>
+    <text x="18" y="29" class="label">Person / automation</text>
+    <text x="18" y="55" class="body">commands, clicks, scripts</text>
+    <text x="18" y="80" class="mono-sm">human output · --json</text>
+  </g>
+
+  <g transform="translate(286 218)">
+    <rect width="130" height="50" rx="10" class="panel-blue"/>
+    <text x="16" y="22" class="label-sm">CLI</text><text x="16" y="39" class="mono-sm">cli.py</text>
+    <rect y="61" width="130" height="50" rx="10" class="panel-blue"/>
+    <text x="16" y="83" class="label-sm">QML panel</text><text x="16" y="100" class="mono-sm">thpm --json</text>
+  </g>
+  <g transform="translate(430 218)">
+    <rect width="130" height="50" rx="10" class="panel-blue"/>
+    <text x="16" y="22" class="label-sm">Textual TUI</text><text x="16" y="39" class="mono-sm">tui.py</text>
+    <rect y="61" width="130" height="50" rx="10" class="panel"/>
+    <text x="16" y="83" class="label-sm">Theme hook</text><text x="16" y="100" class="mono-sm">hook-run</text>
+  </g>
+
+  <path d="M240 278H275" class="signal-thin"/>
+  <path d="M565 278H626" class="signal" filter="url(#signalGlow)"/>
+
+  <g transform="translate(640 218)">
+    <rect width="350" height="112" rx="14" class="panel-cyan"/>
+    <text x="22" y="28" class="eyebrow">SINGLE PLUGIN OPERATION PATH</text>
+    <text x="22" y="57" class="label">Service</text>
+    <text x="22" y="80" class="body">validation · orchestration · progress</text>
+    <text x="22" y="100" class="mono-sm">src/thpm/service.py</text>
+  </g>
+
+  <path d="M990 274H1044" class="inspect"/>
+  <g transform="translate(1058 218)">
+    <rect width="474" height="112" rx="14" class="panel"/>
+    <text x="20" y="28" class="eyebrow">STABLE SERVICE ENVELOPE</text>
+    <text x="20" y="55" class="mono">ok · operation · summary · errors</text>
+    <text x="20" y="78" class="mono-sm">plugins · changed · warnings · migration</text>
+    <text x="20" y="99" class="body-sm">Rendered for people or emitted as decoration-free JSON.</text>
+  </g>
+
+  <!-- Control plane -->
+  <rect x="42" y="376" width="1516" height="210" rx="16" class="frame"/>
+  <text x="62" y="400" class="section">02 · CONTROL PLANE — DECLARATION, PERSISTENCE, INSPECTION, SERIALIZATION</text>
+
+  <path d="M815 330V426" class="signal"/>
+  <path d="M178 426H1394" stroke="#55d6d0" stroke-width="2" opacity="0.62"/>
+
+  <g transform="translate(64 438)">
+    <rect width="244" height="120" rx="12" class="panel-cyan"/>
+    <text x="18" y="27" class="label">Plugin registry</text>
+    <text x="18" y="51" class="body">IDs · kinds · prerequisites</text>
+    <text x="18" y="71" class="body">templates · theme assets</text>
+    <text x="18" y="98" class="mono-sm">registry.py · models.py</text>
+  </g>
+  <circle cx="186" cy="426" r="12" fill="#55d6d0"/><text x="186" y="426" class="number">A</text>
+
+  <g transform="translate(330 438)">
+    <rect width="244" height="120" rx="12" class="panel-gold"/>
+    <text x="18" y="27" class="label">Persisted intent</text>
+    <text x="18" y="51" class="mono-sm">state.toml · ui.toml</text>
+    <text x="18" y="72" class="body">Enabled state is authoritative;</text>
+    <text x="18" y="91" class="body">generated files are not state.</text>
+  </g>
+  <circle cx="452" cy="426" r="12" fill="#e7c66c"/><text x="452" y="426" class="number">B</text>
+
+  <g transform="translate(596 438)">
+    <rect width="244" height="120" rx="12" class="panel-blue"/>
+    <text x="18" y="27" class="label">Snapshot + readiness</text>
+    <text x="18" y="51" class="body">available · applicable</text>
+    <text x="18" y="71" class="body">ownership · warnings</text>
+    <text x="18" y="98" class="mono-sm">snapshot.py · doctor()</text>
+  </g>
+  <circle cx="718" cy="426" r="12" fill="#76a9ff"/><text x="718" y="426" class="number">C</text>
+
+  <g transform="translate(862 438)">
+    <rect width="244" height="120" rx="12" class="panel-gold"/>
+    <text x="18" y="27" class="label">Locks + migrations</text>
+    <text x="18" y="51" class="mono-sm">thpm.lock</text>
+    <text x="18" y="70" class="mono-sm">thpm-migration.lock</text>
+    <text x="18" y="96" class="body-sm">Serialized, retryable mutations.</text>
+  </g>
+  <circle cx="984" cy="426" r="12" fill="#e7c66c"/><text x="984" y="426" class="number">D</text>
+
+  <g transform="translate(1128 438)">
+    <rect width="404" height="120" rx="12" class="panel-mint"/>
+    <text x="18" y="27" class="label">Ownership boundary</text>
+    <text x="18" y="51" class="body">Omarchy-native integrations stay read-only.</text>
+    <text x="18" y="72" class="body">THPM acts only on declared integrations and gaps.</text>
+    <text x="18" y="98" class="mono-sm">NATIVE · capability checks · theme precedence</text>
+  </g>
+  <circle cx="1330" cy="426" r="12" fill="#8bd49c"/><text x="1330" y="426" class="number">E</text>
+
+  <!-- Runtime pipeline -->
+  <rect x="42" y="604" width="1516" height="332" rx="16" class="frame"/>
+  <text x="62" y="628" class="section">03 · THEME PIPELINE — THE SIGNAL PATH FROM ENABLED INTENT TO APPLICATION OUTPUT</text>
+
+  <!-- Main bus -->
+  <path d="M200 737H1378" stroke="#55d6d0" stroke-width="8" opacity="0.11" filter="url(#signalGlow)"/>
+
+  <g transform="translate(62 660)">
+    <rect width="170" height="128" rx="12" class="panel-gold"/>
+    <circle cx="22" cy="22" r="13" fill="#e7c66c"/><text x="22" y="22" class="number">1</text>
+    <text x="44" y="27" class="label-xs">Packaged assets</text>
+    <text x="16" y="55" class="mono-sm">assets/templates/*.tpl</text>
+    <text x="16" y="76" class="mono-sm">assets/hooks/90-thpm</text>
+    <text x="16" y="105" class="body-sm">Versioned with THPM.</text>
+  </g>
+
+  <path d="M232 724H264" class="signal"/>
+  <g transform="translate(276 660)">
+    <rect width="170" height="128" rx="12" class="panel-cyan"/>
+    <circle cx="22" cy="22" r="13" fill="#55d6d0"/><text x="22" y="22" class="number">2</text>
+    <text x="44" y="27" class="label-xs">Reconcile</text>
+    <text x="16" y="55" class="body-sm">Match templates to</text>
+    <text x="16" y="73" class="body-sm">enabled plugin state.</text>
+    <text x="16" y="100" class="mono-sm">templates.py</text>
+    <text x="16" y="116" class="mono-sm">atomic_copy()</text>
+  </g>
+
+  <path d="M446 724H478" class="signal"/>
+  <g transform="translate(490 660)">
+    <rect width="170" height="128" rx="12" class="panel-gold"/>
+    <circle cx="22" cy="22" r="13" fill="#e7c66c"/><text x="22" y="22" class="number">3</text>
+    <text x="44" y="27" class="label-xs">Themed inputs</text>
+    <text x="16" y="56" class="mono-sm">~/.config/omarchy/</text>
+    <text x="16" y="73" class="mono-sm">themed/thpm-*.tpl</text>
+    <text x="16" y="102" class="body-sm">THPM owns only its names.</text>
+  </g>
+
+  <path d="M660 724H692" class="omarchy"/>
+  <g transform="translate(704 660)">
+    <rect width="170" height="128" rx="12" class="panel-mint"/>
+    <circle cx="22" cy="22" r="13" fill="#8bd49c"/><text x="22" y="22" class="number">4</text>
+    <text x="44" y="27" class="label-xs">Omarchy renders</text>
+    <text x="16" y="55" class="body-sm">Resolves semantic palette</text>
+    <text x="16" y="73" class="body-sm">and renders templates.</text>
+    <text x="16" y="100" class="mono-sm">omarchy theme refresh</text>
+  </g>
+
+  <path d="M874 724H906" class="omarchy"/>
+  <g transform="translate(918 660)">
+    <rect width="170" height="128" rx="12" class="panel-gold"/>
+    <circle cx="22" cy="22" r="13" fill="#e7c66c"/><text x="22" y="22" class="number">5</text>
+    <text x="44" y="27" class="label-xs">Active theme</text>
+    <text x="16" y="55" class="mono-sm">current/theme/</text>
+    <text x="16" y="75" class="body-sm">Rendered fallbacks plus</text>
+    <text x="16" y="93" class="body-sm">authored theme assets.</text>
+  </g>
+
+  <path d="M1088 724H1120" class="signal"/>
+  <g transform="translate(1132 660)">
+    <rect width="170" height="128" rx="12" class="panel-cyan"/>
+    <circle cx="22" cy="22" r="13" fill="#55d6d0"/><text x="22" y="22" class="number">6</text>
+    <text x="44" y="27" class="label-xs">Theme-set hook</text>
+    <text x="16" y="55" class="mono-sm">90-thpm</text>
+    <text x="16" y="75" class="body-sm">Calls one service event</text>
+    <text x="16" y="93" class="body-sm">after every theme change.</text>
+  </g>
+
+  <path d="M1302 724H1334" class="effect"/>
+  <g transform="translate(1346 660)">
+    <rect width="186" height="128" rx="12" class="panel-coral"/>
+    <circle cx="22" cy="22" r="13" fill="#ff8b73"/><text x="22" y="22" class="number">7</text>
+    <text x="44" y="27" class="label-xs">Isolated adapters</text>
+    <text x="16" y="55" class="body-sm">copy · validate · restore</text>
+    <text x="16" y="73" class="body-sm">select · reload · report</text>
+    <text x="16" y="100" class="mono-sm">apply_enabled()</text>
+  </g>
+
+  <!-- Secondary pipeline details -->
+  <path d="M1002 788C1002 826 1200 826 1392 802" class="effect"/>
+  <text x="1062" y="819" class="body-sm">Theme-provided assets take precedence over generated fallbacks</text>
+
+  <g transform="translate(62 824)">
+    <rect width="430" height="82" rx="11" class="panel"/>
+    <text x="16" y="25" class="label-sm">Command reach</text>
+    <text x="16" y="48" class="mono-sm">enable/disable → state + templates (+ optional refresh)</text>
+    <text x="16" y="67" class="mono-sm">reconcile → 1–3 + hook · refresh/migration → 4–7</text>
+  </g>
+  <g transform="translate(510 824)">
+    <rect width="380" height="82" rx="11" class="panel"/>
+    <text x="16" y="25" class="label-sm">Theme-change reach</text>
+    <text x="16" y="48" class="mono-sm">Omarchy theme switch → 4–7</text>
+    <text x="16" y="67" class="mono-sm">thpm run → 4–7 + private JSON report</text>
+  </g>
+  <g transform="translate(908 824)">
+    <rect width="624" height="82" rx="11" class="panel-coral"/>
+    <text x="16" y="25" class="label-sm">Observable outcome</text>
+    <text x="16" y="48" class="mono-sm">applied · unchanged · skipped · failed</text>
+    <text x="16" y="67" class="body-sm">One adapter failure is recorded; remaining enabled plugins still run.</text>
+  </g>
+
+  <!-- Safety contracts -->
+  <text x="62" y="966" class="section">04 · SAFETY CONTRACTS — WHERE THPM STOPS, RECOVERS, OR KEEPS GOING</text>
+
+  <g transform="translate(42 986)">
+    <rect width="360" height="128" rx="14" class="panel-gold"/>
+    <text x="18" y="28" class="label-sm">Atomic per-file changes</text>
+    <text x="18" y="52" class="body-sm">Temporary file + replace prevents partial writes.</text>
+    <text x="18" y="74" class="body-sm">Runtime locks reject overlapping integration changes.</text>
+    <text x="18" y="101" class="mono-sm">files.py · state.py</text>
+  </g>
+  <g transform="translate(420 986)">
+    <rect width="360" height="128" rx="14" class="panel-coral"/>
+    <text x="18" y="28" class="label-sm">Adapter error boundary</text>
+    <text x="18" y="52" class="body-sm">Each adapter application gets its own try/catch.</text>
+    <text x="18" y="74" class="body-sm">Failures accumulate instead of aborting the loop.</text>
+    <text x="18" y="101" class="mono-sm">integrations.py · apply_enabled()</text>
+  </g>
+  <g transform="translate(798 986)">
+    <rect width="360" height="128" rx="14" class="panel-mint"/>
+    <text x="18" y="28" class="label-sm">Ownership + restoration</text>
+    <text x="18" y="52" class="body-sm">Native Omarchy outputs remain outside THPM.</text>
+    <text x="18" y="74" class="body-sm">Backups and digests protect displaced user files.</text>
+    <text x="18" y="101" class="mono-sm">registry.py · managed-assets/</text>
+  </g>
+  <g transform="translate(1176 986)">
+    <rect width="382" height="128" rx="14" class="panel-blue"/>
+    <text x="18" y="28" class="label-sm">Source-update rollback line</text>
+    <text x="18" y="52" class="body-sm">Verify → stage → activate → reconcile + QML.</text>
+    <text x="18" y="74" class="body-sm">Those steps roll back; post-commit refresh does not.</text>
+    <text x="18" y="101" class="mono-sm">update.py · SHA-256 · runtime.previous</text>
+  </g>
+
+  <text x="800" y="1134" text-anchor="middle" class="body-sm">Read left to right for runtime flow · top to bottom for responsibility · source guide: docs/architecture-map.md</text>
+</svg>

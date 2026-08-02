@@ -1,5 +1,7 @@
 # Architecture
 
+> New to the codebase? Start with the [visual architecture map](architecture-map.md), then use this document as the detailed contract.
+
 THPM has five deliberately narrow layers:
 
 1. `thpm` owns registry state, capability checks, locking, migration, and JSON responses.

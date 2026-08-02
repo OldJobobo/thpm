@@ -154,10 +154,24 @@ def capabilities() -> Capabilities:
         return Capabilities(False, frozenset(), tuple(sorted(REQUIRED_ROUTES)))
     try:
         payload = json.loads(run("commands", "--json").stdout)
-        routes = frozenset(item["route"] for item in payload.get("commands", []) if "route" in item)
+        routes = frozenset(
+            item["route"] for item in payload.get("commands", []) if "route" in item
+        )
     except (OSError, ValueError, subprocess.SubprocessError):
         return Capabilities(False, frozenset(), tuple(sorted(REQUIRED_ROUTES)))
-    missing = tuple(sorted(REQUIRED_ROUTES - routes))
+
+    # Omarchy's command inventory may omit a command-group route while listing
+    # its actionable children (for example, `omarchy plugin add` without an
+    # `omarchy plugin` record). A group is available when either representation
+    # is present.
+    missing = tuple(
+        sorted(
+            required
+            for required in REQUIRED_ROUTES
+            if required not in routes
+            and not any(route.startswith(required + " ") for route in routes)
+        )
+    )
     return Capabilities(not missing, routes, missing)
 
 

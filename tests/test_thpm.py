@@ -29,6 +29,7 @@ from thpm.integrations import (
     inspect_readiness,
 )
 from thpm.migrate import archive, artifacts, inspect, needs_compat
+from thpm.omarchy import capabilities
 from thpm.omarchy import run as run_omarchy
 from thpm.paths import Paths
 from thpm.presentation import Activity, operation_name, render, reporter
@@ -982,6 +983,29 @@ class ServiceTests(Sandbox):
 
         self.assertTrue(payload["ok"])
         self.assertEqual(observed, ["integration_started", "refresh-returned"])
+
+    def test_capabilities_accepts_command_groups_exposed_as_leaf_routes(self):
+        routes = [
+            "omarchy hook",
+            "omarchy hook install",
+            "omarchy theme refresh",
+            "omarchy shell",
+            "omarchy plugin add",
+            "omarchy plugin list",
+            "omarchy menu",
+        ]
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps({"commands": [{"route": route} for route in routes]}),
+            "",
+        )
+        with patch("thpm.omarchy.shutil.which", return_value="/usr/bin/omarchy"), patch(
+            "thpm.omarchy.run", return_value=completed
+        ):
+            result = capabilities()
+        self.assertTrue(result.available)
+        self.assertEqual(result.missing, ())
 
     def test_omarchy_runner_consumes_events_while_process_is_running(self):
         bin_dir = self.paths.home / "bin"

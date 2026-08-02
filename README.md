@@ -90,6 +90,20 @@ Plugin output is isolated: one failing optional integration is reported without 
 
 The two Discord choices are mutually exclusive: `discord` provides the compact palette mapping, while `discord-system24` provides the full System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template.
 
+### Application setup
+
+The Spotify integration expects Spicetify's one-time application setup to be complete and the lowercase `omarchy` theme to be selected. THPM's Doctor reports either missing prerequisite instead of letting every theme hook fail. Initialize it with:
+
+```bash
+spicetify backup apply
+spicetify config current_theme omarchy color_scheme Base
+spicetify apply
+```
+
+THPM then keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized. It preserves the theme's `user.css` and never performs Spicetify's privileged or destructive first-time backup from a background hook.
+
+Vicinae 0.24 or newer discovers THPM's generated theme as `thpm` under `${XDG_DATA_HOME:-~/.local/share}/vicinae/themes/`. THPM writes the current versioned Vicinae schema there and selects it after its contents change.
+
 ### Zed authored themes
 
 Omarchy's optional `omazed` package is the generated-color fallback for Zed. THPM does not modify Omazed's executable, hook, or `~/.config/zed/themes/omazed.json`. Instead, the opt-in `zed-extra` integration installs a richer authored asset when the active theme provides `zed.json` or, as a compatibility fallback, `aether.zed.json`. Canonical `zed.json` wins when both exist.

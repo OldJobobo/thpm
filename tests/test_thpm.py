@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import tomllib
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,6 +27,7 @@ from thpm.integrations import (
     _reload,
     apply,
     apply_enabled,
+    cleanup_managed_outputs,
     inspect_readiness,
 )
 from thpm.migrate import archive, artifacts, inspect, needs_compat
@@ -2971,6 +2973,157 @@ class IntegrationTests(Sandbox):
         self.assertTrue(target.exists())
         self.assertIn("block is invalid", malformed_block.warnings[0])
 
+    def test_spotify_readiness_reports_one_time_setup_requirements(self):
+        ready, missing, _warnings = inspect_readiness(
+            "spotify", self.paths, lambda _command: "/usr/bin/spicetify"
+        )
+        self.assertFalse(ready)
+        self.assertIn("spicetify backup apply", " ".join(missing))
+
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        prefs = self.paths.config_home / "spotify/prefs"
+        prefs.parent.mkdir(parents=True)
+        prefs.write_text('app.last-launched-version="1.2.3"\n')
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            "[Setting]\ncurrent_theme = omarchy\n"
+            f"prefs_path = {prefs}\n"
+            "[Backup]\nversion = 1.2.3\n"
+        )
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text(":root {}\n")
+        ready, missing, _warnings = inspect_readiness(
+            "spotify", self.paths, lambda _command: "/usr/bin/spicetify"
+        )
+        self.assertTrue(ready)
+        self.assertEqual(missing, [])
+
+    def test_spotify_readiness_rejects_a_stale_backup(self):
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        prefs = self.paths.config_home / "spotify/prefs"
+        prefs.parent.mkdir(parents=True)
+        prefs.write_text('app.last-launched-version="1.2.92.147.g5b8f9367"\n')
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            "[Setting]\ncurrent_theme = omarchy\n"
+            f"prefs_path = {prefs}\n"
+            "[Backup]\nversion = 1.2.84.476.ga1ff6607\n"
+        )
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text(":root {}\n")
+
+        ready, missing, _warnings = inspect_readiness(
+            "spotify", self.paths, lambda _command: "/usr/bin/spicetify"
+        )
+
+        self.assertFalse(ready)
+        self.assertIn("matching Spotify 1.2.92.147.g5b8f9367", " ".join(missing))
+        self.assertIn("current backup is 1.2.84.476.ga1ff6607", " ".join(missing))
+
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        with patch("thpm.integrations.shutil.which", return_value="/usr/bin/spicetify"), patch(
+            "thpm.integrations._reload", side_effect=AssertionError("must not reload")
+        ):
+            payload = apply_enabled(self.paths, {"spotify": True})
+        self.assertEqual(payload["results"][0]["status"], "skipped")
+        self.assertEqual(payload["errors"], [])
+
+    def test_moved_generated_outputs_restore_legacy_targets_before_installing(self):
+        source = self.paths.current_theme / "thpm-vicinae.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("[meta]\nversion = 1\n")
+        legacy = self.paths.config_home / "vicinae/themes/thpm.toml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("managed legacy theme\n")
+        prior = b"user legacy theme\n"
+        state = self.paths.managed_asset_state_dir / "generated-vicinae.json"
+        backup = self.paths.managed_asset_state_dir / "generated-vicinae.backup"
+        state.parent.mkdir(parents=True)
+        backup.write_bytes(prior)
+        state.write_text(
+            json.dumps(
+                {
+                    "existed": True,
+                    "priorType": "file",
+                    "priorSha256": hashlib.sha256(prior).hexdigest(),
+                    "priorMode": 0o644,
+                    "managedSha256": hashlib.sha256(legacy.read_bytes()).hexdigest(),
+                    "managedMode": 0o644,
+                }
+            )
+        )
+
+        with patch("thpm.integrations._reload", return_value=[]):
+            result = apply("vicinae", self.paths)
+
+        target = self.paths.data_home / "vicinae/themes/thpm.toml"
+        self.assertEqual(legacy.read_bytes(), prior)
+        self.assertEqual(target.read_bytes(), source.read_bytes())
+        self.assertEqual(result.status, "applied")
+        self.assertIn(str(legacy), result.changed)
+        self.assertIn(str(target), result.changed)
+        self.assertFalse(state.exists())
+        self.assertTrue(
+            (self.paths.managed_asset_state_dir / "generated-vicinae-v2.json").is_file()
+        )
+
+    def test_moved_outputs_reapply_and_cleanup_preserve_current_target_backups(self):
+        cases = {
+            "spotify": (
+                "thpm-spicetify.ini",
+                self.paths.config_home / "spicetify/Themes/omarchy/color.ini",
+            ),
+            "vicinae": (
+                "thpm-vicinae.toml",
+                self.paths.data_home / "vicinae/themes/thpm.toml",
+            ),
+        }
+        for plugin_id, (source_name, target) in cases.items():
+            with self.subTest(plugin_id=plugin_id):
+                source = self.paths.current_theme / source_name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("generated theme\n")
+                target.parent.mkdir(parents=True)
+                target.write_text("user current theme\n")
+
+                with patch("thpm.integrations._reload", return_value=[]):
+                    first = apply(plugin_id, self.paths)
+                    second = apply(plugin_id, self.paths)
+                changed, warnings = cleanup_managed_outputs(self.paths, plugin_id)
+
+                self.assertEqual(first.status, "applied")
+                self.assertEqual(second.status, "unchanged")
+                self.assertEqual(target.read_text(), "user current theme\n")
+                self.assertIn(str(target), changed)
+                self.assertEqual(warnings, [])
+                self.assertFalse(
+                    (
+                        self.paths.managed_asset_state_dir
+                        / f"generated-{plugin_id}-v2.json"
+                    ).exists()
+                )
+
+    def test_vicinae_template_matches_current_schema(self):
+        template = (
+            Path(__file__).parents[1] / "assets/templates/thpm-vicinae.toml.tpl"
+        ).read_text()
+        values = CANONICAL_COLORS
+        rendered = re.sub(
+            r"\{\{\s*([a-z_]+)\s*\}\}",
+            lambda match: values[match.group(1)],
+            template,
+        )
+        theme = tomllib.loads(rendered)
+        self.assertEqual(theme["meta"]["version"], 1)
+        self.assertEqual(theme["meta"]["variant"], "dark")
+        self.assertEqual(theme["colors"]["core"]["background"], COLORS["bg"])
+        self.assertEqual(theme["colors"]["accents"]["blue"], COLORS["blue"])
+        self.assertNotIn("background", theme["colors"])
+
     def test_app_reload_timeout_is_reported_without_stalling(self):
         with patch("thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"), patch(
             "thpm.integrations.subprocess.run",
@@ -3212,7 +3365,7 @@ class IntegrationTests(Sandbox):
             "thpm.integrations._reload", side_effect=RuntimeError("reload failed")
         ):
             payload = apply_enabled(self.paths, {"spotify": True})
-        target = self.paths.config_home / "spicetify/Themes/Omarchy/color.ini"
+        target = self.paths.config_home / "spicetify/Themes/omarchy/color.ini"
         self.assertEqual(payload["results"][0]["status"], "failed")
         self.assertIn(str(target), payload["results"][0]["changed"])
         self.assertEqual(target.read_text(), "[base]\n")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import hashlib
 import json
 import os
@@ -106,15 +107,32 @@ def _standard_output_targets(paths: Paths) -> dict[str, Path]:
         "fish": config / "fish/conf.d/thpm-theme.fish",
         "fzf": config / "fish/conf.d/thpm-fzf.fish",
         "qt6ct": config / "qt6ct/colors/thpm.conf",
-        "spotify": config / "spicetify/Themes/Omarchy/color.ini",
+        "spotify": config / "spicetify/Themes/omarchy/color.ini",
         "superfile": config / "superfile/theme/thpm.toml",
-        "vicinae": config / "vicinae/themes/thpm.toml",
+        "vicinae": paths.data_home / "vicinae/themes/thpm.toml",
         "nwg-dock": config / "nwg-dock-hyprland/thpm.css",
         "cava": config / "cava/themes/thpm",
         "hermes": config / "Hermes/omarchy-theme.json",
         "qutebrowser": config / "qutebrowser/thpm_theme.py",
         "heroic": config / "heroic/themes/thpm.css",
     }
+
+
+def _legacy_standard_output_targets(paths: Paths) -> dict[str, Path]:
+    config = paths.config_home
+    return {
+        "spotify": config / "spicetify/Themes/Omarchy/color.ini",
+        "vicinae": config / "vicinae/themes/thpm.toml",
+    }
+
+
+def _standard_output_state_key(plugin_id: str) -> str:
+    # Moved targets need a distinct state namespace. Reusing their legacy key
+    # would consume current-target restoration data against the old path on the
+    # next apply or disable operation.
+    if plugin_id in {"spotify", "vicinae"}:
+        return f"generated-{plugin_id}-v2"
+    return f"generated-{plugin_id}"
 
 
 def _asset_state_paths(paths: Paths, key: str) -> tuple[Path, Path]:
@@ -569,6 +587,57 @@ def inspect_applicability(plugin_id: str, paths: Paths) -> bool:
     return True
 
 
+def _spotify_prefs_version(path: Path) -> str:
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = re.fullmatch(
+                r'\s*app\.last-launched-version\s*=\s*"?([^"\s]+)"?\s*', line
+            )
+            if match:
+                return match.group(1)
+    except (OSError, UnicodeError):
+        pass
+    return ""
+
+
+def _spicetify_missing(paths: Paths) -> list[str]:
+    config = paths.config_home / "spicetify/config-xpui.ini"
+    if not config.is_file():
+        return [f"{config} (run `spicetify backup apply` first)"]
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        with config.open(encoding="utf-8") as stream:
+            parser.read_file(stream)
+    except (configparser.Error, OSError, UnicodeError):
+        return [f"valid Spicetify configuration at {config}"]
+
+    missing: list[str] = []
+    backup_version = parser.get("Backup", "version", fallback="").strip()
+    if not backup_version:
+        missing.append("Spicetify backup (run `spicetify backup apply`)")
+    else:
+        prefs_value = parser.get("Setting", "prefs_path", fallback="").strip()
+        prefs = Path(os.path.expandvars(prefs_value)).expanduser() if prefs_value else None
+        current_version = _spotify_prefs_version(prefs) if prefs is not None else ""
+        if not current_version:
+            missing.append("readable Spotify preferences with app.last-launched-version")
+        elif current_version != backup_version:
+            missing.append(
+                f"Spicetify backup matching Spotify {current_version} "
+                f"(current backup is {backup_version}; reinstall Spotify, then run "
+                "`spicetify backup apply`)"
+            )
+    if parser.get("Setting", "current_theme", fallback="").strip() != "omarchy":
+        missing.append(
+            "Spicetify current_theme=omarchy "
+            "(run `spicetify config current_theme omarchy color_scheme Base`)"
+        )
+    stylesheet = paths.config_home / "spicetify/Themes/omarchy/user.css"
+    if not stylesheet.is_file():
+        missing.append(f"Omarchy Spicetify stylesheet at {stylesheet}")
+    return missing
+
+
 def inspect_readiness(
     plugin_id: str, paths: Paths, which: Callable[[str], str | None] | None = None
 ) -> tuple[bool, list[str], list[str]]:
@@ -607,6 +676,8 @@ def inspect_readiness(
     elif plugin_id == "vscode-local-compat":
         ready, missing = vscode_readiness(paths)
         return ready, missing, warnings
+    elif plugin_id == "spotify" and not missing:
+        missing.extend(_spicetify_missing(paths))
     elif plugin_id == "hermes" and (
         (paths.config_home / "Hermes").is_dir()
         or command_path("hermes-desktop-remote")
@@ -1038,9 +1109,24 @@ def cleanup_managed_outputs(
     targets = _standard_output_targets(paths)
     if plugin_id in targets:
         target = targets[plugin_id]
+        legacy = _legacy_standard_output_targets(paths).get(plugin_id)
+        legacy_key = f"generated-{plugin_id}"
+        legacy_state, _backup = _asset_state_paths(paths, legacy_key)
+        if legacy is not None and legacy != target and legacy_state.exists():
+            item_changed, item_warnings = _cleanup_optional_asset(
+                paths,
+                legacy_key,
+                legacy,
+                legacy_owned=assume_legacy
+                and _matches_sources(
+                    legacy, _current_plugin_sources(paths, plugin_id)
+                ),
+            )
+            changed.extend(item_changed)
+            warnings.extend(item_warnings)
         item_changed, item_warnings = _cleanup_optional_asset(
             paths,
-            f"generated-{plugin_id}",
+            _standard_output_state_key(plugin_id),
             target,
             legacy_owned=assume_legacy
             and _matches_sources(target, _current_plugin_sources(paths, plugin_id)),
@@ -1485,7 +1571,7 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
     paths.current_theme.mkdir(parents=True, exist_ok=True)
     changed: list[str] = []
     warnings: list[str] = []
-    home, config = paths.home, paths.config_home
+    home = paths.home
     targets = _standard_output_targets(paths)
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),
@@ -1528,16 +1614,31 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
             raise RuntimeError(f"{plugin_id}: expected theme output was not found")
         if source.name in set(GENERATED.values()):
             _ensure_generated_output_is_rendered(source)
+        target = targets[plugin_id]
+        legacy = _legacy_standard_output_targets(paths).get(plugin_id)
+        legacy_key = f"generated-{plugin_id}"
+        legacy_state, _backup = _asset_state_paths(paths, legacy_key)
+        if legacy is not None and legacy != target and legacy_state.exists():
+            item_changed, item_warnings = _cleanup_optional_asset(
+                paths,
+                legacy_key,
+                legacy,
+                legacy_owned=_matches_sources(
+                    legacy, _current_plugin_sources(paths, plugin_id)
+                ),
+            )
+            changed.extend(item_changed)
+            warnings.extend(item_warnings)
         if _install_optional_asset(
             paths,
-            f"generated-{plugin_id}",
+            _standard_output_state_key(plugin_id),
             source,
-            targets[plugin_id],
+            target,
             legacy_owned=_matches_sources(
-                targets[plugin_id], _current_plugin_sources(paths, plugin_id)
+                target, _current_plugin_sources(paths, plugin_id)
             ),
         ):
-            changed.append(str(targets[plugin_id]))
+            changed.append(str(target))
         if plugin_id == "nwg-dock" and changed:
             warnings.append("restart nwg-dock-hyprland to see theme changes")
     elif plugin_id in OPTIONAL_ASSET_PLUGINS:

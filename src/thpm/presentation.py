@@ -319,6 +319,11 @@ def _print_details(console: Console, payload: dict[str, Any], *, verbose: bool) 
             table.add_row(Text("●" if enabled else "○", style="green" if enabled else "grey50"), str(item.get("id", "")), str(item.get("ownership", "")))
         console.print(table)
 
+    restart_required = payload.get("restartRequired")
+    if isinstance(restart_required, list) and restart_required:
+        names = ", ".join(str(app) for app in restart_required)
+        console.print(f"[yellow]↻[/] [bold]Restart needed:[/] {names}")
+
     for warning in payload.get("warnings", []):
         if isinstance(warning, dict):
             console.print(f"[yellow]⚠[/] {_owner_prefix(warning)}{warning.get('message', '')}")

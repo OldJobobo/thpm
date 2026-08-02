@@ -30,6 +30,7 @@ class ApplyResult:
     actions: list[str] = field(default_factory=list)
     message: str = ""
     warnings: list[str] = field(default_factory=list)
+    restartRequired: list[str] = field(default_factory=list)
 
     def json(self) -> dict[str, object]:
         return asdict(self)

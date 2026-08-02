@@ -260,8 +260,8 @@ already-satisfied guarantees:
   paths, partial-commit state, and recovery information;
 - availability is overloaded to keep cleanup actionable when an application or
   authored asset is absent;
-- Zellij restores prior selection, while Zed and Vicinae selection effects do not
-  yet have equivalent guarded restoration;
+- Zellij restores prior selection, while Zed selection effects do not yet have
+  equivalent guarded restoration;
 - state writes `version = 1` but loading does not enforce schema compatibility;
 - Discord conflict policy is enforced during normal mutation but not against a
   manually conflicting persisted state;
@@ -349,12 +349,21 @@ refactor unless a release-critical safety gap requires it sooner.
 3. One integration failure shall not prevent later integrations from running.
 4. Changed files and completed actions shall remain visible when a later reload
    fails.
-5. Repeated application with unchanged inputs shall not rewrite files or emit
-   false restart warnings.
+5. Ordinary hook application with unchanged inputs shall not rewrite files or
+   emit false restart warnings. Explicit **Apply active theme** requests shall
+   force restart-required adapters without rewriting current files.
 6. Generated output containing unresolved template placeholders shall never be
    deployed.
 7. External commands shall use argument vectors, bounded timeouts, and explicit
    nonzero-exit diagnostics.
+8. A versioned user preference shall select automatic or notify-only application
+   restart behavior and shall be shared by the CLI, GUI, TUI, and theme hook.
+9. Automatic restart shall apply only to integrations with an ownership-safe
+   restart adapter and shall never launch an application that was closed.
+10. Unresolved restarts shall be returned as structured, deduplicated application
+    names and produce one best-effort desktop notification after the hook run.
+11. Applications that cannot be restarted safely, including generic GTK clients,
+    shall remain notification-only under either policy.
 
 ### FR-6: Authored and generated precedence
 
@@ -556,7 +565,7 @@ The following classes require real-application validation before 1.0 support is
 considered complete:
 
 - reload-based integrations such as SwayNC and Spicetify;
-- application selection integrations such as Vicinae and Zed;
+- application selection integrations such as Zed;
 - profile-based browser integrations;
 - local editor extension installation;
 - integrations that require process restart rather than reload;
@@ -572,7 +581,9 @@ that import path and isolated visual validation are complete.
 Windsurf is the first retired-integration precedent. It no longer belongs
 in the active registry after replacement by a product with a different command,
 profile, and extension lifecycle. THPM retains guarded cleanup for its historical
-`.windsurf` managed destination.
+`.windsurf` managed destination. Vicinae follows that precedent: it is absent from
+the active registry while reconciliation and uninstall retain guarded cleanup for
+both historical managed theme destinations.
 
 The current implementation is an initial precedent, not yet a complete generic
 retirement framework. Retirement metadata, state migration, retention dates,
@@ -668,8 +679,8 @@ for built-ins.
 ### Decision 2: Use the standard Zed lifecycle
 
 Zed shall use standard enable and disable operations. `thpm zed setup` shall be
-deprecated rather than remain a separate one-shot lifecycle. Zed and Vicinae shall
-restore a prior selection only when the application still selects THPM's value.
+deprecated rather than remain a separate one-shot lifecycle. Zed shall restore a
+prior selection only when the application still selects THPM's value.
 
 ### Decision 3: Treat application selection as an owned effect
 

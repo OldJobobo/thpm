@@ -4,6 +4,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .config import claims_current_format
 from .paths import Paths
 from .registry import BY_ID
 
@@ -69,8 +70,9 @@ def artifacts(paths: Paths) -> list[Path]:
         result.append(candidate)
     skills = legacy_share / "skills"
     if skills.is_dir(): result.append(skills)
-    config = paths.thpm_config_dir / "config.toml"
-    if config.is_file(): result.append(config)
+    config = paths.config_file
+    if config.is_file() and not claims_current_format(config):
+        result.append(config)
     dispatcher = paths.config_home / "omarchy/hooks/theme-set"
     if dispatcher.is_file():
         try: content = dispatcher.read_text(errors="ignore")

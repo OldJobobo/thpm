@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -8,14 +9,25 @@ from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.events import Resize
 from textual.screen import ModalScreen
 from textual.theme import Theme
-from textual.widgets import Button, ContentSwitcher, Footer, Input, Label, Link, ListItem, ListView, Static, Switch
+from textual.widgets import (
+    Button,
+    ContentSwitcher,
+    Footer,
+    Input,
+    Label,
+    Link,
+    ListItem,
+    ListView,
+    Static,
+    Switch,
+)
 
 from . import __version__
 from .omarchy import run
-from .palette import HEX, load as load_palette
+from .palette import HEX
+from .palette import load as load_palette
 from .paths import Paths
 from .service import Service
-
 
 SECTIONS = ("overview", "integrations", "doctor", "system")
 DONATE_URL = "https://ko-fi.com/oldjobobo"
@@ -213,6 +225,7 @@ class ThpmTui(App[None]):
         self.doctor_has_run = False
         self.update_info: dict[str, object] = {"status": "idle", "currentVersion": __version__, "availableVersion": None}
         self.menu_surface = "gui"
+        self.restart_policy = "automatic"
         self.palette_warning = palette_warning
 
     def compose(self) -> ComposeResult:
@@ -267,6 +280,16 @@ class ThpmTui(App[None]):
                             yield Button("Apply active theme", id="system-apply")
                             yield Button("Reconcile integrations", id="system-reconcile")
                         yield Static("", id="system-message")
+                        yield Static("", classes="rule")
+                        with Horizontal(classes="system-row"):
+                            with Vertical(classes="toolbar-copy"):
+                                yield Label("Restart apps automatically", classes="section-label")
+                                yield Static(
+                                    "Restart supported running apps after theme changes; when off, notify instead",
+                                    id="restart-policy-detail",
+                                )
+                            yield Switch(value=True, id="restart-policy-switch")
+                        yield Static("", id="restart-policy-message")
                         yield Static("", classes="rule")
                         with Horizontal(classes="system-row"):
                             with Vertical(classes="toolbar-copy"):
@@ -419,6 +442,11 @@ class ThpmTui(App[None]):
 
     @on(Switch.Changed)
     def switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id == "restart-policy-switch":
+            requested = "automatic" if event.value else "notify"
+            if requested != self.restart_policy:
+                self.set_restart_policy(requested)
+            return
         row = event.switch.parent.parent
         if isinstance(row, PluginRow) and row.mutable and bool(row.plugin["enabled"]) != event.value:
             plugin_id = str(row.plugin["id"])
@@ -445,6 +473,13 @@ class ThpmTui(App[None]):
             self.plugins = list(payload.get("plugins", []))  # type: ignore[arg-type]
             self.counts = {key: int(value) for key, value in dict(payload.get("counts", {})).items()}
             self.menu_surface = str(payload.get("menuSurface", "gui"))
+            preferences = dict(payload.get("preferences", {}))
+            self.restart_policy = str(
+                preferences.get("restartPolicy", "automatic")
+            )
+            self.query_one("#restart-policy-switch", Switch).value = (
+                self.restart_policy == "automatic"
+            )
             self.render_counts()
             self.render_menu_surface()
             await self.render_plugins(self.query_one("#integration-search", Input).value)
@@ -533,6 +568,34 @@ class ThpmTui(App[None]):
         finally:
             self.set_busy(False)
 
+    @work(exclusive=True, group="restart-policy", exit_on_error=False)
+    async def set_restart_policy(self, policy: str) -> None:
+        self.set_busy(True)
+        message = self.query_one("#restart-policy-message", Static)
+        message.update("Updating application restart policy…")
+        try:
+            payload = await asyncio.to_thread(self.service.restart_policy, policy)
+            if not payload.get("ok"):
+                raise RuntimeError(str(payload.get("summary", "Unable to change restart policy")))
+            preferences = dict(payload.get("preferences", {}))
+            self.restart_policy = str(preferences.get("restartPolicy", policy))
+            self.query_one("#restart-policy-switch", Switch).value = (
+                self.restart_policy == "automatic"
+            )
+            message.update(
+                "Supported running apps restart after theme changes."
+                if self.restart_policy == "automatic"
+                else "THPM will notify you when apps need restarting."
+            )
+        except Exception as exc:
+            message.update(str(exc))
+            self.notify(str(exc), severity="error")
+            self.query_one("#restart-policy-switch", Switch).value = (
+                self.restart_policy == "automatic"
+            )
+        finally:
+            self.set_busy(False)
+
     def render_menu_surface(self) -> None:
         gui = self.menu_surface == "gui"
         self.query_one("#menu-surface-detail", Static).update(
@@ -583,6 +646,11 @@ class ThpmTui(App[None]):
             if not payload.get("ok"):
                 raise RuntimeError(str(payload.get("summary", "Action failed")))
             message = "Active theme reapplied." if operation == "apply" else "Templates reconciled and theme refreshed."
+            restart_required = list(payload.get("restartRequired", []))
+            if restart_required:
+                message += " Restart needed: " + ", ".join(
+                    str(app) for app in restart_required
+                ) + "."
             self.query_one("#system-message", Static).update(message)
             self.notify(message)
             self.load_state()
@@ -680,6 +748,7 @@ class ThpmTui(App[None]):
         self.set_class(busy, "busy")
         for selector in ("#overview-apply", "#system-apply", "#system-reconcile", "#menu-surface-gui", "#menu-surface-tui", "#update-action", "#header-update", "#restart-shell"):
             self.query_one(selector, Button).disabled = busy
+        self.query_one("#restart-policy-switch", Switch).disabled = busy
 
     def set_message(self, message: str, error: bool = False) -> None:
         widget = self.query_one("#message", Static)

@@ -116,6 +116,20 @@ def parser() -> argparse.ArgumentParser:
     )
     _output_options(surface)
 
+    config = commands.add_parser(
+        "config", help="inspect or change user preferences"
+    )
+    _output_options(config)
+    config_sub = config.add_subparsers(dest="config_command")
+    restart_policy = config_sub.add_parser(
+        "restart-policy",
+        help="choose automatic restarts or notify-only behavior",
+    )
+    restart_policy.add_argument(
+        "policy", nargs="?", choices=("automatic", "notify", "toggle")
+    )
+    _output_options(restart_policy, nested=True)
+
     zed = commands.add_parser(
         "zed", help="inspect or configure the authored Zed theme override"
     )
@@ -260,6 +274,10 @@ def _execute(
         run_tui(service=service, paths=paths)
         return None
     if command == "hook-run": return service.hook_run(args.event, args.event_args)
+    if command == "config":
+        if args.config_command == "restart-policy":
+            return service.restart_policy(args.policy)
+        return service.preferences()
     if command == "zed":
         return service.zed_status() if args.zed_command == "status" else _zed_setup(service, args, json_mode, activity)
     if command == "update":

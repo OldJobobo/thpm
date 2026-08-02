@@ -88,6 +88,18 @@ The TUI uses the active Omarchy semantic palette and falls back to a readable bu
 
 Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Hook and JSON output distinguish applied, unchanged, skipped, and failed integrations, and Doctor flags enabled plugins that are no longer actionable. Terminal-driven Omarchy theme changes send the same live integration outline and final summary to stderr because Omarchy discards normal hook stdout. `thpm run` consumes the same structured hook events through a private channel while the refresh is still running, then returns the authoritative final report and failure status without executing adapters twice. Redirected output stays plain, and `NO_COLOR=1` disables ANSI color. THPM-generated fallbacks are refused if Omarchy leaves an unresolved `{{ ... }}` placeholder, preventing malformed generated content from being copied into application configuration; explicit theme-provided assets keep their existing precedence. Conditional GTK CSS and validated local VS Code theme fallbacks cover Quattro native-ownership gaps only when the active theme requests them. Omarchy-native integrations are shown read-only so ownership stays clear. Disabling an integration stops future synchronization, removes its rendered THPM template, and restores displaced files or prior selections when THPM has restoration data. Unrelated and user-modified configuration is preserved. Uninstall applies the same guarded cleanup before removing THPM's hook, templates, and control surfaces.
 
+### User preferences
+
+THPM stores user-editable preferences in `~/.config/thpm/config.toml`. Choose whether supported running applications restart automatically after a theme change or remain open while THPM sends one desktop notification naming the applications that still need restart:
+
+```bash
+thpm config
+thpm config restart-policy automatic
+thpm config restart-policy notify
+```
+
+The same control appears as **Restart apps automatically** in the GUI and TUI System sections. The default is `automatic`; THPM never launches an application that was closed. Applications without a safe restart contract, including generic GTK applications and nwg-dock-hyprland, are always reported rather than killed. **Apply active theme** in either frontend, and the equivalent `thpm run`, explicitly force restart-required adapters such as Spotify even when their managed files are already current; ordinary theme hooks retain no-op behavior when nothing changed.
+
 The two Discord choices are mutually exclusive: `discord` provides the compact palette mapping, while `discord-system24` provides the full System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template.
 
 ### Application setup
@@ -100,9 +112,7 @@ spicetify config current_theme omarchy color_scheme Base
 spicetify apply
 ```
 
-THPM then keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized. It preserves the theme's `user.css` and never performs Spicetify's privileged or destructive first-time backup from a background hook.
-
-Vicinae 0.24 or newer discovers THPM's generated theme as `thpm` under `${XDG_DATA_HOME:-~/.local/share}/vicinae/themes/`. THPM writes the current versioned Vicinae schema there and selects it after its contents change.
+THPM then keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized and preserves the theme's `user.css`. It always refreshes Spicetify's generated theme files after a palette change. Under the `automatic` restart policy, an already-running Spotify client is restarted so the colors take effect; under `notify`, Spotify remains open and is named in the pending-restart notification. A closed client stays closed under either policy. Hooks never perform Spicetify's privileged or destructive first-time backup.
 
 ### Zed authored themes
 

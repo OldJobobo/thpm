@@ -66,6 +66,9 @@ mkdir -p -- "$output_dir"
 
 printf 'Snapshotting the current working tree...\n'
 git -C "$repo_dir" ls-files --cached --others --exclude-standard -z \
+    | while IFS= read -r -d '' file; do
+        [[ -e "$repo_dir/$file" || -L "$repo_dir/$file" ]] && printf '%s\0' "$file"
+    done \
     | tar -C "$repo_dir" --null --files-from=- --transform='s,^,thpm-working-tree/,' -czf "$archive"
 checksum="$(sha256sum "$archive")"
 checksum="${checksum%% *}"

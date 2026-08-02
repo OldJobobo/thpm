@@ -39,6 +39,10 @@ class Paths:
         return self.state_home / "thpm"
 
     @property
+    def config_file(self) -> Path:
+        return self.thpm_config_dir / "config.toml"
+
+    @property
     def state_file(self) -> Path:
         return self.thpm_state_dir / "state.toml"
 

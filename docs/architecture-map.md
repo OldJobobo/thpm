@@ -53,6 +53,14 @@ $XDG_STATE_HOME/thpm/state.toml
 
 Missing state falls back to registry defaults. Only known boolean plugin values are accepted from the file. Mutations save through a temporary file and atomic replacement.
 
+User-editable behavior lives at:
+
+```text
+$XDG_CONFIG_HOME/thpm/config.toml
+```
+
+[`src/thpm/config.py`](../src/thpm/config.py) validates and atomically writes the restart policy shared by hooks, CLI, GUI, and TUI. It is configuration rather than discovered runtime state.
+
 The frontend preference is separate and lives at:
 
 ```text
@@ -211,6 +219,7 @@ All user paths are centralized in [`src/thpm/paths.py`](../src/thpm/paths.py). W
 
 | Purpose | Default path |
 |---|---|
+| User preferences | `~/.config/thpm/config.toml` |
 | Plugin state | `~/.local/state/thpm/state.toml` |
 | UI preference | `~/.local/state/thpm/ui.toml` |
 | Active theme | `~/.local/state/omarchy/current/theme/` |

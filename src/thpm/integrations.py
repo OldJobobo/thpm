@@ -64,13 +64,17 @@ ZELLIJ_THEME_DIR_OPTION = re.compile(
 UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
 OPTIONAL_ASSET_PLUGINS = {
     "branding",
-    "typora",
     "swaync",
     "cliamp",
     "zed-extra",
 }
-RETIRED_OPTIONAL_ASSET_PLUGINS = {"windsurf"}
-MANAGED_OUTPUT_PLUGINS = set(GENERATED) | {"discord", "discord-system24"}
+RETIRED_OPTIONAL_ASSET_PLUGINS = {"typora", "windsurf"}
+RETIRED_MANAGED_OUTPUT_PLUGINS = {"vicinae"}
+# GENERATED retains historical names needed for guarded retirement cleanup;
+# registry membership remains the authority for active integrations.
+MANAGED_OUTPUT_PLUGINS = (
+    set(GENERATED) | {"discord", "discord-system24"}
+) - RETIRED_MANAGED_OUTPUT_PLUGINS
 
 
 def _optional_asset_targets(
@@ -545,11 +549,15 @@ class ApplyFailure(RuntimeError):
         message: str,
         *,
         changed: list[str] | None = None,
+        actions: list[str] | None = None,
         warnings: list[str] | None = None,
+        restart_required: list[str] | None = None,
     ):
         super().__init__(message)
         self.changed = changed or []
+        self.actions = actions or []
         self.warnings = warnings or []
+        self.restart_required = restart_required or []
 
 
 def _discord_directories(paths: Paths) -> tuple[Path, ...]:
@@ -1056,7 +1064,7 @@ def _current_plugin_sources(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
         name
         for source_plugin in source_plugins
         for name in (
-            *BY_ID[source_plugin].theme_assets,
+            *(BY_ID[source_plugin].theme_assets if source_plugin in BY_ID else ()),
             *([GENERATED[source_plugin]] if source_plugin in GENERATED else []),
         )
     ]
@@ -1112,7 +1120,11 @@ def cleanup_managed_outputs(
         legacy = _legacy_standard_output_targets(paths).get(plugin_id)
         legacy_key = f"generated-{plugin_id}"
         legacy_state, _backup = _asset_state_paths(paths, legacy_key)
-        if legacy is not None and legacy != target and legacy_state.exists():
+        if (
+            legacy is not None
+            and legacy != target
+            and (legacy_state.exists() or assume_legacy)
+        ):
             item_changed, item_warnings = _cleanup_optional_asset(
                 paths,
                 legacy_key,
@@ -1166,7 +1178,9 @@ def reload_restored_integration(plugin_id: str, changed: list[str]) -> tuple[lis
     if plugin_id != "swaync" or not changed or not shutil.which("swaync-client"):
         return [], []
     try:
-        return _reload("swaync"), []
+        reload_result = _reload("swaync")
+        actions = reload_result[0] if isinstance(reload_result, tuple) else reload_result
+        return actions, []
     except RuntimeError as exc:
         return [], [str(exc)]
 
@@ -1504,30 +1518,7 @@ def _install_zellij_theme(paths: Paths, content: str, target: Path) -> bool:
         temporary.unlink(missing_ok=True)
 
 
-def _reload(plugin_id: str) -> list[str]:
-    commands = {
-        "spotify": ["spicetify", "apply"],
-        "vicinae": ["vicinae", "theme", "set", "thpm"],
-        "swaync": ["swaync-client", "--reload-css"],
-        "cava": ["pkill", "-USR2", "cava"],
-    }
-    command = commands.get(plugin_id)
-    if not command:
-        return []
-    if plugin_id == "cava":
-        if not shutil.which("pgrep"):
-            return []
-        running = subprocess.run(
-            ["pgrep", "-x", "cava"],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=2,
-        )
-        if running.returncode != 0:
-            return []
-    if not shutil.which(command[0]):
-        raise RuntimeError(f"{plugin_id}: reload command not found: {command[0]}")
+def _run_reload_command(plugin_id: str, command: list[str]) -> None:
     try:
         completed = subprocess.run(
             command, text=True, capture_output=True, check=False, timeout=5
@@ -1541,7 +1532,59 @@ def _reload(plugin_id: str) -> list[str]:
             or f"exit {completed.returncode}"
         )
         raise RuntimeError(f"{plugin_id}: reload failed: {detail}")
-    return [" ".join(command)]
+
+
+def _reload(
+    plugin_id: str, *, automatic_restarts: bool = True
+) -> tuple[list[str], list[str]]:
+    commands = {
+        "spotify": ["spicetify", "refresh"],
+        "swaync": ["swaync-client", "--reload-css"],
+        "cava": ["pkill", "-USR2", "cava"],
+    }
+    command = commands.get(plugin_id)
+    if not command:
+        return [], []
+    if plugin_id == "cava":
+        if not shutil.which("pgrep"):
+            return [], []
+        running = subprocess.run(
+            ["pgrep", "-x", "cava"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=2,
+        )
+        if running.returncode != 0:
+            return [], []
+    if not shutil.which(command[0]):
+        raise RuntimeError(f"{plugin_id}: reload command not found: {command[0]}")
+    _run_reload_command(plugin_id, command)
+    actions = [" ".join(command)]
+    restart_required: list[str] = []
+    if plugin_id == "spotify" and shutil.which("pgrep"):
+        running = subprocess.run(
+            ["pgrep", "-x", "spotify"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=2,
+        )
+        if running.returncode == 0:
+            if automatic_restarts:
+                restart = ["spicetify", "restart"]
+                try:
+                    _run_reload_command(plugin_id, restart)
+                except RuntimeError as exc:
+                    raise ApplyFailure(
+                        str(exc),
+                        actions=actions,
+                        restart_required=["Spotify"],
+                    ) from exc
+                actions.append(" ".join(restart))
+            else:
+                restart_required.append("Spotify")
+    return actions, restart_required
 
 
 def _result(
@@ -1549,6 +1592,7 @@ def _result(
     changed: list[str],
     actions: list[str],
     warnings: list[str] | None = None,
+    restart_required: list[str] | None = None,
 ) -> ApplyResult:
     status = "applied" if changed or actions else "unchanged"
     message = (
@@ -1556,14 +1600,28 @@ def _result(
         if status == "applied"
         else "integration already up to date"
     )
-    return ApplyResult(plugin_id, status, changed, actions, message, warnings or [])
+    return ApplyResult(
+        plugin_id,
+        status,
+        changed,
+        actions,
+        message,
+        warnings or [],
+        restart_required or [],
+    )
 
 
-def apply(plugin_id: str, paths: Paths) -> ApplyResult:
+def apply(
+    plugin_id: str,
+    paths: Paths,
+    *,
+    automatic_restarts: bool = True,
+    force_reload: bool = False,
+) -> ApplyResult:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
     if plugin_id == "gtk-css-compat":
-        return apply_gtk(paths)
+        return apply_gtk(paths, force_restart=force_reload)
     if plugin_id == "vscode-local-compat":
         return apply_vscode_local(paths)
     if plugin_id == "zed-extra":
@@ -1571,6 +1629,7 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
     paths.current_theme.mkdir(parents=True, exist_ok=True)
     changed: list[str] = []
     warnings: list[str] = []
+    restart_required: list[str] = []
     home = paths.home
     targets = _standard_output_targets(paths)
     candidates = {
@@ -1639,8 +1698,8 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
             ),
         ):
             changed.append(str(target))
-        if plugin_id == "nwg-dock" and changed:
-            warnings.append("restart nwg-dock-hyprland to see theme changes")
+        if plugin_id == "nwg-dock" and (changed or force_reload):
+            restart_required.append("nwg-dock-hyprland")
     elif plugin_id in OPTIONAL_ASSET_PLUGINS:
         for key, asset_name, target in _optional_asset_targets(paths, plugin_id):
             source = paths.current_theme / asset_name
@@ -1733,16 +1792,36 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
         return _result(plugin_id, [], ["steam-adwaita --color-theme omarchy"])
 
     try:
-        actions = _reload(plugin_id) if changed else []
+        reload_result = (
+            _reload(plugin_id, automatic_restarts=automatic_restarts)
+            if changed or (force_reload and plugin_id == "spotify")
+            else ([], [])
+        )
+        if isinstance(reload_result, tuple):
+            actions, reload_restarts = reload_result
+        else:  # compatibility for injected adapters using the former return contract
+            actions, reload_restarts = reload_result, []
+        restart_required.extend(reload_restarts)
+    except ApplyFailure as exc:
+        raise ApplyFailure(
+            str(exc),
+            changed=changed,
+            actions=exc.actions,
+            warnings=[*warnings, *exc.warnings],
+            restart_required=exc.restart_required,
+        ) from exc
     except RuntimeError as exc:
         raise ApplyFailure(str(exc), changed=changed, warnings=warnings) from exc
-    return _result(plugin_id, changed, actions, warnings)
+    return _result(plugin_id, changed, actions, warnings, restart_required)
 
 
 def apply_enabled(
     paths: Paths,
     enabled: dict[str, bool],
     events: Callable[[dict[str, object]], None] | None = None,
+    *,
+    automatic_restarts: bool = True,
+    force_reload: bool = False,
 ) -> dict[str, object]:
     results: list[dict[str, object]] = []
     errors: list[dict[str, str]] = []
@@ -1771,14 +1850,21 @@ def apply_enabled(
             )
         else:
             try:
-                result = apply(plugin.id, paths)
+                result = apply(
+                    plugin.id,
+                    paths,
+                    automatic_restarts=automatic_restarts,
+                    force_reload=force_reload,
+                )
             except ApplyFailure as exc:
                 result = ApplyResult(
                     plugin.id,
                     "failed",
                     changed=exc.changed,
+                    actions=exc.actions,
                     message=str(exc),
                     warnings=exc.warnings,
+                    restartRequired=exc.restart_required,
                 )
                 errors.append({"plugin": plugin.id, "message": str(exc)})
             except Exception as exc:  # isolate plugins at the hook boundary
@@ -1810,10 +1896,18 @@ def apply_enabled(
         for status in ("applied", "unchanged", "skipped", "failed")
     }
     changed = [path for result in results for path in result["changed"]]
+    actions = [action for result in results for action in result["actions"]]
+    restart_required = list(
+        dict.fromkeys(
+            app for result in results for app in result["restartRequired"]
+        )
+    )
     return {
         "results": results,
         "counts": counts,
         "changed": changed,
+        "actions": actions,
+        "restartRequired": restart_required,
         "errors": errors,
         "warnings": warnings,
     }

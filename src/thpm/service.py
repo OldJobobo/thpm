@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,10 +12,14 @@ from pathlib import Path
 
 from . import __version__, ui
 from .compat import cleanup_gtk, vscode_doctor_warnings
+from .config import ConfigError, Preferences
+from .config import load as load_config
+from .config import save as save_config
 from .files import atomic_copy, atomic_text
 from .integrations import (
     MANAGED_OUTPUT_PLUGINS,
     OPTIONAL_ASSET_PLUGINS,
+    RETIRED_MANAGED_OUTPUT_PLUGINS,
     RETIRED_OPTIONAL_ASSET_PLUGINS,
     apply_enabled,
     cleanup_managed_outputs,
@@ -52,6 +57,15 @@ def _cleanup_retired_integrations(paths: Paths) -> tuple[list[str], list[dict[st
     warnings: list[dict[str, str]] = []
     for plugin_id in sorted(RETIRED_OPTIONAL_ASSET_PLUGINS):
         cleanup_changed, cleanup_warnings = cleanup_optional_assets(
+            paths, plugin_id, assume_legacy=True
+        )
+        changed.extend(cleanup_changed)
+        warnings.extend(
+            {"plugin": plugin_id, "message": message}
+            for message in cleanup_warnings
+        )
+    for plugin_id in sorted(RETIRED_MANAGED_OUTPUT_PLUGINS):
+        cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
             paths, plugin_id, assume_legacy=True
         )
         changed.extend(cleanup_changed)
@@ -130,6 +144,37 @@ def envelope(operation: str, ok: bool = True, **fields: object) -> dict[str, obj
     return {"schemaVersion": SCHEMA_VERSION, "ok": ok, "operation": operation, "busy": False, "summary": fields.pop("summary", ""), **fields}
 
 
+def _preferences(paths: Paths) -> tuple[Preferences, str | None]:
+    try:
+        return load_config(paths), None
+    except ConfigError as exc:
+        return Preferences(restart_policy="notify"), f"{exc}; using notify-only restart policy"
+
+
+def _notify_restart_required(apps: list[str]) -> bool:
+    if not apps or not shutil.which("notify-send"):
+        return False
+    names = ", ".join(dict.fromkeys(apps))
+    body = f"Restart to load the new theme colors: {names}"
+    try:
+        completed = subprocess.run(
+            [
+                "notify-send",
+                "--app-name=THPM",
+                "--icon=preferences-desktop-theme",
+                "Theme applied",
+                body,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
 class Service:
     def __init__(
         self,
@@ -186,7 +231,13 @@ class Service:
             "attention": lambda p: bool(p["warnings"]),
         }.items()}
         menu_surface = str(ui.surface(self.paths)["surface"])
+        preferences, config_warning = _preferences(self.paths)
         migration = _migration_status(self.paths)
+        warnings = []
+        if config_warning:
+            warnings.append({"message": config_warning})
+        if migration["pending"]:
+            warnings.append({"message": "template refresh migration pending; run thpm reconcile --refresh"})
         return envelope(
             "ui-state",
             summary="THPM plugin state",
@@ -194,8 +245,49 @@ class Service:
             counts=counts,
             plugins=plugins,
             menuSurface=menu_surface,
+            preferences=preferences.json(),
             migration=migration,
-            warnings=([{"message": "template refresh migration pending; run thpm reconcile --refresh"}] if migration["pending"] else []),
+            warnings=warnings,
+            errors=[],
+        )
+
+    def preferences(self) -> dict[str, object]:
+        preferences, warning = _preferences(self.paths)
+        return envelope(
+            "config",
+            summary=f"Application restart policy: {preferences.restart_policy}",
+            preferences=preferences.json(),
+            configFile=str(self.paths.config_file),
+            warnings=[{"message": warning}] if warning else [],
+            errors=[],
+        )
+
+    def restart_policy(self, requested: str | None = None) -> dict[str, object]:
+        current, _warning = _preferences(self.paths)
+        selected = current.restart_policy
+        if requested == "toggle":
+            selected = "notify" if selected == "automatic" else "automatic"
+        elif requested is not None:
+            selected = requested
+        if selected not in {"automatic", "notify"}:
+            return envelope(
+                "config-restart-policy",
+                False,
+                summary=f"unknown restart policy: {selected}",
+                errors=[{"message": "choose automatic or notify"}],
+            )
+        changed = selected != current.restart_policy or _warning is not None
+        if requested is not None:
+            with mutation_lock(self.paths):
+                save_config(self.paths, Preferences(restart_policy=selected))
+        preferences = Preferences(restart_policy=selected)
+        return envelope(
+            "config-restart-policy",
+            summary=f"Application restart policy: {selected}",
+            changed=changed and requested is not None,
+            preferences=preferences.json(),
+            configFile=str(self.paths.config_file),
+            warnings=[],
             errors=[],
         )
 
@@ -452,6 +544,9 @@ class Service:
                 entry = ("vscode-local-compat", message)
                 if entry not in known:
                     warnings.append({"plugin": entry[0], "message": entry[1]})
+        _configured, config_warning = _preferences(self.paths)
+        if config_warning:
+            warnings.append({"message": config_warning})
         migration = _migration_status(self.paths)
         if migration["pending"]:
             warnings.append({"message": "template refresh migration pending; run thpm reconcile --refresh"})
@@ -465,7 +560,9 @@ class Service:
         with migration_lock(self.paths):
             with mutation_lock(self.paths):
                 self._step("Rendering managed templates")
-                changed = reconcile_templates(self.paths, load(self.paths))
+                enabled = load(self.paths)
+                save(self.paths, enabled)
+                changed = reconcile_templates(self.paths, enabled)
                 retired_changed, retired_warnings = _cleanup_retired_integrations(
                     self.paths
                 )
@@ -585,7 +682,9 @@ class Service:
                         {"plugin": plugin_id, "message": message}
                         for message in cleanup_warnings + reload_warnings
                     )
-                for plugin_id in sorted(MANAGED_OUTPUT_PLUGINS):
+                for plugin_id in sorted(
+                    MANAGED_OUTPUT_PLUGINS | RETIRED_MANAGED_OUTPUT_PLUGINS
+                ):
                     cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
                         self.paths,
                         plugin_id,
@@ -628,15 +727,31 @@ class Service:
         if event != "theme-set":
             return envelope("hook-run", False, summary=f"unsupported hook event: {event}",
                 event=event, eventArgs=list(event_args), errors=[{"message": "unsupported hook event"}])
+        preferences, config_warning = _preferences(self.paths)
+        force_reload = os.environ.get("THPM_FORCE_RELOAD") == "1"
         with mutation_lock(self.paths):
-            result = apply_enabled(self.paths, load(self.paths), events=self._event)
+            result = apply_enabled(
+                self.paths,
+                load(self.paths),
+                events=self._event,
+                automatic_restarts=preferences.automatic_app_restarts,
+                force_reload=force_reload,
+            )
+        if config_warning:
+            result["warnings"].insert(0, {"message": config_warning})
+        restart_required = list(result.get("restartRequired") or [])
+        notification_sent = _notify_restart_required(restart_required)
         theme_name = event_args[0] if event_args else ""
         subject = f"theme {theme_name}" if theme_name else "active theme"
         counts = result.get("counts") or {"applied": 0, "unchanged": 0, "skipped": 0, "failed": len(result["errors"])}
         summary = (f"processed {subject}: {counts['applied']} applied, {counts['unchanged']} unchanged, "
             f"{counts['skipped']} skipped, {counts['failed']} failed")
         return envelope("hook-run", not result["errors"], summary=summary,
-            event=event, eventArgs=list(event_args), themeName=theme_name or None, **result)
+            event=event, eventArgs=list(event_args), themeName=theme_name or None,
+            restartPolicy=preferences.restart_policy,
+            restartNotificationSent=notification_sent,
+            forced=force_reload,
+            **result)
 
     def run_theme(self) -> dict[str, object]:
         event_count = self._event_count
@@ -659,6 +774,7 @@ class Service:
         environment = os.environ.copy()
         environment["THPM_HOOK_REPORT"] = str(report_path)
         environment["THPM_HOOK_EVENTS"] = str(event_path)
+        environment["THPM_FORCE_RELOAD"] = "1"
         try:
             completed = run(
                 "theme",
@@ -754,6 +870,11 @@ class Service:
             results=results,
             changed=hook_payload.get("changed") or [],
             actions=hook_payload.get("actions") or [],
+            restartRequired=hook_payload.get("restartRequired") or [],
+            restartPolicy=hook_payload.get("restartPolicy"),
+            restartNotificationSent=bool(
+                hook_payload.get("restartNotificationSent")
+            ),
             warnings=hook_payload.get("warnings") or [],
             errors=errors,
             stdout=completed.stdout,

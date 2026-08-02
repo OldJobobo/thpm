@@ -10,7 +10,6 @@ import subprocess
 import tarfile
 import tempfile
 import time
-import tomllib
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,7 +21,11 @@ from textual.widgets import Button, Link
 from thpm import palette, ui
 from thpm import update as updater
 from thpm.cli import _confirm, main
+from thpm.config import ConfigError, Preferences
+from thpm.config import load as load_config
+from thpm.config import save as save_config
 from thpm.integrations import (
+    ApplyFailure,
     _browser_import,
     _reload,
     apply,
@@ -31,6 +34,7 @@ from thpm.integrations import (
     inspect_readiness,
 )
 from thpm.migrate import archive, artifacts, inspect, needs_compat
+from thpm.models import ApplyResult
 from thpm.omarchy import capabilities
 from thpm.omarchy import run as run_omarchy
 from thpm.paths import Paths
@@ -289,6 +293,31 @@ class StateTests(Sandbox):
         self.assertNotIn("obsidian-terminal", {plugin.id for plugin in PLUGINS})
 
 
+class ConfigTests(Sandbox):
+    def test_missing_config_uses_automatic_restart_policy(self):
+        preferences = load_config(self.paths)
+
+        self.assertEqual(preferences.restart_policy, "automatic")
+        self.assertTrue(preferences.automatic_app_restarts)
+
+    def test_restart_policy_round_trips_through_user_config(self):
+        save_config(self.paths, Preferences(restart_policy="notify"))
+
+        self.assertEqual(load_config(self.paths).restart_policy, "notify")
+        self.assertIn(
+            'restart_policy = "notify"', self.paths.config_file.read_text()
+        )
+
+    def test_invalid_current_config_is_reported(self):
+        self.paths.config_file.parent.mkdir(parents=True)
+        self.paths.config_file.write_text(
+            'config_version = 1\n[behavior]\nrestart_policy = "sometimes"\n'
+        )
+
+        with self.assertRaisesRegex(ConfigError, "automatic.*notify"):
+            load_config(self.paths)
+
+
 class MigrationTests(Sandbox):
     def test_migration_reads_names_not_legacy_contents(self):
         self.paths.hook_dir.mkdir(parents=True)
@@ -361,6 +390,19 @@ class MigrationTests(Sandbox):
         self.assertFalse(old_config.exists())
         self.assertTrue(unknown.exists())
         self.assertTrue((destination / launcher.relative_to(self.paths.home)).exists())
+
+    def test_upgrade_preserves_current_user_config(self):
+        save_config(self.paths, Preferences(restart_policy="notify"))
+
+        self.assertNotIn(self.paths.config_file, artifacts(self.paths))
+
+    def test_upgrade_preserves_malformed_current_user_config_for_diagnosis(self):
+        self.paths.config_file.parent.mkdir(parents=True)
+        self.paths.config_file.write_text(
+            'config_version=1\n[behavior\nrestart_policy = "notify"\n'
+        )
+
+        self.assertNotIn(self.paths.config_file, artifacts(self.paths))
 
     def test_upgrade_does_not_remove_unrecognized_thpm_launcher(self):
         launcher = self.paths.home / ".local/bin/thpm"
@@ -502,6 +544,15 @@ class UiTests(Sandbox):
         self.assertIn('onClicked: root.chooseMenuSurface("gui")', qml)
         self.assertIn('onClicked: root.chooseMenuSurface("tui")', qml)
 
+    def test_qml_exposes_restart_policy_and_pending_apps(self):
+        qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
+        self.assertIn('property string restartPolicy: "automatic"', qml)
+        self.assertIn('label: "Restart apps automatically"', qml)
+        self.assertIn(
+            '["thpm", "--json", "config", "restart-policy", policy]', qml
+        )
+        self.assertIn('" Restart needed: " + restartRequired.join(", ")', qml)
+
     def test_qml_donation_action_opens_kofi(self):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertEqual(qml.count('text: "Donate on Ko-fi"'), 1)
@@ -519,6 +570,55 @@ class ServiceTests(Sandbox):
         self.assertEqual(payload["schemaVersion"], 1)
         self.assertTrue(any(p["ownership"] == "native" for p in payload["plugins"]))
         self.assertEqual(payload["menuSurface"], "gui")
+
+    def test_state_exposes_restart_policy_to_both_frontends(self):
+        save_config(self.paths, Preferences(restart_policy="notify"))
+
+        payload = Service(self.paths).state()
+
+        self.assertEqual(payload["preferences"]["restartPolicy"], "notify")
+        self.assertFalse(payload["preferences"]["automaticAppRestarts"])
+
+    def test_restart_policy_service_writes_user_config(self):
+        payload = Service(self.paths).restart_policy("notify")
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["changed"])
+        self.assertEqual(load_config(self.paths).restart_policy, "notify")
+
+    def test_invalid_config_falls_back_to_notify_only_with_warning(self):
+        self.paths.config_file.parent.mkdir(parents=True)
+        self.paths.config_file.write_text("config_version = 1\n[behavior\n")
+
+        payload = Service(self.paths).state()
+
+        self.assertEqual(payload["preferences"]["restartPolicy"], "notify")
+        self.assertIn("notify-only", str(payload["warnings"]))
+
+    def test_hook_uses_notify_policy_and_sends_one_restart_notification(self):
+        save_config(self.paths, Preferences(restart_policy="notify"))
+        result = {
+            "results": [],
+            "counts": {"applied": 0, "unchanged": 0, "skipped": 0, "failed": 0},
+            "changed": [],
+            "actions": [],
+            "restartRequired": ["Spotify", "running GTK applications"],
+            "errors": [],
+            "warnings": [],
+        }
+        with patch.dict(os.environ, {"THPM_FORCE_RELOAD": "1"}), patch(
+            "thpm.service.apply_enabled", return_value=result
+        ) as apply_all, patch(
+            "thpm.service._notify_restart_required", return_value=True
+        ) as notify:
+            payload = Service(self.paths).hook_run("theme-set", ["Test"])
+
+        self.assertFalse(apply_all.call_args.kwargs["automatic_restarts"])
+        self.assertTrue(apply_all.call_args.kwargs["force_reload"])
+        self.assertTrue(payload["forced"])
+        notify.assert_called_once_with(["Spotify", "running GTK applications"])
+        self.assertTrue(payload["restartNotificationSent"])
+        self.assertEqual(payload["restartPolicy"], "notify")
 
     def test_ui_surface_uses_shared_service_envelope(self):
         result = {"surface": "tui", "changed": True}
@@ -623,16 +723,16 @@ class ServiceTests(Sandbox):
         self.assertTrue(accepted["ok"])
 
     def test_disabling_optional_asset_restores_previous_file(self):
-        source = self.paths.current_theme / "typora.css"
+        source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
         source.write_text("theme")
-        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
-        apply("typora", self.paths)
+        apply("cliamp", self.paths)
         assets = Path(__file__).parents[1] / "assets"
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
-            payload = Service(self.paths).set_enabled("typora", False, refresh=False)
+            payload = Service(self.paths).set_enabled("cliamp", False, refresh=False)
         self.assertTrue(payload["ok"])
         self.assertEqual(target.read_text(), "user default")
         self.assertIn(str(target), payload["changed"])
@@ -946,6 +1046,7 @@ class ServiceTests(Sandbox):
         }
 
         def refresh(*_args, **kwargs):
+            self.assertEqual(kwargs["env"]["THPM_FORCE_RELOAD"], "1")
             Path(kwargs["env"]["THPM_HOOK_REPORT"]).write_text(json.dumps(hook_payload))
             return subprocess.CompletedProcess([], 0, "", "")
 
@@ -1318,6 +1419,24 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("/tmp/one", text)
         self.assertIn("renderer: complete", text)
 
+    def test_restart_requirements_are_named_in_human_output(self):
+        output = io.StringIO()
+        render(
+            {
+                "ok": True,
+                "summary": "theme applied",
+                "restartRequired": ["Spotify", "running GTK applications"],
+                "warnings": [],
+                "errors": [],
+            },
+            console=Console(file=output, force_terminal=False, width=100),
+        )
+
+        self.assertIn(
+            "Restart needed: Spotify, running GTK applications",
+            output.getvalue(),
+        )
+
     def test_integration_outcomes_use_native_terminal_status_colors(self):
         output = io.StringIO()
         console = Console(
@@ -1645,6 +1764,39 @@ class CliTests(unittest.TestCase):
         service_type.return_value.update_apply.assert_not_called()
         self.assertEqual(json.loads(stdout.getvalue()), response)
 
+    def test_config_restart_policy_is_available_to_cli_and_json_callers(self):
+        response = {
+            "ok": True,
+            "summary": "Application restart policy: notify",
+            "preferences": {"restartPolicy": "notify"},
+        }
+        with patch("thpm.cli.Service") as service_type, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            service_type.return_value.restart_policy.return_value = response
+            exit_code = main(
+                ["--json", "config", "restart-policy", "notify"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        service_type.return_value.restart_policy.assert_called_once_with("notify")
+        self.assertEqual(json.loads(stdout.getvalue()), response)
+
+    def test_bare_config_reports_preferences_without_mutating(self):
+        response = {
+            "ok": True,
+            "summary": "Application restart policy: automatic",
+        }
+        with patch("thpm.cli.Service") as service_type, patch(
+            "thpm.cli.render"
+        ) as render_output:
+            service_type.return_value.preferences.return_value = response
+            exit_code = main(["config"])
+
+        self.assertEqual(exit_code, 0)
+        service_type.return_value.preferences.assert_called_once_with()
+        render_output.assert_called_once_with(response, verbose=False)
+
     def test_hook_command_forwards_event_and_all_arguments(self):
         response = {"ok": True, "summary": "applied theme tokyo-night"}
         with patch("thpm.cli.Service") as service_type, patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -1752,9 +1904,11 @@ class FakeTuiService:
         self.update_apply_calls = 0
         self.menu_surface = "gui"
         self.surface_calls: list[str] = []
+        self.restart_policy_value = "automatic"
+        self.restart_policy_calls: list[str] = []
 
     def state(self):
-        return {"ok": True, "menuSurface": self.menu_surface, "counts": {"enabled": 1, "disabled": 0, "native": 1, "unavailable": 0, "attention": 0}, "plugins": [
+        return {"ok": True, "menuSurface": self.menu_surface, "preferences": {"restartPolicy": self.restart_policy_value}, "counts": {"enabled": 1, "disabled": 0, "native": 1, "unavailable": 0, "attention": 0}, "plugins": [
             {"id": "fish", "label": "Fish", "category": "Terminal", "description": "Synchronize Fish colors.", "ownership": "thpm", "enabled": True, "available": True, "warnings": []},
             {"id": "native-foot", "label": "Foot live colors", "category": "Native", "description": "Owned by Omarchy.", "ownership": "native", "enabled": True, "available": True, "warnings": []},
         ]}
@@ -1781,6 +1935,12 @@ class FakeTuiService:
             self.menu_surface = requested
             self.surface_calls.append(requested)
         return {"ok": True, "result": {"surface": self.menu_surface, "changed": requested is not None}}
+
+    def restart_policy(self, requested=None):
+        if requested is not None:
+            self.restart_policy_value = requested
+            self.restart_policy_calls.append(requested)
+        return {"ok": True, "preferences": {"restartPolicy": self.restart_policy_value}}
 
 
 class TuiTests(Sandbox):
@@ -1851,8 +2011,12 @@ class TuiTests(Sandbox):
             service = FakeTuiService()
             service.update_available = True
             app = ThpmTui(service, self.paths)
-            async with app.run_test(size=(120, 40)) as pilot:
-                await pilot.pause(0.2)
+            async with app.run_test(size=(120, 52)) as pilot:
+                for _attempt in range(20):
+                    await pilot.pause(0.05)
+                    if app.update_info.get("status") == "available":
+                        break
+                self.assertEqual(app.update_info.get("status"), "available")
                 await pilot.press("4")
                 await pilot.click("#update-action")
                 await pilot.pause()
@@ -1879,6 +2043,24 @@ class TuiTests(Sandbox):
                 await pilot.click("#menu-surface-gui")
                 await pilot.pause(0.2)
                 self.assertEqual(service.surface_calls, ["tui", "gui"])
+        asyncio.run(exercise())
+
+    def test_system_restart_policy_toggle_uses_shared_service(self):
+        async def exercise():
+            service = FakeTuiService()
+            app = ThpmTui(service, self.paths)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause(0.2)
+                await pilot.press("4")
+                restart_switch = app.query_one("#restart-policy-switch")
+                self.assertTrue(restart_switch.value)
+                await pilot.click("#restart-policy-switch")
+                await pilot.pause(0.2)
+                self.assertEqual(service.restart_policy_calls, ["notify"])
+                self.assertFalse(restart_switch.value)
+                self.assertIn(
+                    "notify", str(app.query_one("#restart-policy-message").render())
+                )
         asyncio.run(exercise())
 
     def test_donation_action_opens_kofi(self):
@@ -2681,7 +2863,6 @@ class IntegrationTests(Sandbox):
 
     def test_optional_assets_restore_the_files_they_displaced(self):
         cases = {
-            "typora": ("typora.css", self.paths.config_home / "Typora/themes/omarchy.css"),
             "swaync": ("colors.css", self.paths.config_home / "swaync/colors.css"),
             "cliamp": ("cliamp.toml", self.paths.config_home / "cliamp/themes/omarchy.toml"),
         }
@@ -2721,6 +2902,82 @@ class IntegrationTests(Sandbox):
         self.assertIn(str(target), payload["changed"])
         self.assertNotIn("windsurf", {item["id"] for item in payload["plugins"]})
 
+    def test_reconcile_retires_typora_and_restores_displaced_stylesheet(self):
+        managed = b"retired Typora theme\n"
+        prior = b"user Typora theme\n"
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(managed)
+        state = self.paths.managed_asset_state_dir / "typora.json"
+        backup = self.paths.managed_asset_state_dir / "typora.backup"
+        state.parent.mkdir(parents=True)
+        backup.write_bytes(prior)
+        state.write_text(
+            json.dumps(
+                {
+                    "existed": True,
+                    "priorType": "file",
+                    "priorSha256": hashlib.sha256(prior).hexdigest(),
+                    "priorMode": 0o644,
+                    "managedSha256": hashlib.sha256(managed).hexdigest(),
+                    "managedMode": 0o644,
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.state_file.write_text(
+            "version = 1\n\n[plugins]\nspotify = true\ntypora = true\n"
+        )
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text(
+            "canonical-palette-v1\n"
+        )
+
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).reconcile()
+
+        self.assertEqual(target.read_bytes(), prior)
+        self.assertFalse(state.exists())
+        self.assertFalse(backup.exists())
+        self.assertNotIn("typora", self.paths.state_file.read_text())
+        self.assertNotIn("typora", {item["id"] for item in payload["plugins"]})
+        self.assertIn(str(target), payload["changed"])
+
+    def test_reconcile_retires_vicinae_and_cleans_historical_outputs(self):
+        rendered = self.paths.current_theme / "thpm-vicinae.toml"
+        rendered.parent.mkdir(parents=True)
+        rendered.write_text("legacy generated theme\n")
+        current = self.paths.data_home / "vicinae/themes/thpm.toml"
+        legacy = self.paths.config_home / "vicinae/themes/thpm.toml"
+        for target in (current, legacy):
+            target.parent.mkdir(parents=True)
+            target.write_bytes(rendered.read_bytes())
+        deployed_template = self.paths.themed_dir / "thpm-vicinae.toml.tpl"
+        deployed_template.parent.mkdir(parents=True)
+        deployed_template.write_text("retired template\n")
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            "version = 1\n\n[plugins]\nspotify = true\nvicinae = true\n"
+        )
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text(
+            "canonical-palette-v1\n"
+        )
+
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).reconcile()
+
+        self.assertFalse(current.exists())
+        self.assertFalse(legacy.exists())
+        self.assertFalse(rendered.exists())
+        self.assertFalse(deployed_template.exists())
+        self.assertNotIn("vicinae", self.paths.state_file.read_text())
+        self.assertNotIn("vicinae", {item["id"] for item in payload["plugins"]})
+        for target in (current, legacy, rendered, deployed_template):
+            self.assertIn(str(target), payload["changed"])
+
     def test_legacy_optional_output_is_removed_only_when_it_matches_a_theme_asset(self):
         installed_theme = self.paths.config_home / "omarchy/themes/old"
         installed_theme.mkdir(parents=True)
@@ -2743,95 +3000,95 @@ class IntegrationTests(Sandbox):
         self.assertEqual(preserved.status, "unchanged")
 
     def test_optional_asset_without_previous_file_is_removed_when_absent(self):
-        source = self.paths.current_theme / "typora.css"
+        source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
         source.write_text("theme")
-        target = self.paths.config_home / "Typora/themes/omarchy.css"
-        apply("typora", self.paths)
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        apply("cliamp", self.paths)
         source.unlink()
-        result = apply("typora", self.paths)
+        result = apply("cliamp", self.paths)
         self.assertFalse(target.exists())
         self.assertIn(str(target), result.changed)
 
     def test_optional_asset_interrupted_update_keeps_original_backup(self):
-        source = self.paths.current_theme / "typora.css"
+        source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
         source.write_text("theme a")
-        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
-        apply("typora", self.paths)
+        apply("cliamp", self.paths)
         source.write_text("theme b")
         with patch(
             "thpm.integrations.atomic_copy", side_effect=RuntimeError("interrupted")
         ), self.assertRaisesRegex(RuntimeError, "interrupted"):
-            apply("typora", self.paths)
+            apply("cliamp", self.paths)
         source.unlink()
-        apply("typora", self.paths)
+        apply("cliamp", self.paths)
         self.assertEqual(target.read_text(), "user default")
 
     def test_optional_asset_equal_bytes_normalizes_mode_and_cleans_up(self):
-        source = self.paths.current_theme / "typora.css"
+        source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
         source.write_text("same")
-        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("same")
         target.chmod(0o600)
-        apply("typora", self.paths)
+        apply("cliamp", self.paths)
         self.assertEqual(target.stat().st_mode & 0o777, 0o644)
         source.unlink()
-        apply("typora", self.paths)
+        apply("cliamp", self.paths)
         self.assertFalse(target.exists())
 
     def test_optional_asset_missing_backup_fails_closed(self):
-        source = self.paths.current_theme / "typora.css"
+        source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
         source.write_text("theme")
-        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
-        apply("typora", self.paths)
-        (self.paths.managed_asset_state_dir / "typora.backup").unlink()
+        apply("cliamp", self.paths)
+        (self.paths.managed_asset_state_dir / "cliamp.backup").unlink()
         source.unlink()
-        result = apply("typora", self.paths)
+        result = apply("cliamp", self.paths)
         self.assertEqual(target.read_text(), "theme")
         self.assertIn("backup is missing", result.warnings[0])
 
     def test_optional_asset_corrupt_backup_and_state_schema_fail_closed(self):
-        source = self.paths.current_theme / "typora.css"
+        source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
         source.write_text("theme")
-        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
-        apply("typora", self.paths)
-        backup = self.paths.managed_asset_state_dir / "typora.backup"
+        apply("cliamp", self.paths)
+        backup = self.paths.managed_asset_state_dir / "cliamp.backup"
         backup.write_text("corrupted")
         source.unlink()
-        corrupted = apply("typora", self.paths)
+        corrupted = apply("cliamp", self.paths)
         self.assertEqual(target.read_text(), "theme")
         self.assertIn("backup is missing or invalid", corrupted.warnings[0])
 
-        state = self.paths.managed_asset_state_dir / "typora.json"
+        state = self.paths.managed_asset_state_dir / "cliamp.json"
         state.write_text(json.dumps({"existed": True, "priorType": "bad"}))
-        invalid = apply("typora", self.paths)
+        invalid = apply("cliamp", self.paths)
         self.assertEqual(target.read_text(), "theme")
         self.assertIn("state is invalid", invalid.warnings[0])
 
     def test_optional_asset_restores_previous_symlink(self):
-        source = self.paths.current_theme / "typora.css"
+        source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
         source.write_text("theme")
-        original = self.paths.home / "my-typora.css"
+        original = self.paths.home / "my-cliamp.toml"
         original.write_text("user default")
-        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.symlink_to(original)
-        apply("typora", self.paths)
+        apply("cliamp", self.paths)
         self.assertFalse(target.is_symlink())
         source.unlink()
-        apply("typora", self.paths)
+        apply("cliamp", self.paths)
         self.assertTrue(target.is_symlink())
         self.assertEqual(target.readlink(), original)
 
@@ -2882,8 +3139,8 @@ class IntegrationTests(Sandbox):
         self.assertEqual(target.read_text(), "user default")
 
     def test_optional_asset_cleanup_does_not_require_the_application(self):
-        target = self.paths.config_home / "Typora/themes/omarchy.css"
-        state = self.paths.managed_asset_state_dir / "typora.json"
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        state = self.paths.managed_asset_state_dir / "cliamp.json"
         target.parent.mkdir(parents=True)
         target.write_text("theme")
         state.parent.mkdir(parents=True)
@@ -2897,9 +3154,9 @@ class IntegrationTests(Sandbox):
             )
         )
         with patch("thpm.integrations.shutil.which", return_value=None):
-            result = apply_enabled(self.paths, {"typora": True})
-        typora = next(item for item in result["results"] if item["id"] == "typora")
-        self.assertEqual(typora["status"], "applied")
+            result = apply_enabled(self.paths, {"cliamp": True})
+        cliamp = next(item for item in result["results"] if item["id"] == "cliamp")
+        self.assertEqual(cliamp["status"], "applied")
         self.assertFalse(target.exists())
 
     def test_zellij_rejects_unsafe_saved_theme_option(self):
@@ -3032,13 +3289,16 @@ class IntegrationTests(Sandbox):
         self.assertEqual(payload["results"][0]["status"], "skipped")
         self.assertEqual(payload["errors"], [])
 
-    def test_moved_generated_outputs_restore_legacy_targets_before_installing(self):
+    def test_retired_vicinae_cleanup_restores_legacy_and_removes_current_output(self):
         source = self.paths.current_theme / "thpm-vicinae.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("[meta]\nversion = 1\n")
+        source.write_text("managed Vicinae theme\n")
         legacy = self.paths.config_home / "vicinae/themes/thpm.toml"
         legacy.parent.mkdir(parents=True)
-        legacy.write_text("managed legacy theme\n")
+        legacy.write_bytes(source.read_bytes())
+        current = self.paths.data_home / "vicinae/themes/thpm.toml"
+        current.parent.mkdir(parents=True)
+        current.write_bytes(source.read_bytes())
         prior = b"user legacy theme\n"
         state = self.paths.managed_asset_state_dir / "generated-vicinae.json"
         backup = self.paths.managed_asset_state_dir / "generated-vicinae.backup"
@@ -3057,72 +3317,147 @@ class IntegrationTests(Sandbox):
             )
         )
 
-        with patch("thpm.integrations._reload", return_value=[]):
-            result = apply("vicinae", self.paths)
+        changed, warnings = cleanup_managed_outputs(
+            self.paths, "vicinae", assume_legacy=True
+        )
 
-        target = self.paths.data_home / "vicinae/themes/thpm.toml"
         self.assertEqual(legacy.read_bytes(), prior)
-        self.assertEqual(target.read_bytes(), source.read_bytes())
-        self.assertEqual(result.status, "applied")
-        self.assertIn(str(legacy), result.changed)
-        self.assertIn(str(target), result.changed)
+        self.assertFalse(current.exists())
+        self.assertFalse(source.exists())
+        self.assertEqual(warnings, [])
         self.assertFalse(state.exists())
-        self.assertTrue(
-            (self.paths.managed_asset_state_dir / "generated-vicinae-v2.json").is_file()
+        for target in (legacy, current, source):
+            self.assertIn(str(target), changed)
+
+    def test_moved_spotify_output_reapply_and_cleanup_preserve_current_backup(self):
+        source = self.paths.current_theme / "thpm-spicetify.ini"
+        source.parent.mkdir(parents=True)
+        source.write_text("generated theme\n")
+        target = self.paths.config_home / "spicetify/Themes/omarchy/color.ini"
+        target.parent.mkdir(parents=True)
+        target.write_text("user current theme\n")
+
+        with patch("thpm.integrations._reload", return_value=[]):
+            first = apply("spotify", self.paths)
+            second = apply("spotify", self.paths)
+        changed, warnings = cleanup_managed_outputs(self.paths, "spotify")
+
+        self.assertEqual(first.status, "applied")
+        self.assertEqual(second.status, "unchanged")
+        self.assertEqual(target.read_text(), "user current theme\n")
+        self.assertIn(str(target), changed)
+        self.assertEqual(warnings, [])
+        self.assertFalse(
+            (
+                self.paths.managed_asset_state_dir / "generated-spotify-v2.json"
+            ).exists()
         )
 
-    def test_moved_outputs_reapply_and_cleanup_preserve_current_target_backups(self):
-        cases = {
-            "spotify": (
-                "thpm-spicetify.ini",
-                self.paths.config_home / "spicetify/Themes/omarchy/color.ini",
-            ),
-            "vicinae": (
-                "thpm-vicinae.toml",
-                self.paths.data_home / "vicinae/themes/thpm.toml",
-            ),
-        }
-        for plugin_id, (source_name, target) in cases.items():
-            with self.subTest(plugin_id=plugin_id):
-                source = self.paths.current_theme / source_name
-                source.parent.mkdir(parents=True, exist_ok=True)
-                source.write_text("generated theme\n")
-                target.parent.mkdir(parents=True)
-                target.write_text("user current theme\n")
+    def test_spotify_reload_restarts_a_running_client_after_refresh(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        running = subprocess.CompletedProcess([], 0, "123\n", "")
+        with patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
+        ), patch(
+            "thpm.integrations.subprocess.run",
+            side_effect=[completed, running, completed],
+        ) as run:
+            actions, restart_required = _reload("spotify")
 
-                with patch("thpm.integrations._reload", return_value=[]):
-                    first = apply(plugin_id, self.paths)
-                    second = apply(plugin_id, self.paths)
-                changed, warnings = cleanup_managed_outputs(self.paths, plugin_id)
-
-                self.assertEqual(first.status, "applied")
-                self.assertEqual(second.status, "unchanged")
-                self.assertEqual(target.read_text(), "user current theme\n")
-                self.assertIn(str(target), changed)
-                self.assertEqual(warnings, [])
-                self.assertFalse(
-                    (
-                        self.paths.managed_asset_state_dir
-                        / f"generated-{plugin_id}-v2.json"
-                    ).exists()
-                )
-
-    def test_vicinae_template_matches_current_schema(self):
-        template = (
-            Path(__file__).parents[1] / "assets/templates/thpm-vicinae.toml.tpl"
-        ).read_text()
-        values = CANONICAL_COLORS
-        rendered = re.sub(
-            r"\{\{\s*([a-z_]+)\s*\}\}",
-            lambda match: values[match.group(1)],
-            template,
+        self.assertEqual(actions, ["spicetify refresh", "spicetify restart"])
+        self.assertEqual(restart_required, [])
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(
+                    ["spicetify", "refresh"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                ),
+                call(
+                    ["pgrep", "-x", "spotify"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=2,
+                ),
+                call(
+                    ["spicetify", "restart"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                ),
+            ],
         )
-        theme = tomllib.loads(rendered)
-        self.assertEqual(theme["meta"]["version"], 1)
-        self.assertEqual(theme["meta"]["variant"], "dark")
-        self.assertEqual(theme["colors"]["core"]["background"], COLORS["bg"])
-        self.assertEqual(theme["colors"]["accents"]["blue"], COLORS["blue"])
-        self.assertNotIn("background", theme["colors"])
+
+    def test_spotify_reload_does_not_launch_a_closed_client(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        stopped = subprocess.CompletedProcess([], 1, "", "")
+        with patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
+        ), patch(
+            "thpm.integrations.subprocess.run", side_effect=[completed, stopped]
+        ) as run:
+            actions, restart_required = _reload("spotify")
+
+        self.assertEqual(actions, ["spicetify refresh"])
+        self.assertEqual(restart_required, [])
+        self.assertEqual(len(run.call_args_list), 2)
+
+    def test_spotify_notify_policy_refreshes_without_restarting(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        running = subprocess.CompletedProcess([], 0, "123\n", "")
+        with patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
+        ), patch(
+            "thpm.integrations.subprocess.run", side_effect=[completed, running]
+        ) as run:
+            actions, restart_required = _reload(
+                "spotify", automatic_restarts=False
+            )
+
+        self.assertEqual(actions, ["spicetify refresh"])
+        self.assertEqual(restart_required, ["Spotify"])
+        self.assertEqual(len(run.call_args_list), 2)
+
+    def test_spotify_restart_failure_preserves_refresh_and_pending_restart(self):
+        refreshed = subprocess.CompletedProcess([], 0, "", "")
+        running = subprocess.CompletedProcess([], 0, "123\n", "")
+        failed = subprocess.CompletedProcess([], 1, "", "restart failed")
+        with patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
+        ), patch(
+            "thpm.integrations.subprocess.run",
+            side_effect=[refreshed, running, failed],
+        ), self.assertRaisesRegex(ApplyFailure, "restart failed") as raised:
+            _reload("spotify")
+
+        self.assertEqual(raised.exception.actions, ["spicetify refresh"])
+        self.assertEqual(raised.exception.restart_required, ["Spotify"])
+
+    def test_spotify_restart_failure_reaches_aggregate_hook_result(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[base]\n")
+        refreshed = subprocess.CompletedProcess([], 0, "", "")
+        running = subprocess.CompletedProcess([], 0, "123\n", "")
+        failed = subprocess.CompletedProcess([], 1, "", "restart failed")
+        with patch(
+            "thpm.integrations.inspect_readiness", return_value=(True, [], [])
+        ), patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
+        ), patch(
+            "thpm.integrations.subprocess.run",
+            side_effect=[refreshed, running, failed],
+        ):
+            payload = apply_enabled(self.paths, {"spotify": True})
+
+        self.assertEqual(payload["results"][0]["status"], "failed")
+        self.assertEqual(payload["actions"], ["spicetify refresh"])
+        self.assertEqual(payload["restartRequired"], ["Spotify"])
 
     def test_app_reload_timeout_is_reported_without_stalling(self):
         with patch("thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"), patch(
@@ -3137,6 +3472,24 @@ class IntegrationTests(Sandbox):
             check=False,
             timeout=5,
         )
+
+    def test_explicit_reapply_forces_reload_when_spotify_colors_are_unchanged(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[base]\n")
+        with patch(
+            "thpm.integrations._reload",
+            return_value=(["spicetify refresh", "spicetify restart"], []),
+        ) as reload_app:
+            first = apply("spotify", self.paths)
+            forced = apply("spotify", self.paths, force_reload=True)
+
+        self.assertEqual(first.status, "applied")
+        self.assertEqual(forced.status, "applied")
+        self.assertEqual(
+            forced.actions, ["spicetify refresh", "spicetify restart"]
+        )
+        self.assertEqual(reload_app.call_count, 2)
 
     def test_unchanged_integrations_do_not_invoke_reload_commands(self):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
@@ -3156,7 +3509,9 @@ class IntegrationTests(Sandbox):
             self.assertEqual(first.status, "applied")
             self.assertEqual(second.status, "unchanged")
             self.assertEqual(second.actions, [])
-            reload_app.assert_called_once_with(plugin_id)
+            reload_app.assert_called_once_with(
+                plugin_id, automatic_restarts=True
+            )
 
     def test_steam_helper_is_bounded_and_quiet(self):
         script = self.paths.home / ".local/share/steam-adwaita/install.py"
@@ -3184,14 +3539,19 @@ class IntegrationTests(Sandbox):
         gtk3.write_text("button { padding: 4px; }\n")
         first = apply("gtk-css-compat", self.paths)
         self.assertEqual(first.status, "applied")
+        self.assertEqual(first.restartRequired, ["running GTK applications"])
         self.assertIn('import url("thpm-theme.css")', gtk3.read_text())
         self.assertIn("button { padding: 4px; }", gtk3.read_text())
         self.assertEqual((gtk3.parent / "thpm-theme.css").read_bytes(), source.read_bytes())
         second = apply("gtk-css-compat", self.paths)
         self.assertEqual(second.status, "unchanged")
+        self.assertEqual(second.restartRequired, [])
         source.unlink()
         cleanup = apply("gtk-css-compat", self.paths)
         self.assertEqual(cleanup.status, "applied")
+        self.assertEqual(
+            cleanup.restartRequired, ["running GTK applications"]
+        )
         self.assertEqual(gtk3.read_text(), "button { padding: 4px; }\n")
         self.assertFalse((gtk3.parent / "thpm-theme.css").exists())
 
@@ -3340,8 +3700,10 @@ class IntegrationTests(Sandbox):
         result = apply("nwg-dock", self.paths)
         unchanged = apply("nwg-dock", self.paths)
         self.assertEqual(result.status, "applied")
-        self.assertTrue(any("restart" in warning for warning in result.warnings))
+        self.assertEqual(result.restartRequired, ["nwg-dock-hyprland"])
+        self.assertEqual(result.warnings, [])
         self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(unchanged.restartRequired, [])
         self.assertEqual(unchanged.warnings, [])
 
     def test_steam_missing_helper_skips_and_failure_is_reported(self):
@@ -3369,6 +3731,33 @@ class IntegrationTests(Sandbox):
         self.assertEqual(payload["results"][0]["status"], "failed")
         self.assertIn(str(target), payload["results"][0]["changed"])
         self.assertEqual(target.read_text(), "[base]\n")
+
+    def test_apply_enabled_aggregates_and_deduplicates_restart_requirements(self):
+        first = ApplyResult(
+            "gtk-css-compat",
+            "applied",
+            changed=["/tmp/gtk"],
+            restartRequired=["running GTK applications"],
+        )
+        second = ApplyResult(
+            "nwg-dock",
+            "applied",
+            changed=["/tmp/dock"],
+            restartRequired=["running GTK applications", "nwg-dock-hyprland"],
+        )
+        with patch(
+            "thpm.integrations.inspect_readiness", return_value=(True, [], [])
+        ), patch("thpm.integrations.apply", side_effect=[first, second]):
+            payload = apply_enabled(
+                self.paths,
+                {"gtk-css-compat": True, "nwg-dock": True},
+                automatic_restarts=False,
+            )
+
+        self.assertEqual(
+            payload["restartRequired"],
+            ["running GTK applications", "nwg-dock-hyprland"],
+        )
 
     def test_apply_enabled_isolates_failures_and_exposes_statuses(self):
         generated = self.paths.current_theme / "thpm-fish.fish"

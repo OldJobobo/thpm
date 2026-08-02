@@ -86,7 +86,7 @@ def gtk_synchronized(paths: Paths) -> bool:
     )
 
 
-def apply_gtk(paths: Paths) -> ApplyResult:
+def apply_gtk(paths: Paths, *, force_restart: bool = False) -> ApplyResult:
     source = paths.current_theme / "gtk.css"
     changed: list[str] = []
     warnings: list[str] = []
@@ -115,8 +115,11 @@ def apply_gtk(paths: Paths) -> ApplyResult:
                 user_file.unlink(missing_ok=True)
             changed.append(str(main))
 
-    if changed and source.is_file():
-        warnings.append("restart running GTK applications to load the new stylesheet")
+    restart_required = (
+        ["running GTK applications"]
+        if changed or (source.is_file() and force_restart)
+        else []
+    )
     status = "applied" if changed else "unchanged"
     message = (
         "GTK 3 and GTK 4 theme CSS synchronized"
@@ -124,7 +127,12 @@ def apply_gtk(paths: Paths) -> ApplyResult:
         else "active theme does not request GTK CSS"
     )
     return ApplyResult(
-        "gtk-css-compat", status, changed=changed, message=message, warnings=warnings
+        "gtk-css-compat",
+        status,
+        changed=changed,
+        message=message,
+        warnings=warnings,
+        restartRequired=restart_required,
     )
 
 

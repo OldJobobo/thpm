@@ -36,6 +36,8 @@ Item {
     property bool actionError: false
     property string menuSurface: "gui"
     property string menuSurfaceMessage: ""
+    property string restartPolicy: "automatic"
+    property string restartPolicyMessage: ""
     property var updateInfo: ({
         "status": "idle",
         "currentVersion": "1.0.0rc15",
@@ -104,6 +106,7 @@ Item {
             plugins = state.plugins || [];
             counts = state.counts || counts;
             menuSurface = state.menuSurface || menuSurface;
+            restartPolicy = state.preferences && state.preferences.restartPolicy ? state.preferences.restartPolicy : restartPolicy;
             if (!state.ok)
                 message = state.summary || "Unable to read THPM state";
             else if (state.migration && state.migration.pending)
@@ -179,7 +182,12 @@ Item {
         try {
             var payload = JSON.parse(text);
             actionError = !payload.ok;
-            actionMessage = payload.ok ? successMessage : (payload.summary || "Action failed");
+            if (payload.ok) {
+                var restartRequired = payload.restartRequired || [];
+                actionMessage = successMessage + (restartRequired.length ? " Restart needed: " + restartRequired.join(", ") + "." : "");
+            } else {
+                actionMessage = payload.summary || "Action failed";
+            }
         } catch (error) {
             actionError = true;
             actionMessage = "Unable to read THPM response";
@@ -206,6 +214,29 @@ Item {
             menuSurfaceMessage = "Omarchy Menu now opens the " + menuSurface.toUpperCase() + ".";
         } catch (error) {
             menuSurfaceMessage = error.message || "Unable to change menu launcher";
+        }
+        refresh.running = true;
+    }
+
+    function chooseRestartPolicy(policy) {
+        if (policy === restartPolicy || setRestartPolicy.running)
+            return;
+
+        restartPolicyMessage = "Updating application restart policy…";
+        setRestartPolicy.command = ["thpm", "--json", "config", "restart-policy", policy];
+        setRestartPolicy.running = true;
+    }
+
+    function readRestartPolicy(text) {
+        try {
+            var payload = JSON.parse(text);
+            if (!payload.ok)
+                throw new Error(payload.summary || "Unable to change restart policy");
+
+            restartPolicy = payload.preferences.restartPolicy;
+            restartPolicyMessage = restartPolicy === "automatic" ? "Supported running apps restart after theme changes." : "THPM will notify you when apps need restarting.";
+        } catch (error) {
+            restartPolicyMessage = error.message || "Unable to change restart policy";
         }
         refresh.running = true;
     }
@@ -298,6 +329,15 @@ Item {
 
         stdout: StdioCollector {
             onStreamFinished: root.readMenuSurface(text)
+        }
+
+    }
+
+    Process {
+        id: setRestartPolicy
+
+        stdout: StdioCollector {
+            onStreamFinished: root.readRestartPolicy(text)
         }
 
     }
@@ -1058,6 +1098,31 @@ Item {
                             visible: root.actionMessage !== ""
                             text: root.actionMessage
                             color: root.actionError ? Color.urgent : Color.foreground
+                            wrapMode: Text.WordWrap
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            height: Math.max(1, Style.normalBorderWidth)
+                            color: Color.popups.border
+                        }
+
+                        Toggle {
+                            Layout.fillWidth: true
+                            label: "Restart apps automatically"
+                            description: "Restart supported running apps after theme changes; when off, notify instead"
+                            checked: root.restartPolicy === "automatic"
+                            enabled: !setRestartPolicy.running
+                            onClicked: root.chooseRestartPolicy(checked ? "notify" : "automatic")
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            visible: root.restartPolicyMessage !== ""
+                            text: root.restartPolicyMessage
+                            color: Color.foreground
                             wrapMode: Text.WordWrap
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption

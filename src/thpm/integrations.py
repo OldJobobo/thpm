@@ -1638,13 +1638,28 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
     return _result(plugin_id, changed, actions, warnings)
 
 
-def apply_enabled(paths: Paths, enabled: dict[str, bool]) -> dict[str, object]:
+def apply_enabled(
+    paths: Paths,
+    enabled: dict[str, bool],
+    events: Callable[[dict[str, object]], None] | None = None,
+) -> dict[str, object]:
     results: list[dict[str, object]] = []
     errors: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
-    for plugin in PLUGINS:
-        if not enabled.get(plugin.id):
-            continue
+    plugins = [plugin for plugin in PLUGINS if enabled.get(plugin.id)]
+    total = len(plugins)
+    if events is not None:
+        events({"type": "integrations_started", "total": total})
+    for current, plugin in enumerate(plugins, start=1):
+        if events is not None:
+            events(
+                {
+                    "type": "integration_started",
+                    "plugin": plugin.id,
+                    "current": current,
+                    "total": total,
+                }
+            )
         ready, missing, readiness_warnings = inspect_readiness(plugin.id, paths)
         if not ready:
             result = ApplyResult(
@@ -1672,11 +1687,23 @@ def apply_enabled(paths: Paths, enabled: dict[str, bool]) -> dict[str, object]:
             error["plugin"] == plugin.id for error in errors
         ):
             errors.append({"plugin": plugin.id, "message": result.message})
-        results.append(result.json())
+        result_payload = result.json()
+        results.append(result_payload)
         for warning in result.warnings:
             warnings.append({"plugin": plugin.id, "message": warning})
         if result.status == "skipped":
             warnings.append({"plugin": plugin.id, "message": result.message})
+        if events is not None:
+            events(
+                {
+                    "type": "integration_finished",
+                    "plugin": plugin.id,
+                    "current": current,
+                    "total": total,
+                    "status": result.status,
+                    "message": result.message,
+                }
+            )
     counts = {
         status: sum(1 for result in results if result["status"] == status)
         for status in ("applied", "unchanged", "skipped", "failed")

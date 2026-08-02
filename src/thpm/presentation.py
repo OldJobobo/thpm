@@ -6,27 +6,23 @@ from contextlib import contextmanager
 from typing import Any
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.progress import (
     BarColumn,
+    MofNCompleteColumn,
     Progress,
     SpinnerColumn,
-    TaskProgressColumn,
     TextColumn,
-    TimeElapsedColumn,
 )
 from rich.table import Table
 from rich.text import Text
 
 _STAGE_TOTALS = {
-    "install": 6,
     "reconcile": 4,
-    "run": 2,
-    "update": 8,
     "enable": 3,
     "disable": 3,
-    "migrate": 4,
+    "migrate": 3,
     "uninstall": 4,
+    "zed-setup": 3,
 }
 
 _LABELS = {
@@ -38,6 +34,7 @@ _LABELS = {
     "disable": "Disabling integration",
     "migrate": "Migrating configuration",
     "uninstall": "Removing THPM integrations",
+    "zed-setup": "Configuring Zed",
 }
 
 _STATUS_STYLES = {
@@ -51,11 +48,25 @@ _STATUS_STYLES = {
 class Activity:
     """TTY-aware progress surface used by synchronous service operations."""
 
-    def __init__(self, operation: str, *, verbose: bool = False, console: Console | None = None):
+    def __init__(
+        self,
+        operation: str,
+        *,
+        verbose: bool = False,
+        quiet: bool = False,
+        console: Console | None = None,
+    ):
         self.operation = operation
         self.verbose = verbose
-        self.console = console or Console(no_color=bool(os.environ.get("NO_COLOR")))
-        self.enabled = self.console.is_terminal and os.environ.get("TERM") != "dumb"
+        self.quiet = quiet
+        self.console = console or Console(
+            stderr=True, no_color=bool(os.environ.get("NO_COLOR"))
+        )
+        self.enabled = (
+            not quiet
+            and self.console.is_terminal
+            and os.environ.get("TERM") != "dumb"
+        )
         self._progress: Progress | None = None
         self._task: int | None = None
         self._steps = 0
@@ -67,16 +78,22 @@ class Activity:
             self._progress = Progress(
                 SpinnerColumn(style="bold magenta"),
                 TextColumn("[bold cyan]{task.description}"),
-                BarColumn(bar_width=28, style="grey35", complete_style="magenta", finished_style="green"),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
+                BarColumn(
+                    bar_width=28,
+                    style="grey35",
+                    complete_style="magenta",
+                    finished_style="green",
+                ),
+                MofNCompleteColumn(),
                 console=self.console,
                 transient=True,
                 refresh_per_second=12,
             )
             self._progress.start()
-            self._task = self._progress.add_task(self._last_message, total=_STAGE_TOTALS.get(self.operation, 4))
-        elif self.verbose:
+            self._task = self._progress.add_task(
+                self._last_message, total=_STAGE_TOTALS.get(self.operation)
+            )
+        elif not self.quiet:
             self.console.print(f"[cyan]→[/] {self._last_message}")
         return self
 
@@ -87,13 +104,23 @@ class Activity:
         self._last_message = message
         self._steps += 1
         if self._progress is not None and self._task is not None:
-            total = int(self._progress.tasks[self._task].total or self._steps + 1)
-            completed = min(max(self._steps - 1, 0), max(total - 1, 0))
-            self._progress.update(self._task, description=message, completed=completed)
+            task = self._progress.tasks[self._task]
+            total = int(task.total) if task.total is not None else None
+            completed = (
+                min(max(self._steps - 1, 0), max(total - 1, 0))
+                if total is not None
+                else self._steps - 1
+            )
+            if self.verbose:
+                suffix = f" [dim]{detail}[/]" if detail else ""
+                self._progress.console.print(f"  [cyan]→[/] {message}{suffix}")
+            self._progress.update(
+                self._task, description=message, completed=completed
+            )
             self._progress.refresh()
-        elif self.verbose:
+        elif not self.quiet:
             suffix = f" [dim]{detail}[/]" if detail else ""
-            self.console.print(f"  [cyan]•[/] {message}{suffix}")
+            self.console.print(f"  [cyan]→[/] {message}{suffix}")
 
     def set_total(self, total: int) -> None:
         """Adjust the stage count once an operation selects its execution path."""
@@ -103,6 +130,78 @@ class Activity:
             completed = min(max(self._steps - 1, 0), max(total - 1, 0))
             self._progress.update(self._task, total=total, completed=completed)
             self._progress.refresh()
+
+    def event(self, event: dict[str, object]) -> None:
+        """Render structured hook events without coupling adapters to Rich."""
+        event_type = str(event.get("type", ""))
+        total = int(event.get("total", 0) or 0)
+        current = int(event.get("current", 0) or 0)
+        plugin = str(event.get("plugin", ""))
+
+        if event_type == "integrations_started":
+            message = (
+                f"Applying {total} integration{'s' if total != 1 else ''}"
+                if total
+                else "No enabled integrations to apply"
+            )
+            self._last_message = message
+            if self._progress is not None and self._task is not None:
+                self._progress.update(
+                    self._task,
+                    description=message,
+                    total=total,
+                    completed=0,
+                )
+                self._progress.refresh()
+            elif not self.quiet:
+                self.console.print(f"  [cyan]→[/] {message}")
+            return
+
+        if event_type == "integration_started":
+            message = f"Applying integrations {current}/{total} — {plugin}"
+            self._last_message = message
+            if self._progress is not None and self._task is not None:
+                self._progress.update(
+                    self._task,
+                    description=message,
+                    total=max(total, 1),
+                    completed=max(current - 1, 0),
+                )
+                self._progress.refresh()
+            elif not self.quiet:
+                self.console.print(
+                    f"  [cyan]→[/] [{current}/{total}] [bold]{plugin}[/]"
+                )
+            return
+
+        if event_type == "integration_finished":
+            status = str(event.get("status", ""))
+            message = str(event.get("message", ""))
+            self._last_message = f"{plugin}: {status}"
+            connector = "└─" if current == total else "├─"
+            icon = {
+                "applied": "✓",
+                "unchanged": "•",
+                "skipped": "!",
+                "failed": "✗",
+            }.get(status, "•")
+            style = _STATUS_STYLES.get(status, "white")
+            detail = f" [dim]— {message}[/]" if self.verbose and message else ""
+            outcome = (
+                f"  [dim]{connector}[/] [{style}]{icon}[/] "
+                f"[bold]{plugin:<20}[/] [{style}]{status}[/]{detail}"
+            )
+            if self._progress is not None and self._task is not None:
+                self._progress.update(
+                    self._task,
+                    description=self._last_message,
+                    total=max(total, 1),
+                    completed=current,
+                )
+                self._progress.console.print(outcome)
+                self._progress.refresh()
+            elif not self.quiet:
+                self.console.print(outcome)
 
     @contextmanager
     def suspend(self) -> Iterator[None]:
@@ -123,9 +222,11 @@ class Activity:
         if self._progress is not None and self._task is not None:
             if _type is None and self._successful is not False:
                 task = self._progress.tasks[self._task]
+                total = task.total if task.total is not None else 1
                 self._progress.update(
                     self._task,
-                    completed=task.total,
+                    total=total,
+                    completed=total,
                     description=self._last_message,
                 )
                 self._progress.refresh()
@@ -135,8 +236,14 @@ class Activity:
 def operation_name(command: str, args: Any) -> str | None:
     if command == "plugin":
         return str(args.plugin_command)
+    if command == "hook-run" and getattr(args, "event", None) == "theme-set":
+        return "run"
+    if command == "install" and getattr(args, "install_check", False):
+        return None
     if command in {"enable", "disable", "install", "uninstall", "migrate", "reconcile", "run"}:
         return command
+    if command == "zed" and getattr(args, "zed_command", None) == "setup":
+        return "zed-setup"
     if command == "update" and getattr(args, "update_command", None) not in {"check", "status"}:
         return "update"
     return None
@@ -182,7 +289,12 @@ def _print_details(console: Console, payload: dict[str, Any], *, verbose: bool) 
             console.print(table)
 
     results = payload.get("results")
-    if isinstance(results, list) and results:
+    if (
+        verbose
+        and not payload.get("progressReported")
+        and isinstance(results, list)
+        and results
+    ):
         table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
         table.add_column("Status", width=10)
         table.add_column("Integration", style="bold")
@@ -233,7 +345,7 @@ def render(payload: dict[str, Any], *, verbose: bool = False, console: Console |
     summary = str(payload.get("summary", "Done"))
     icon = "✓" if ok else "✗"
     style = "green" if ok else "red"
-    console.print(Panel.fit(f"[{style} bold]{icon}[/] [bold]{summary}[/]", border_style=style, padding=(0, 1)))
+    console.print(f"[{style} bold]{icon}[/] [bold]{summary}[/]")
     _print_details(console, payload, verbose=verbose)
 
 

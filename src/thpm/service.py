@@ -135,13 +135,43 @@ class Service:
         self,
         paths: Paths | None = None,
         progress: Callable[[str, str | None], None] | None = None,
+        events: Callable[[dict[str, object]], None] | None = None,
     ):
         self.paths = paths or Paths.discover()
         self.progress = progress
+        self.events = events
+        self._event_count = 0
+        self._finished_event_plugins: set[str] = set()
 
     def _step(self, message: str, detail: str | None = None) -> None:
         if self.progress is not None:
             self.progress(message, detail)
+
+    def _event(self, event: dict[str, object]) -> None:
+        self._event_count += 1
+        delivered = True
+        if self.events is not None:
+            try:
+                self.events(event)
+            except Exception:
+                delivered = False
+        activity_event = getattr(self.progress, "event", None)
+        if callable(activity_event):
+            try:
+                activity_event(event)
+            except Exception:
+                delivered = False
+        if (
+            delivered
+            and event.get("type") == "integration_finished"
+            and event.get("plugin")
+        ):
+            self._finished_event_plugins.add(str(event["plugin"]))
+
+    def _set_total(self, total: int) -> None:
+        set_total = getattr(self.progress, "set_total", None)
+        if callable(set_total):
+            set_total(total)
 
     def views(self) -> list[dict[str, object]]:
         return [view.json() for view in build_snapshot(self.paths, load(self.paths))]
@@ -473,6 +503,7 @@ class Service:
             capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)}, errors=errors)
 
     def install(self, with_ui: bool = True) -> dict[str, object]:
+        self._set_total(5 if with_ui else 4)
         self._step("Checking Omarchy capabilities")
         check = self.install_check()
         if not check["ok"]:
@@ -526,11 +557,13 @@ class Service:
 
     def uninstall(self) -> dict[str, object]:
         warnings: list[dict[str, str]] = []
+        self._step("Disabling managed integrations")
         with migration_lock(self.paths):
             with mutation_lock(self.paths):
                 disabled = {plugin_id: False for plugin_id in BY_ID}
                 changed = reconcile_templates(self.paths, disabled)
                 changed.extend(cleanup_gtk(self.paths))
+                self._step("Restoring managed application files")
                 for plugin_id in sorted(
                     OPTIONAL_ASSET_PLUGINS | RETIRED_OPTIONAL_ASSET_PLUGINS
                 ):
@@ -569,6 +602,7 @@ class Service:
                     {"plugin": "zellij", "message": message}
                     for message in zellij_warnings
                 )
+                self._step("Removing theme hook and migration state")
                 if self.paths.hook_file.exists():
                     self.paths.hook_file.unlink()
                     changed.append(str(self.paths.hook_file))
@@ -579,6 +613,7 @@ class Service:
                 if self.paths.legacy_compat_file.is_file() and compat_asset.is_file() and self.paths.legacy_compat_file.read_bytes() == compat_asset.read_bytes():
                     self.paths.legacy_compat_file.unlink()
                     changed.append(str(self.paths.legacy_compat_file))
+        self._step("Removing control panel")
         ui_result = ui.remove(self.paths)
         self.paths.update_cache_file.unlink(missing_ok=True)
         if self.paths.install_metadata.is_file():
@@ -594,7 +629,7 @@ class Service:
             return envelope("hook-run", False, summary=f"unsupported hook event: {event}",
                 event=event, eventArgs=list(event_args), errors=[{"message": "unsupported hook event"}])
         with mutation_lock(self.paths):
-            result = apply_enabled(self.paths, load(self.paths))
+            result = apply_enabled(self.paths, load(self.paths), events=self._event)
         theme_name = event_args[0] if event_args else ""
         subject = f"theme {theme_name}" if theme_name else "active theme"
         counts = result.get("counts") or {"applied": 0, "unchanged": 0, "skipped": 0, "failed": len(result["errors"])}
@@ -604,17 +639,26 @@ class Service:
             event=event, eventArgs=list(event_args), themeName=theme_name or None, **result)
 
     def run_theme(self) -> dict[str, object]:
-        self._step("Sending refresh to Omarchy")
+        event_count = self._event_count
+        finished_event_plugins = set(self._finished_event_plugins)
+        self._step("Rendering active theme")
         self.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             prefix="thpm-hook-",
             suffix=".json",
             dir=self.paths.runtime_dir,
             delete=False,
-        ) as report_file:
+        ) as report_file, tempfile.NamedTemporaryFile(
+            prefix="thpm-events-",
+            suffix=".jsonl",
+            dir=self.paths.runtime_dir,
+            delete=False,
+        ) as event_file:
             report_path = Path(report_file.name)
+            event_path = Path(event_file.name)
         environment = os.environ.copy()
         environment["THPM_HOOK_REPORT"] = str(report_path)
+        environment["THPM_HOOK_EVENTS"] = str(event_path)
         try:
             completed = run(
                 "theme",
@@ -622,6 +666,8 @@ class Service:
                 check=False,
                 timeout=180,
                 env=environment,
+                event_path=event_path,
+                event_handler=self._event,
             )
             try:
                 hook_payload = json.loads(report_path.read_text())
@@ -629,8 +675,8 @@ class Service:
                 hook_payload = None
         finally:
             report_path.unlink(missing_ok=True)
+            event_path.unlink(missing_ok=True)
 
-        self._step("Verifying refreshed integrations")
         if not isinstance(hook_payload, dict):
             detail = completed.stderr.strip() or completed.stdout.strip()
             errors = (
@@ -662,8 +708,19 @@ class Service:
                 errors=errors,
                 warnings=warnings,
                 results=[],
+                progressReported=self._event_count > event_count,
             )
 
+        results = hook_payload.get("results") or []
+        result_plugins = {
+            str(result.get("id"))
+            for result in results
+            if isinstance(result, dict) and result.get("id")
+        }
+        streamed_plugins = self._finished_event_plugins - finished_event_plugins
+        progress_reported = (
+            self._event_count > event_count and result_plugins <= streamed_plugins
+        )
         raw_counts = hook_payload.get("counts")
         counts: dict[str, int] = {}
         for status in ("applied", "unchanged", "skipped", "failed"):
@@ -694,20 +751,24 @@ class Service:
             summary=summary,
             themeName=hook_payload.get("themeName"),
             counts=counts,
-            results=hook_payload.get("results") or [],
+            results=results,
             changed=hook_payload.get("changed") or [],
             actions=hook_payload.get("actions") or [],
             warnings=hook_payload.get("warnings") or [],
             errors=errors,
             stdout=completed.stdout,
+            progressReported=progress_reported,
         )
 
     def migrate(self) -> dict[str, object]:
+        self._step("Inspecting legacy hooks")
         enabled_updates, files = inspect_legacy(self.paths)
         compat_required = needs_compat(self.paths, files)
         with mutation_lock(self.paths):
+            self._step("Rendering migrated integration state")
             enabled = load(self.paths); enabled.update(enabled_updates); save(self.paths, enabled)
             changed = reconcile_templates(self.paths, enabled)
+            self._step("Archiving legacy hooks")
             destination = archive_legacy(self.paths, files, legacy_artifacts(self.paths))
             if compat_required:
                 atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)

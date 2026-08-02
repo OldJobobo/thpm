@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 
+# The initiating CLI may also provide THPM_HOOK_EVENTS; the child appends
+# structured progress there while stdout remains one authoritative JSON report.
 if [[ -n ${THPM_HOOK_REPORT:-} ]]; then
   exec thpm --json hook-run theme-set "$@" >"$THPM_HOOK_REPORT"
 fi
 
-# Omarchy intentionally discards theme-hook stdout. Send the compact human
-# report to stderr so terminal-driven theme changes still show every outcome.
-exec thpm hook-run theme-set "$@" --quiet >&2
+# Omarchy intentionally discards theme-hook stdout. Send the live integration
+# outline and final report to stderr so normal theme switches remain observable.
+exec thpm hook-run theme-set "$@" >&2

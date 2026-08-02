@@ -29,8 +29,9 @@ from thpm.integrations import (
     inspect_readiness,
 )
 from thpm.migrate import archive, artifacts, inspect, needs_compat
+from thpm.omarchy import run as run_omarchy
 from thpm.paths import Paths
-from thpm.presentation import Activity, render, reporter
+from thpm.presentation import Activity, operation_name, render, reporter
 from thpm.registry import PLUGINS
 from thpm.service import Service
 from thpm.state import StateError, load, save
@@ -955,6 +956,219 @@ class ServiceTests(Sandbox):
         self.assertEqual(payload["actions"], ["fish reload"])
         self.assertIn("1 applied, 1 unchanged, 1 skipped, 0 failed", payload["summary"])
         self.assertEqual(list(self.paths.runtime_dir.glob("thpm-hook-*.json")), [])
+        self.assertEqual(list(self.paths.runtime_dir.glob("thpm-events-*.jsonl")), [])
+
+    def test_run_theme_forwards_hook_events_before_refresh_returns(self):
+        hook_payload = {
+            "ok": True,
+            "counts": {"applied": 0, "unchanged": 1, "skipped": 0, "failed": 0},
+            "results": [],
+            "errors": [],
+        }
+        observed: list[str] = []
+
+        def refresh(*_args, **kwargs):
+            kwargs["event_handler"](
+                {"type": "integration_started", "plugin": "fish", "current": 1, "total": 1}
+            )
+            observed.append("refresh-returned")
+            Path(kwargs["env"]["THPM_HOOK_REPORT"]).write_text(json.dumps(hook_payload))
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with patch("thpm.service.run", side_effect=refresh):
+            payload = Service(
+                self.paths, events=lambda event: observed.append(str(event["type"]))
+            ).run_theme()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(observed, ["integration_started", "refresh-returned"])
+
+    def test_omarchy_runner_consumes_events_while_process_is_running(self):
+        bin_dir = self.paths.home / "bin"
+        bin_dir.mkdir()
+        fake_omarchy = bin_dir / "omarchy"
+        fake_omarchy.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' 'not-json' >>\"$THPM_HOOK_EVENTS\"\n"
+            "printf '%s' '{\"type\":\"integration_' >>\"$THPM_HOOK_EVENTS\"\n"
+            "sleep 0.1\n"
+            "printf '%s\\n' 'started\",\"plugin\":\"fish\",\"current\":1,\"total\":1}' >>\"$THPM_HOOK_EVENTS\"\n"
+            "sleep 0.1\n"
+            ": >\"$THPM_TEST_DONE\"\n"
+        )
+        fake_omarchy.chmod(0o755)
+        event_path = self.paths.home / "events.jsonl"
+        event_path.touch()
+        done_path = self.paths.home / "done"
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "PATH": f"{bin_dir}:{environment['PATH']}",
+                "THPM_HOOK_EVENTS": str(event_path),
+                "THPM_TEST_DONE": str(done_path),
+            }
+        )
+        process_was_running: list[bool] = []
+
+        completed = run_omarchy(
+            "theme",
+            "refresh",
+            env=environment,
+            event_path=event_path,
+            event_handler=lambda _event: process_was_running.append(
+                not done_path.exists()
+            ),
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(process_was_running, [True])
+
+        done_path.unlink()
+        event_path.write_text("")
+        completed = run_omarchy(
+            "theme",
+            "refresh",
+            env=environment,
+            event_path=event_path,
+            event_handler=lambda _event: (_ for _ in ()).throw(
+                RuntimeError("presentation failed")
+            ),
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(done_path.exists())
+
+    def test_omarchy_runner_cleans_descendants_after_leader_exits(self):
+        bin_dir = self.paths.home / "bin"
+        bin_dir.mkdir()
+        fake_omarchy = bin_dir / "omarchy"
+        fake_omarchy.write_text(
+            "#!/usr/bin/env bash\n"
+            "( sleep 0.3; : >\"$THPM_TEST_CHILD_DONE\" ) &\n"
+            "exit 0\n"
+        )
+        fake_omarchy.chmod(0o755)
+        event_path = self.paths.home / "events.jsonl"
+        event_path.touch()
+        child_done = self.paths.home / "child-done"
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "PATH": f"{bin_dir}:{environment['PATH']}",
+                "THPM_TEST_CHILD_DONE": str(child_done),
+            }
+        )
+
+        completed = run_omarchy(
+            "theme",
+            "refresh",
+            env=environment,
+            event_path=event_path,
+            event_handler=lambda _event: None,
+        )
+        self.assertEqual(completed.returncode, 0)
+        time.sleep(0.35)
+        self.assertFalse(child_done.exists())
+
+    def test_omarchy_runner_terminates_hook_descendants_on_timeout(self):
+        bin_dir = self.paths.home / "bin"
+        bin_dir.mkdir()
+        fake_omarchy = bin_dir / "omarchy"
+        fake_omarchy.write_text(
+            "#!/usr/bin/env bash\n"
+            "( sleep 0.3; : >\"$THPM_TEST_CHILD_DONE\" ) &\n"
+            "sleep 5\n"
+        )
+        fake_omarchy.chmod(0o755)
+        event_path = self.paths.home / "events.jsonl"
+        event_path.touch()
+        child_done = self.paths.home / "child-done"
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "PATH": f"{bin_dir}:{environment['PATH']}",
+                "THPM_TEST_CHILD_DONE": str(child_done),
+            }
+        )
+
+        with self.assertRaises(subprocess.TimeoutExpired):
+            run_omarchy(
+                "theme",
+                "refresh",
+                timeout=0.1,
+                env=environment,
+                event_path=event_path,
+                event_handler=lambda _event: None,
+            )
+        time.sleep(0.35)
+        self.assertFalse(child_done.exists())
+
+    def test_run_theme_keeps_verbose_fallback_after_partial_event_delivery(self):
+        hook_payload = {
+            "ok": True,
+            "counts": {"applied": 0, "unchanged": 1, "skipped": 0, "failed": 0},
+            "results": [
+                {"id": "fish", "status": "unchanged", "message": "current", "changed": []}
+            ],
+            "errors": [],
+        }
+
+        def refresh(*_args, **kwargs):
+            kwargs["event_handler"](
+                {"type": "integrations_started", "total": 1}
+            )
+            Path(kwargs["env"]["THPM_HOOK_REPORT"]).write_text(json.dumps(hook_payload))
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with patch("thpm.service.run", side_effect=refresh):
+            payload = Service(self.paths).run_theme()
+
+        self.assertFalse(payload["progressReported"])
+        output = io.StringIO()
+        render(
+            payload,
+            verbose=True,
+            console=Console(file=output, force_terminal=False, width=100),
+        )
+        self.assertIn("fish", output.getvalue())
+
+    def test_run_theme_keeps_verbose_fallback_when_event_delivery_fails(self):
+        hook_payload = {
+            "ok": True,
+            "counts": {"applied": 0, "unchanged": 1, "skipped": 0, "failed": 0},
+            "results": [
+                {"id": "fish", "status": "unchanged", "message": "current", "changed": []}
+            ],
+            "errors": [],
+        }
+
+        def refresh(*_args, **kwargs):
+            kwargs["event_handler"](
+                {
+                    "type": "integration_finished",
+                    "plugin": "fish",
+                    "current": 1,
+                    "total": 1,
+                    "status": "unchanged",
+                    "message": "current",
+                }
+            )
+            Path(kwargs["env"]["THPM_HOOK_REPORT"]).write_text(json.dumps(hook_payload))
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        def failed_delivery(_event):
+            raise RuntimeError("presentation failed")
+
+        with patch("thpm.service.run", side_effect=refresh):
+            payload = Service(self.paths, events=failed_delivery).run_theme()
+
+        self.assertFalse(payload["progressReported"])
+        output = io.StringIO()
+        render(
+            payload,
+            verbose=True,
+            console=Console(file=output, force_terminal=False, width=100),
+        )
+        self.assertIn("fish", output.getvalue())
 
     def test_run_theme_normalizes_partial_or_invalid_counts(self):
         hook_payload = {
@@ -1013,12 +1227,15 @@ class ServiceTests(Sandbox):
             "if [[ $1 == --json ]]; then\n"
             "  printf '{\"ok\":true,\"results\":[]}'\n"
             "else\n"
+            "  printf '%s\\n' \"$*\" >\"$THPM_TEST_ARGS\"\n"
             "  printf 'colored integration report\\n'\n"
             "fi\n"
         )
         fake_thpm.chmod(0o755)
         environment = os.environ.copy()
         environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+        hook_args = self.paths.home / "hook-args"
+        environment["THPM_TEST_ARGS"] = str(hook_args)
 
         human = subprocess.run(
             [str(hook), "tokyo-night"],
@@ -1030,6 +1247,7 @@ class ServiceTests(Sandbox):
         self.assertEqual(human.returncode, 0)
         self.assertEqual(human.stdout, "")
         self.assertIn("colored integration report", human.stderr)
+        self.assertEqual(hook_args.read_text().strip(), "hook-run theme-set tokyo-night")
 
         report_path = self.paths.home / "hook-report.json"
         environment["THPM_HOOK_REPORT"] = str(report_path)
@@ -1047,6 +1265,12 @@ class ServiceTests(Sandbox):
 
 
 class PresentationTests(unittest.TestCase):
+    def test_theme_hook_uses_the_same_live_run_surface(self):
+        class Args:
+            event = "theme-set"
+
+        self.assertEqual(operation_name("hook-run", Args()), "run")
+
     def test_verbose_result_groups_summary_changes_and_command_output(self):
         output = io.StringIO()
         console = Console(file=output, force_terminal=False, width=100)
@@ -1090,6 +1314,7 @@ class PresentationTests(unittest.TestCase):
                 "warnings": [],
                 "errors": [],
             },
+            verbose=True,
             console=console,
         )
         text = output.getvalue()
@@ -1098,7 +1323,7 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("\x1b[33mskipped", text)
         self.assertIn("\x1b[1;31mfailed", text)
 
-    def test_activity_renders_real_reported_stages(self):
+    def test_verbose_activity_retains_reported_stage_history(self):
         output = io.StringIO()
         console = Console(file=output, force_terminal=True, color_system="standard", width=100)
         with Activity("reconcile", verbose=True, console=console) as activity:
@@ -1110,7 +1335,158 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("Rendering managed templates", text)
         self.assertIn("Installing theme hook", text)
         self.assertNotIn("•", text)
-        self.assertLessEqual(text.count("\n"), 1)
+        self.assertGreater(text.count("\n"), 1)
+
+    def test_activity_displays_zero_integrations_without_fabricated_work(self):
+        output = io.StringIO()
+        console = Console(
+            file=output, force_terminal=True, color_system="standard", width=100
+        )
+        with Activity("run", console=console) as activity:
+            activity.event({"type": "integrations_started", "total": 0})
+            task = activity._progress.tasks[activity._task]
+            self.assertEqual(task.total, 0)
+            self.assertEqual(task.completed, 0)
+        self.assertIn("0/0", output.getvalue())
+        self.assertNotIn("1/1", output.getvalue())
+
+    def test_activity_uses_live_integration_totals_and_current_plugin(self):
+        output = io.StringIO()
+        console = Console(
+            file=output, force_terminal=True, color_system="standard", width=100
+        )
+        with Activity("run", console=console) as activity:
+            activity.event({"type": "integrations_started", "total": 3})
+            activity.event(
+                {
+                    "type": "integration_started",
+                    "plugin": "fzf",
+                    "current": 2,
+                    "total": 3,
+                }
+            )
+            task = activity._progress.tasks[activity._task]
+            self.assertEqual(task.total, 3)
+            self.assertEqual(task.completed, 1)
+            self.assertIn("2/3 — fzf", task.description)
+            activity.event(
+                {
+                    "type": "integration_finished",
+                    "plugin": "fzf",
+                    "current": 2,
+                    "total": 3,
+                    "status": "unchanged",
+                    "message": "already current",
+                }
+            )
+            self.assertEqual(task.completed, 2)
+        text = output.getvalue()
+        self.assertIn("├─", text)
+        self.assertIn("fzf", text)
+        self.assertIn("unchanged", text)
+        self.assertNotIn("already current", text)
+
+    def test_default_activity_retains_each_outcome_as_it_finishes(self):
+        output = io.StringIO()
+        console = Console(file=output, force_terminal=False, width=100)
+        with Activity("run", console=console) as activity:
+            activity.event({"type": "integrations_started", "total": 2})
+            for current, plugin, status in (
+                (1, "fish", "applied"),
+                (2, "fzf", "unchanged"),
+            ):
+                activity.event(
+                    {
+                        "type": "integration_started",
+                        "plugin": plugin,
+                        "current": current,
+                        "total": 2,
+                    }
+                )
+                activity.event(
+                    {
+                        "type": "integration_finished",
+                        "plugin": plugin,
+                        "current": current,
+                        "total": 2,
+                        "status": status,
+                        "message": "adapter detail",
+                    }
+                )
+        text = output.getvalue()
+        self.assertIn("├─ ✓ fish", text)
+        self.assertIn("└─ • fzf", text)
+        self.assertIn("applied", text)
+        self.assertIn("unchanged", text)
+        self.assertNotIn("adapter detail", text)
+
+    def test_verbose_activity_adds_detail_to_retained_outcomes(self):
+        output = io.StringIO()
+        console = Console(file=output, force_terminal=False, width=100)
+        with Activity("run", verbose=True, console=console) as activity:
+            activity.event(
+                {
+                    "type": "integration_finished",
+                    "plugin": "fish",
+                    "current": 1,
+                    "total": 1,
+                    "status": "applied",
+                    "message": "updated fish colors",
+                }
+            )
+        self.assertIn("updated fish colors", output.getvalue())
+
+    def test_default_result_is_compact_and_verbose_retains_table(self):
+        payload = {
+            "ok": True,
+            "operation": "run",
+            "summary": "refreshed theme: 1 applied, 1 unchanged",
+            "results": [
+                {"status": "applied", "id": "fish", "message": "updated"},
+                {"status": "unchanged", "id": "fzf", "message": "current"},
+            ],
+            "warnings": [],
+            "errors": [],
+        }
+        compact_output = io.StringIO()
+        render(
+            payload,
+            console=Console(file=compact_output, force_terminal=False, width=100),
+        )
+        self.assertNotIn("Integration", compact_output.getvalue())
+        self.assertNotIn("fish", compact_output.getvalue())
+
+        verbose_output = io.StringIO()
+        render(
+            payload,
+            verbose=True,
+            console=Console(file=verbose_output, force_terminal=False, width=100),
+        )
+        self.assertIn("Integration", verbose_output.getvalue())
+        self.assertIn("fish", verbose_output.getvalue())
+
+        streamed_output = io.StringIO()
+        render(
+            {**payload, "progressReported": True},
+            verbose=True,
+            console=Console(file=streamed_output, force_terminal=False, width=100),
+        )
+        self.assertNotIn("Integration", streamed_output.getvalue())
+
+    def test_quiet_activity_emits_no_progress(self):
+        output = io.StringIO()
+        console = Console(file=output, force_terminal=False, width=100)
+        with Activity("run", quiet=True, console=console) as activity:
+            activity.step("Rendering active theme")
+            activity.event(
+                {
+                    "type": "integration_started",
+                    "plugin": "fish",
+                    "current": 1,
+                    "total": 1,
+                }
+            )
+        self.assertEqual(output.getvalue(), "")
 
     def test_activity_can_adjust_update_total_without_counting_current_stage_done(self):
         output = io.StringIO()
@@ -1195,11 +1571,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         input_prompt.assert_not_called()
 
-    def test_human_output_is_verbose_by_default(self):
+    def test_human_output_is_compact_by_default(self):
         response = {"ok": True, "summary": "THPM is current", "errors": []}
         with patch("thpm.cli.Service") as service_type, patch("thpm.cli.render") as render_output:
             service_type.return_value.update_apply.return_value = response
             exit_code = main(["update"])
+        self.assertEqual(exit_code, 0)
+        render_output.assert_called_once_with(response, verbose=False)
+
+    def test_verbose_opts_into_detailed_human_output(self):
+        response = {"ok": True, "summary": "THPM is current", "errors": []}
+        with patch("thpm.cli.Service") as service_type, patch("thpm.cli.render") as render_output:
+            service_type.return_value.update_apply.return_value = response
+            exit_code = main(["update", "--verbose"])
         self.assertEqual(exit_code, 0)
         render_output.assert_called_once_with(response, verbose=True)
 
@@ -1243,6 +1627,34 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         service_type.return_value.hook_run.assert_called_once_with("theme-set", ["tokyo-night", "dark"])
         self.assertEqual(json.loads(stdout.getvalue()), response)
+
+    def test_hook_command_writes_private_jsonl_events(self):
+        response = {"ok": True, "summary": "applied active theme"}
+        with tempfile.TemporaryDirectory() as root:
+            event_path = Path(root) / "events.jsonl"
+            with patch.dict(os.environ, {"THPM_HOOK_EVENTS": str(event_path)}), patch(
+                "thpm.cli.Service"
+            ) as service_type, patch("sys.stdout", new_callable=io.StringIO):
+                service_type.return_value.hook_run.return_value = response
+                self.assertEqual(main(["--json", "hook-run", "theme-set"]), 0)
+                event_writer = service_type.call_args.kwargs["events"]
+                event_writer(
+                    {
+                        "type": "integration_started",
+                        "plugin": "fish",
+                        "current": 1,
+                        "total": 1,
+                    }
+                )
+            self.assertEqual(
+                json.loads(event_path.read_text()),
+                {
+                    "type": "integration_started",
+                    "plugin": "fish",
+                    "current": 1,
+                    "total": 1,
+                },
+            )
 
     def test_zed_status_and_setup_json_envelopes(self):
         status = {"ok": True, "operation": "zed-status", "result": {}}
@@ -2785,13 +3197,29 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-fish.fish"
         generated.parent.mkdir(parents=True)
         generated.write_text("set -g fish_color_normal normal\n")
+        events: list[dict[str, object]] = []
         with patch("thpm.integrations.inspect_readiness", return_value=(True, [], [])), patch(
             "thpm.integrations.apply", side_effect=[apply("fish", self.paths), RuntimeError("broken")]
         ):
-            payload = apply_enabled(self.paths, {"fish": True, "fzf": True})
+            payload = apply_enabled(
+                self.paths, {"fish": True, "fzf": True}, events=events.append
+            )
         self.assertEqual([result["status"] for result in payload["results"]], ["applied", "failed"])
         self.assertEqual(payload["counts"]["failed"], 1)
         self.assertEqual(payload["errors"][0]["plugin"], "fzf")
+        self.assertEqual(
+            [event["type"] for event in events],
+            [
+                "integrations_started",
+                "integration_started",
+                "integration_finished",
+                "integration_started",
+                "integration_finished",
+            ],
+        )
+        self.assertEqual(events[0]["total"], 2)
+        self.assertEqual(events[2]["status"], "applied")
+        self.assertEqual(events[4]["status"], "failed")
 
     def test_hermes_template_matches_desktop_theme_contract(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()

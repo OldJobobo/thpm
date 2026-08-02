@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from collections.abc import Callable
+from pathlib import Path
 
 from . import __version__, ui
 from .paths import Paths
@@ -36,15 +39,39 @@ def _json_parse_errors(root: argparse.ArgumentParser, enabled: bool) -> None:
                 _json_parse_errors(child, enabled)
 
 
+def _output_options(command: argparse.ArgumentParser, *, nested: bool = False) -> None:
+    default = argparse.SUPPRESS if nested else False
+    command.add_argument("--json", action="store_true", default=default)
+    command.add_argument("-v", "--verbose", action="store_true", default=default)
+    command.add_argument("-q", "--quiet", action="store_true", default=default)
+
+
 def parser() -> argparse.ArgumentParser:
-    root = ThpmArgumentParser(prog="thpm", description="Omarchy 4 theme integration manager")
+    root = ThpmArgumentParser(
+        prog="thpm", description="Omarchy 4 theme integration manager"
+    )
     root.add_argument("--json", action="store_true", dest="global_json")
-    root.add_argument("-v", "--verbose", action="store_true", dest="global_verbose", default=True)
-    root.add_argument("-q", "--quiet", action="store_false", dest="global_verbose")
+    root.add_argument(
+        "-v", "--verbose", action="store_true", dest="global_verbose"
+    )
+    root.add_argument("-q", "--quiet", action="store_true", dest="global_quiet")
     root.add_argument("--version", action="version", version=f"thpm {__version__}")
     commands = root.add_subparsers(dest="command")
-    for name in ("list", "status", "native-status", "reconcile", "run", "install", "uninstall", "migrate", "version", "tui"):
-        sub = commands.add_parser(name); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+
+    for name in (
+        "list",
+        "status",
+        "native-status",
+        "reconcile",
+        "run",
+        "install",
+        "uninstall",
+        "migrate",
+        "version",
+        "tui",
+    ):
+        sub = commands.add_parser(name)
+        _output_options(sub)
         if name == "reconcile":
             sub.add_argument("--refresh", action="store_true")
             sub.add_argument(
@@ -55,26 +82,79 @@ def parser() -> argparse.ArgumentParser:
         if name == "install":
             sub.add_argument("--no-ui", action="store_true")
             sub.add_argument("--check", action="store_true", dest="install_check")
+
     for name in ("enable", "disable"):
-        sub = commands.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--yes", action="store_true"); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
-    doctor = commands.add_parser("doctor"); doctor.add_argument("plugin", nargs="?"); doctor.add_argument("--json", action="store_true"); doctor.add_argument("-v", "--verbose", action="store_true", default=True); doctor.add_argument("-q", "--quiet", action="store_false", dest="verbose")
-    hook = commands.add_parser("hook-run"); hook.add_argument("event"); hook.add_argument("event_args", nargs="*"); hook.add_argument("--json", action="store_true"); hook.add_argument("-v", "--verbose", action="store_true", default=True); hook.add_argument("-q", "--quiet", action="store_false", dest="verbose")
-    plugin = commands.add_parser("plugin"); plugin_sub = plugin.add_subparsers(dest="plugin_command", required=True)
+        sub = commands.add_parser(name)
+        sub.add_argument("plugin")
+        sub.add_argument("--yes", action="store_true")
+        _output_options(sub)
+
+    doctor = commands.add_parser("doctor")
+    doctor.add_argument("plugin", nargs="?")
+    _output_options(doctor)
+    hook = commands.add_parser("hook-run")
+    hook.add_argument("event")
+    hook.add_argument("event_args", nargs="*")
+    _output_options(hook)
+
+    plugin = commands.add_parser("plugin")
+    plugin_sub = plugin.add_subparsers(dest="plugin_command", required=True)
     for name in ("enable", "disable"):
-        sub = plugin_sub.add_parser(name); sub.add_argument("plugin"); sub.add_argument("--yes", action="store_true"); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
-    ui_cmd = commands.add_parser("ui"); ui_sub = ui_cmd.add_subparsers(dest="ui_command", required=True)
+        sub = plugin_sub.add_parser(name)
+        sub.add_argument("plugin")
+        sub.add_argument("--yes", action="store_true")
+        _output_options(sub)
+
+    ui_cmd = commands.add_parser("ui")
+    ui_sub = ui_cmd.add_subparsers(dest="ui_command", required=True)
     for name in ("state", "install", "remove", "status", "open"):
-        sub = ui_sub.add_parser(name); sub.add_argument("--json", action="store_true"); sub.add_argument("-v", "--verbose", action="store_true", default=True); sub.add_argument("-q", "--quiet", action="store_false", dest="verbose")
-    surface = ui_sub.add_parser("surface"); surface.add_argument("surface", nargs="?", choices=("gui", "tui", "toggle")); surface.add_argument("--json", action="store_true"); surface.add_argument("-v", "--verbose", action="store_true", default=True); surface.add_argument("-q", "--quiet", action="store_false", dest="verbose")
-    zed = commands.add_parser("zed", help="inspect or configure the authored Zed theme override"); zed_sub = zed.add_subparsers(dest="zed_command", required=True)
-    zed_status = zed_sub.add_parser("status", help="show authored-theme and Omazed fallback diagnostics"); zed_status.add_argument("--json", action="store_true"); zed_status.add_argument("-v", "--verbose", action="store_true", default=True); zed_status.add_argument("-q", "--quiet", action="store_false", dest="verbose")
-    zed_setup = zed_sub.add_parser("setup", help="select THPM Current with a one-time settings backup"); zed_setup.add_argument("--yes", action="store_true"); zed_setup.add_argument("--json", action="store_true"); zed_setup.add_argument("-v", "--verbose", action="store_true", default=True); zed_setup.add_argument("-q", "--quiet", action="store_false", dest="verbose")
-    update = commands.add_parser("update"); update.add_argument("--json", action="store_true"); update.add_argument("-v", "--verbose", action="store_true", default=True); update.add_argument("-q", "--quiet", action="store_false", dest="verbose")
+        sub = ui_sub.add_parser(name)
+        _output_options(sub)
+    surface = ui_sub.add_parser("surface")
+    surface.add_argument(
+        "surface", nargs="?", choices=("gui", "tui", "toggle")
+    )
+    _output_options(surface)
+
+    zed = commands.add_parser(
+        "zed", help="inspect or configure the authored Zed theme override"
+    )
+    zed_sub = zed.add_subparsers(dest="zed_command", required=True)
+    zed_status = zed_sub.add_parser(
+        "status", help="show authored-theme and Omazed fallback diagnostics"
+    )
+    _output_options(zed_status)
+    zed_setup = zed_sub.add_parser(
+        "setup", help="select THPM Current with a one-time settings backup"
+    )
+    zed_setup.add_argument("--yes", action="store_true")
+    _output_options(zed_setup)
+
+    update = commands.add_parser("update")
+    _output_options(update)
     update_sub = update.add_subparsers(dest="update_command")
-    check = update_sub.add_parser("check"); check.add_argument("--force", action="store_true"); check.add_argument("--json", action="store_true", default=argparse.SUPPRESS); check.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS); check.add_argument("-q", "--quiet", action="store_false", dest="verbose", default=argparse.SUPPRESS)
-    status = update_sub.add_parser("status"); status.add_argument("--json", action="store_true", default=argparse.SUPPRESS); status.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS); status.add_argument("-q", "--quiet", action="store_false", dest="verbose", default=argparse.SUPPRESS)
-    apply = update_sub.add_parser("apply"); apply.add_argument("--json", action="store_true", default=argparse.SUPPRESS); apply.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS); apply.add_argument("-q", "--quiet", action="store_false", dest="verbose", default=argparse.SUPPRESS)
+    check = update_sub.add_parser("check")
+    check.add_argument("--force", action="store_true")
+    _output_options(check, nested=True)
+    for name in ("status", "apply"):
+        _output_options(update_sub.add_parser(name), nested=True)
     return root
+
+
+def _hook_event_writer(command: str) -> Callable[[dict[str, object]], None] | None:
+    event_file = os.environ.get("THPM_HOOK_EVENTS")
+    if command != "hook-run" or not event_file:
+        return None
+    path = Path(event_file)
+
+    def emit(event: dict[str, object]) -> None:
+        try:
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+        except OSError:
+            pass
+
+    return emit
 
 
 def _human(payload: dict[str, object]) -> None:
@@ -217,10 +297,21 @@ def main(argv: list[str] | None = None) -> int:
     paths = Paths.discover()
     command = args.command or "list"
     json_mode = args.global_json or getattr(args, "json", False)
-    verbose = args.global_verbose and getattr(args, "verbose", True)
+    quiet = bool(args.global_quiet or getattr(args, "quiet", False))
+    verbose = bool(
+        (args.global_verbose or getattr(args, "verbose", False)) and not quiet
+    )
     activity_name = None if json_mode else operation_name(command, args)
-    activity = Activity(activity_name, verbose=verbose) if activity_name else None
-    service = Service(paths=paths, progress=reporter(activity))
+    activity = (
+        Activity(activity_name, verbose=verbose, quiet=quiet)
+        if activity_name
+        else None
+    )
+    service = Service(
+        paths=paths,
+        progress=reporter(activity),
+        events=_hook_event_writer(command),
+    )
     try:
         if activity is not None:
             with activity:

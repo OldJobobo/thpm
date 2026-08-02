@@ -65,10 +65,10 @@ OPTIONAL_ASSET_PLUGINS = {
     "branding",
     "typora",
     "swaync",
-    "windsurf",
     "cliamp",
     "zed-extra",
 }
+RETIRED_OPTIONAL_ASSET_PLUGINS = {"windsurf"}
 MANAGED_OUTPUT_PLUGINS = set(GENERATED) | {"discord", "discord-system24"}
 
 

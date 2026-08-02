@@ -2245,10 +2245,6 @@ class IntegrationTests(Sandbox):
         cases = {
             "typora": ("typora.css", self.paths.config_home / "Typora/themes/omarchy.css"),
             "swaync": ("colors.css", self.paths.config_home / "swaync/colors.css"),
-            "windsurf": (
-                "vscode-theme.json",
-                self.paths.home / ".windsurf/extensions/local.omarchy-theme/themes/omarchy.json",
-            ),
             "cliamp": ("cliamp.toml", self.paths.config_home / "cliamp/themes/omarchy.toml"),
         }
         with patch("thpm.integrations._reload", return_value=[]):
@@ -2265,6 +2261,27 @@ class IntegrationTests(Sandbox):
                     result = apply(plugin_id, self.paths)
                     self.assertEqual(target.read_text(), f"{plugin_id} user default")
                     self.assertIn(str(target), result.changed)
+
+    def test_reconcile_cleans_retired_windsurf_output_without_exposing_plugin(self):
+        installed_theme = self.paths.config_home / "omarchy/themes/old"
+        installed_theme.mkdir(parents=True)
+        (installed_theme / "vscode-theme.json").write_text("legacy windsurf theme")
+        target = (
+            self.paths.home
+            / ".windsurf/extensions/local.omarchy-theme/themes/omarchy.json"
+        )
+        target.parent.mkdir(parents=True)
+        target.write_text("legacy windsurf theme")
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text(
+            "canonical-palette-v1\n"
+        )
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).reconcile()
+        self.assertFalse(target.exists())
+        self.assertIn(str(target), payload["changed"])
+        self.assertNotIn("windsurf", {item["id"] for item in payload["plugins"]})
 
     def test_legacy_optional_output_is_removed_only_when_it_matches_a_theme_asset(self):
         installed_theme = self.paths.config_home / "omarchy/themes/old"

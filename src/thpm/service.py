@@ -15,6 +15,7 @@ from .files import atomic_copy, atomic_text
 from .integrations import (
     MANAGED_OUTPUT_PLUGINS,
     OPTIONAL_ASSET_PLUGINS,
+    RETIRED_OPTIONAL_ASSET_PLUGINS,
     apply_enabled,
     cleanup_managed_outputs,
     cleanup_optional_assets,
@@ -44,6 +45,21 @@ from .zed import validate_settings_edit as validate_zed_settings_edit
 
 SCHEMA_VERSION = 1
 CANONICAL_PALETTE_MIGRATION = "canonical-palette-v1"
+
+
+def _cleanup_retired_integrations(paths: Paths) -> tuple[list[str], list[dict[str, str]]]:
+    changed: list[str] = []
+    warnings: list[dict[str, str]] = []
+    for plugin_id in sorted(RETIRED_OPTIONAL_ASSET_PLUGINS):
+        cleanup_changed, cleanup_warnings = cleanup_optional_assets(
+            paths, plugin_id, assume_legacy=True
+        )
+        changed.extend(cleanup_changed)
+        warnings.extend(
+            {"plugin": plugin_id, "message": message}
+            for message in cleanup_warnings
+        )
+    return changed, warnings
 
 
 def _snapshot_file(path: Path) -> tuple[str, bytes | str, int]:
@@ -420,6 +436,10 @@ class Service:
             with mutation_lock(self.paths):
                 self._step("Rendering managed templates")
                 changed = reconcile_templates(self.paths, load(self.paths))
+                retired_changed, retired_warnings = _cleanup_retired_integrations(
+                    self.paths
+                )
+                changed.extend(retired_changed)
                 self._step("Installing theme hook")
                 atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
                 changed.append(str(self.paths.hook_file))
@@ -440,6 +460,7 @@ class Service:
             refreshed=migration["refreshed"],
             migration=migration,
             plugins=self.views(),
+            warnings=retired_warnings,
             errors=errors,
         )
 
@@ -466,6 +487,10 @@ class Service:
                 enabled.update(migrated)
                 save(self.paths, enabled)
                 changed = reconcile_templates(self.paths, enabled)
+                retired_changed, retired_warnings = _cleanup_retired_integrations(
+                    self.paths
+                )
+                changed.extend(retired_changed)
                 atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
                 changed.append(str(self.paths.hook_file))
                 legacy_archive = archive_legacy(self.paths, legacy_files, legacy_artifacts(self.paths))
@@ -495,6 +520,7 @@ class Service:
             migratedTo=str(legacy_archive) if legacy_archive else None,
             ui=ui_result,
             migration=migration,
+            warnings=retired_warnings,
             errors=errors,
         )
 
@@ -505,7 +531,9 @@ class Service:
                 disabled = {plugin_id: False for plugin_id in BY_ID}
                 changed = reconcile_templates(self.paths, disabled)
                 changed.extend(cleanup_gtk(self.paths))
-                for plugin_id in sorted(OPTIONAL_ASSET_PLUGINS):
+                for plugin_id in sorted(
+                    OPTIONAL_ASSET_PLUGINS | RETIRED_OPTIONAL_ASSET_PLUGINS
+                ):
                     if plugin_id == "zed-extra":
                         cleanup_changed, cleanup_warnings = cleanup_zed_assets(
                             self.paths, assume_legacy=True

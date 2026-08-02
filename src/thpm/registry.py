@@ -19,7 +19,6 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Install dock colors; restart the dock to apply them.", "hybrid", ("nwg-dock-hyprland",), templates=("thpm-nwg-dock.css.tpl",)),
     Plugin("zed-extra", "Zed authored theme", "Editors", "Install and select a validated zed.json or aether.zed.json override as the stable THPM Current theme.", "apply", ("zeditor",), theme_assets=("zed.json", "aether.zed.json"), default_enabled=False),
     Plugin("swaync", "SwayNC", "Desktop", "Install optional SwayNC colors, restore prior defaults when absent, and reload.", "apply", ("swaync-client",), theme_assets=("colors.css",)),
-    Plugin("windsurf", "Windsurf", "Editors", "Install the Omarchy editor theme and restore the prior file when absent.", "apply", ("windsurf",), theme_assets=("vscode-theme.json",)),
     Plugin("cava", "Cava", "Media", "Install and reload a Cava gradient.", "hybrid", ("cava",), theme_assets=("cava_theme",), templates=("thpm-cava.ini.tpl",)),
     Plugin("firefox", "Firefox", "Browsers", "Manage Firefox userChrome imports and generated CSS.", "hybrid", ("firefox",), theme_assets=("firefox.css",), templates=("thpm-firefox.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("zen", "Zen Browser", "Browsers", "Manage Zen userChrome imports and generated CSS.", "hybrid", ("zen-browser",), theme_assets=("zen.css",), templates=("thpm-zen.css.tpl",), default_enabled=False, confirmation=True),

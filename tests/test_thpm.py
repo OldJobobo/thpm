@@ -2616,6 +2616,74 @@ class IntegrationTests(Sandbox):
         self.assertIn("brightWhite", document["theme"]["darkTerminal"])
 
 
+class SourceScriptTests(Sandbox):
+    def run_uninstaller(self, root: Path) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment.update({
+            "HOME": str(root / "home"),
+            "XDG_BIN_HOME": str(root / "bin"),
+            "XDG_DATA_HOME": str(root / "data"),
+            "THPM_RUNTIME_DIR": str(root / "runtime"),
+        })
+        return subprocess.run(
+            ["bash", str(Path(__file__).parents[1] / "uninstall.sh")],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=environment,
+        )
+
+    @staticmethod
+    def executable(path: Path, marker: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' \"$*\" > {str(marker)!r}\n"
+        )
+        path.chmod(0o755)
+
+    def test_uninstaller_does_not_invoke_unrelated_launchers(self):
+        for kind in ("file", "symlink"):
+            with self.subTest(kind=kind):
+                root = self.paths.home / kind
+                launcher = root / "bin/thpm"
+                marker = root / "invoked"
+                if kind == "file":
+                    self.executable(launcher, marker)
+                else:
+                    unrelated = root / "unrelated/thpm"
+                    self.executable(unrelated, marker)
+                    launcher.parent.mkdir(parents=True)
+                    launcher.symlink_to(unrelated)
+
+                completed = self.run_uninstaller(root)
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertFalse(marker.exists())
+                self.assertTrue(launcher.exists())
+
+    def test_uninstaller_invokes_and_removes_owned_launcher(self):
+        for kind in ("absolute", "relative"):
+            with self.subTest(kind=kind):
+                root = self.paths.home / kind
+                runtime_launcher = root / "runtime/bin/thpm"
+                launcher = root / "bin/thpm"
+                marker = root / "invoked"
+                self.executable(runtime_launcher, marker)
+                launcher.parent.mkdir(parents=True)
+                target = runtime_launcher
+                if kind == "relative":
+                    target = Path(os.path.relpath(runtime_launcher, launcher.parent))
+                launcher.symlink_to(target)
+
+                completed = self.run_uninstaller(root)
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(marker.read_text(), "uninstall\n")
+                self.assertFalse(launcher.exists())
+                self.assertFalse((root / "runtime").exists())
+
+
 class UpdateTests(Sandbox):
     def setUp(self):
         super().setUp()

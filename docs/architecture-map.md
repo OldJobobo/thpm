@@ -141,7 +141,7 @@ After rendering or switching a theme, Omarchy invokes:
 $XDG_CONFIG_HOME/omarchy/hooks/theme-set.d/90-thpm
 ```
 
-The wrapper calls `Service.hook_run()`, which acquires the mutation lock and passes current enabled state to `apply_enabled()`.
+The wrapper calls `Service.hook_run()`, which acquires the mutation lock and passes current enabled state to `apply_enabled()`. During `thpm run`, the hook also writes presentation-neutral integration start and finish events to a private JSON Lines channel while preserving a separate final JSON report.
 
 ### 7. Isolated adapters
 
@@ -171,7 +171,7 @@ After readiness inspection, `apply_enabled()` wraps each adapter application in 
 | `thpm disable ID` | writes | reconciles and cleans managed output | no | no |
 | `thpm reconcile` | reads | reconciles | only for a pending migration | only if refreshed |
 | `thpm reconcile --refresh` | reads | reconciles | yes | yes |
-| `thpm run` | reads | assumes present | yes | yes, with a private report |
+| `thpm run` | reads | assumes present | yes | yes, with live private events and a final report |
 | Omarchy theme switch | reads in hook | assumes present | Omarchy-owned | yes |
 
 A plain reconcile can therefore do more during a pending template-schema migration than it does after that migration has completed.

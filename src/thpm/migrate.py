@@ -26,6 +26,7 @@ def inspect(paths: Paths) -> tuple[dict[str, bool], list[Path]]:
     files: list[Path] = []
     if not paths.hook_dir.is_dir(): return enabled, files
     for path in paths.hook_dir.iterdir():
+        if path.is_symlink() or not path.is_file(): continue
         name = path.name.removesuffix(".sample").removesuffix(".sh")
         if "-" in name: name = name.split("-", 1)[1]
         if name not in LEGACY_NAMES: continue

@@ -293,6 +293,30 @@ class MigrationTests(Sandbox):
         self.assertTrue(updates["firefox"])
         self.assertEqual(files, [legacy])
 
+    def test_migration_preserves_hook_shaped_directories_and_symlinks(self):
+        self.paths.hook_dir.mkdir(parents=True)
+        directory = self.paths.hook_dir / "40-firefox.sh"
+        directory.mkdir()
+        child = directory / "keep"
+        child.write_text("user content")
+        target = self.paths.home / "external-zed-hook"
+        target.write_text("external hook")
+        linked = self.paths.hook_dir / "40-zed.sh"
+        linked.symlink_to(target)
+        dangling = self.paths.hook_dir / "40-steam.sh"
+        dangling.symlink_to(self.paths.home / "missing-hook")
+
+        updates, files = inspect(self.paths)
+        destination = archive(self.paths, files)
+
+        self.assertEqual(updates, {})
+        self.assertEqual(files, [])
+        self.assertIsNone(destination)
+        self.assertEqual(child.read_text(), "user content")
+        self.assertTrue(linked.is_symlink())
+        self.assertEqual(target.read_text(), "external hook")
+        self.assertTrue(dangling.is_symlink())
+
     def test_migration_maps_legacy_native_coverage_hooks_to_compatibility_plugins(self):
         self.paths.hook_dir.mkdir(parents=True)
         gtk = self.paths.hook_dir / "10-gtk.sh"

@@ -1538,7 +1538,7 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
             ),
         ):
             changed.append(str(targets[plugin_id]))
-        if plugin_id == "nwg-dock":
+        if plugin_id == "nwg-dock" and changed:
             warnings.append("restart nwg-dock-hyprland to see theme changes")
     elif plugin_id in OPTIONAL_ASSET_PLUGINS:
         for key, asset_name, target in _optional_asset_targets(paths, plugin_id):
@@ -1632,7 +1632,7 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
         return _result(plugin_id, [], ["steam-adwaita --color-theme omarchy"])
 
     try:
-        actions = _reload(plugin_id)
+        actions = _reload(plugin_id) if changed else []
     except RuntimeError as exc:
         raise ApplyFailure(str(exc), changed=changed, warnings=warnings) from exc
     return _result(plugin_id, changed, actions, warnings)

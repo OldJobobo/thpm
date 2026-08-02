@@ -2,7 +2,7 @@
 
 This is a maintainer reference for built-in integrations. Users can inspect the current list with `thpm list`, check problems with `thpm doctor`, and enable an integration with `thpm enable <id>`. Asset names such as `zed.json` or `gtk.css` refer to files supplied by the active Omarchy theme.
 
-Plugins are records in `src/thpm/registry.py` and adapters in `src/thpm/integrations.py`. A plugin may consume an Omarchy-rendered THPM template, a theme-provided optional asset, or perform a guarded external action. Every adapter reports an explicit `applied`, `unchanged`, `skipped`, or `failed` outcome; an empty change list is never treated as evidence that work succeeded. Conditional compatibility integrations also report whether the active theme makes them applicable.
+Plugins are records in `src/thpm/registry.py` and adapters in `src/thpm/integrations.py`. A plugin may consume an Omarchy-rendered THPM template, a theme-provided optional asset, or perform a guarded external action. Every adapter reports an explicit `applied`, `unchanged`, `skipped`, or `failed` outcome; an empty change list is never treated as evidence that work succeeded. Reload commands and restart notices run only after managed content changes, so a no-op reconciliation does not probe inactive applications or emit false action requirements. Conditional compatibility integrations also report whether the active theme makes them applicable.
 
 Rules:
 

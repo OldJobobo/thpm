@@ -2549,6 +2549,26 @@ class IntegrationTests(Sandbox):
             timeout=5,
         )
 
+    def test_unchanged_integrations_do_not_invoke_reload_commands(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[base]\n")
+        swaync = self.paths.current_theme / "colors.css"
+        swaync.write_text("@define-color background #000000;\n")
+
+        for plugin_id in ("spotify", "swaync"):
+            with self.subTest(plugin_id=plugin_id), patch(
+                "thpm.integrations._reload",
+                return_value=[f"{plugin_id} reload"],
+            ) as reload_app:
+                first = apply(plugin_id, self.paths)
+                second = apply(plugin_id, self.paths)
+
+            self.assertEqual(first.status, "applied")
+            self.assertEqual(second.status, "unchanged")
+            self.assertEqual(second.actions, [])
+            reload_app.assert_called_once_with(plugin_id)
+
     def test_steam_helper_is_bounded_and_quiet(self):
         script = self.paths.home / ".local/share/steam-adwaita/install.py"
         script.parent.mkdir(parents=True)
@@ -2724,13 +2744,16 @@ class IntegrationTests(Sandbox):
         self.assertIn("Discord client", discord.message)
         self.assertEqual(cliamp.status, "unchanged")
 
-    def test_nwg_dock_reports_restart_requirement(self):
+    def test_nwg_dock_reports_restart_requirement_only_after_a_change(self):
         generated = self.paths.current_theme / "thpm-nwg-dock.css"
         generated.parent.mkdir(parents=True)
         generated.write_text("/* dock */")
         result = apply("nwg-dock", self.paths)
+        unchanged = apply("nwg-dock", self.paths)
         self.assertEqual(result.status, "applied")
         self.assertTrue(any("restart" in warning for warning in result.warnings))
+        self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(unchanged.warnings, [])
 
     def test_steam_missing_helper_skips_and_failure_is_reported(self):
         skipped = apply("steam", self.paths)

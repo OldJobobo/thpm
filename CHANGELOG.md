@@ -4,6 +4,7 @@
 
 - Restore live Zellij color updates by refreshing its watched `config.kdl` after an external managed theme changes, while preserving custom paths, safe restoration, and true no-op behavior.
 - Retire the obsolete Windsurf integration after the editor's replacement by Devin Desktop, while retaining guarded reconciliation and uninstall cleanup for legacy managed output.
+- Avoid spurious no-op failures by invoking application reloads and restart notices only when their managed content changed.
 
 ## 1.0.0rc15 - 2026-07-31
 

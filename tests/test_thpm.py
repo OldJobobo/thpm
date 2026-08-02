@@ -1848,6 +1848,33 @@ class IntegrationTests(Sandbox):
         saved = json.loads(self.paths.zellij_theme_state_file.read_text())
         self.assertEqual(saved["themeOption"], 'theme "current"')
 
+    def test_zellij_generates_theme_from_colors_toml_without_authored_asset(self):
+        self.write_palette()
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme "default"\n')
+        with patch("thpm.palette.shutil.which", return_value=None):
+            result = apply("zellij", self.paths)
+        installed = self.paths.config_home / "zellij/themes/thpm.kdl"
+        content = installed.read_text()
+        self.assertIn("themes {\n    thpm-current {", content)
+        self.assertIn("base 221 221 221", content)
+        self.assertIn("background 17 17 17", content)
+        self.assertIn("base 68 119 204", content)
+        self.assertEqual(config.read_text(), 'theme "thpm-current"\n')
+        self.assertIn(str(installed), result.changed)
+
+    def test_zellij_authored_asset_takes_precedence_over_generated_palette(self):
+        self.write_palette()
+        source = self.paths.current_theme / "zellij.kdl"
+        source.write_text('themes { authored { fg "white" } }\n')
+        with patch("thpm.palette.shutil.which", return_value=None):
+            apply("zellij", self.paths)
+        installed = self.paths.config_home / "zellij/themes/thpm.kdl"
+        self.assertEqual(
+            installed.read_text(), 'themes { thpm-current { fg "white" } }\n'
+        )
+
     def test_zellij_without_theme_asset_restores_previous_selection(self):
         theme_asset = self.paths.current_theme / "zellij.kdl"
         theme_asset.parent.mkdir(parents=True)
@@ -1879,7 +1906,8 @@ class IntegrationTests(Sandbox):
         zellij = next(item for item in result["results"] if item["id"] == "zellij")
         self.assertEqual(zellij["status"], "applied")
         self.assertEqual(config.read_text(), "")
-        self.assertFalse(target.exists())
+        self.assertTrue(target.exists())
+        self.assertIn("preserved untracked Zellij theme", str(zellij["warnings"]))
         self.assertIn("restart active Zellij sessions", str(zellij["warnings"]))
 
     def test_zellij_preserves_an_already_normalized_theme_asset(self):
@@ -1890,7 +1918,7 @@ class IntegrationTests(Sandbox):
         installed = self.paths.config_home / "zellij/themes/thpm.kdl"
         self.assertEqual(installed.read_bytes(), theme_asset.read_bytes())
 
-    def test_zellij_without_asset_removes_legacy_selection_to_restore_default(self):
+    def test_zellij_without_asset_preserves_untracked_theme_and_restores_default(self):
         config = self.paths.config_home / "zellij/config.kdl"
         config.parent.mkdir(parents=True)
         config.write_text('theme "thpm-current"\npane_frames true\n')
@@ -1899,7 +1927,8 @@ class IntegrationTests(Sandbox):
         target.write_text('themes { thpm-current {} }\n')
         result = apply("zellij", self.paths)
         self.assertEqual(config.read_text(), "pane_frames true\n")
-        self.assertFalse(target.exists())
+        self.assertTrue(target.exists())
+        self.assertIn("preserved untracked Zellij theme", str(result.warnings))
         self.assertEqual(result.status, "applied")
 
     def test_disabling_zellij_restores_selection_and_removes_managed_theme(self):
@@ -1928,6 +1957,136 @@ class IntegrationTests(Sandbox):
         result = apply("zellij", self.paths)
         self.assertEqual(config.read_text(), 'theme "catppuccin"\npane_frames true\n')
         self.assertIn(str(config), result.changed)
+
+    def test_zellij_restores_displaced_theme_and_preserves_later_user_edits(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        target = self.paths.config_home / "zellij/themes/thpm.kdl"
+        target.parent.mkdir(parents=True)
+        target.write_text("user theme\n")
+
+        apply("zellij", self.paths)
+        source.unlink()
+        apply("zellij", self.paths)
+        self.assertEqual(target.read_text(), "user theme\n")
+
+        source.write_text('themes { source { fg "white" } }\n')
+        apply("zellij", self.paths)
+        target.write_text("user changed managed theme\n")
+        source.unlink()
+        result = apply("zellij", self.paths)
+        self.assertEqual(target.read_text(), "user changed managed theme\n")
+        self.assertIn("preserved user-modified file", str(result.warnings))
+
+    def test_zellij_uses_environment_config_and_configured_theme_directory(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        config_dir = self.paths.home / "custom-zellij"
+        config = config_dir / "config.kdl"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme_dir "alternate-themes"; /* keep */\ntheme "old";\n')
+        with patch.dict(
+            os.environ, {"ZELLIJ_CONFIG_DIR": str(config_dir)}, clear=True
+        ):
+            result = apply("zellij", self.paths)
+        target = config_dir / "alternate-themes/thpm.kdl"
+        self.assertTrue(target.is_file())
+        self.assertIn(str(target), result.changed)
+        self.assertEqual(
+            config.read_text(),
+            'theme_dir "alternate-themes"; /* keep */\ntheme "thpm-current";\n',
+        )
+        self.assertFalse((self.paths.config_home / "zellij/config.kdl").exists())
+        source.unlink()
+        apply("zellij", self.paths)
+        self.assertEqual(
+            config.read_text(), 'theme_dir "alternate-themes"; /* keep */\ntheme "old";\n'
+        )
+        self.assertFalse(target.exists())
+
+    def test_zellij_preserves_symlink_and_config_mode(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        real_config = self.paths.home / "dotfiles/zellij.kdl"
+        real_config.parent.mkdir(parents=True)
+        real_config.write_text('theme "old"\n')
+        real_config.chmod(0o600)
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        config.symlink_to(real_config)
+
+        apply("zellij", self.paths)
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(real_config.stat().st_mode & 0o777, 0o600)
+        source.unlink()
+        apply("zellij", self.paths)
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(real_config.read_text(), 'theme "old"\n')
+        self.assertEqual(real_config.stat().st_mode & 0o777, 0o600)
+
+    def test_zellij_normalization_ignores_comments_and_rejects_malformed_kdl(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            '/*\nthemes { commented {} }\n*/\nthemes { actual { fg "white" } }\n'
+        )
+        apply("zellij", self.paths)
+        target = self.paths.config_home / "zellij/themes/thpm.kdl"
+        self.assertEqual(
+            target.read_text(),
+            '/*\nthemes { commented {} }\n*/\nthemes { thpm-current { fg "white" } }\n',
+        )
+        installed = target.read_text()
+        source.write_text('themes { broken { fg "white" }\n')
+        with self.assertRaisesRegex(ValueError, "unbalanced braces"):
+            apply("zellij", self.paths)
+        self.assertEqual(target.read_text(), installed)
+
+    def test_zellij_restores_semicolon_option_with_block_comment(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        original = 'theme "catppuccin"; /* keep */\npane_frames true\n'
+        config.write_text(original)
+        apply("zellij", self.paths)
+        self.assertEqual(
+            config.read_text(),
+            'theme "thpm-current"; /* keep */\npane_frames true\n',
+        )
+        source.unlink()
+        apply("zellij", self.paths)
+        self.assertEqual(config.read_text(), original)
+
+    def test_zellij_reversed_legacy_markers_fail_closed_without_exception(self):
+        config = self.paths.config_home / "zellij/config.kdl"
+        config.parent.mkdir(parents=True)
+        original = (
+            "// thpm-zellij-theme-end\n"
+            'theme "thpm-current"\n'
+            "// thpm-zellij-theme-start\n"
+        )
+        config.write_text(original)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("zellij", False, refresh=False)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(config.read_text(), original)
+        self.assertFalse(load(self.paths)["zellij"])
+        self.assertIn("legacy THPM block is invalid", str(payload["warnings"]))
+
+    def test_zellij_unchanged_apply_does_not_request_restart(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        apply("zellij", self.paths)
+        result = apply("zellij", self.paths)
+        self.assertEqual(result.status, "unchanged")
+        self.assertEqual(result.warnings, [])
 
     def test_optional_assets_restore_the_files_they_displaced(self):
         cases = {
@@ -2204,7 +2363,7 @@ class IntegrationTests(Sandbox):
         )
         malformed_block = apply("zellij", self.paths)
         self.assertTrue(target.exists())
-        self.assertIn("block is incomplete", malformed_block.warnings[0])
+        self.assertIn("block is invalid", malformed_block.warnings[0])
 
     def test_app_reload_timeout_is_reported_without_stalling(self):
         with patch("thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"), patch(

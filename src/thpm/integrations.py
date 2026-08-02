@@ -19,6 +19,7 @@ from .compat import (
 )
 from .files import atomic_copy, atomic_text, remove_managed_block
 from .models import ApplyResult
+from .palette import load as load_palette
 from .paths import Paths
 from .registry import BY_ID, PLUGINS
 from .zed import ZedThemeError
@@ -51,7 +52,11 @@ ZELLIJ_THEME_DECLARATION = re.compile(
     r'(?m)^(?P<prefix>[ \t]*themes[ \t]*\{\s*)(?P<name>"(?:\\.|[^"\\])*"|[^\s{}]+)(?P<suffix>[ \t]*\{)'
 )
 ZELLIJ_THEME_OPTION = re.compile(
-    r'^(?P<indent>[ \t]*)theme[ \t]+"(?P<name>[^"\n]*)"[ \t]*(?://[^\n]*)?$',
+    r'^(?P<indent>[ \t]*)theme[ \t]+(?P<value>"(?P<name>(?:\\.|[^"\\\n])*)")[ \t]*(?:;[ \t]*)?$',
+    re.MULTILINE,
+)
+ZELLIJ_THEME_DIR_OPTION = re.compile(
+    r'^(?P<indent>[ \t]*)theme_dir[ \t]+(?P<value>"(?:\\.|[^"\\\n])*")[ \t]*(?:;[ \t]*)?$',
     re.MULTILINE,
 )
 UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
@@ -576,7 +581,11 @@ def inspect_readiness(
         name for name in plugin.theme_assets if (paths.current_theme / name).is_file()
     ]
 
-    if plugin_id == "zellij" and not assets:
+    if (
+        plugin_id == "zellij"
+        and not assets
+        and not (paths.current_theme / "colors.toml").is_file()
+    ):
         # Cleanup must remain actionable after Zellij is uninstalled.
         missing = []
     elif plugin_id == "zed-extra":
@@ -711,6 +720,169 @@ def _browser_import(paths: Paths, plugin_id: str, base: Path) -> tuple[list[str]
     return changed, bool(changed)
 
 
+def _scan_zellij_kdl(content: str) -> tuple[str, list[int]]:
+    """Mask comments and track brace depth without changing source offsets."""
+    masked = list(content)
+    depths = [-1] * (len(content) + 1)
+    depth = 0
+    index = 0
+    mode = "code"
+    block_depth = 0
+    raw_end = ""
+    while index < len(content):
+        depths[index] = depth if mode == "code" else -1
+        pair = content[index : index + 2]
+        if mode == "line-comment":
+            if content[index] == "\n":
+                mode = "code"
+            else:
+                masked[index] = " "
+            index += 1
+            continue
+        if mode == "block-comment":
+            if pair == "/*":
+                masked[index : index + 2] = "  "
+                block_depth += 1
+                index += 2
+                continue
+            if pair == "*/":
+                masked[index : index + 2] = "  "
+                block_depth -= 1
+                index += 2
+                if block_depth == 0:
+                    mode = "code"
+                continue
+            if content[index] != "\n":
+                masked[index] = " "
+            index += 1
+            continue
+        if mode == "string":
+            if content[index] == "\\":
+                index += min(2, len(content) - index)
+                continue
+            if content[index] == '"':
+                mode = "code"
+            index += 1
+            continue
+        if mode == "raw-string":
+            if content.startswith(raw_end, index):
+                index += len(raw_end)
+                mode = "code"
+            else:
+                index += 1
+            continue
+
+        if pair == "//":
+            masked[index : index + 2] = "  "
+            mode = "line-comment"
+            index += 2
+        elif pair == "/*":
+            masked[index : index + 2] = "  "
+            mode = "block-comment"
+            block_depth = 1
+            index += 2
+        elif content[index] == '"':
+            mode = "string"
+            index += 1
+        elif content[index] == "r":
+            raw = re.match(r'r(#+)"', content[index:])
+            if raw:
+                raw_end = '"' + raw.group(1)
+                mode = "raw-string"
+                index += len(raw.group(0))
+            else:
+                index += 1
+        elif content[index] == "{":
+            depth += 1
+            index += 1
+        elif content[index] == "}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("Zellij KDL has an unmatched closing brace")
+            index += 1
+        else:
+            index += 1
+    depths[len(content)] = depth
+    if mode == "block-comment":
+        raise ValueError("Zellij KDL has an unterminated block comment")
+    if mode in {"string", "raw-string"}:
+        raise ValueError("Zellij KDL has an unterminated string")
+    if depth:
+        raise ValueError("Zellij KDL has unbalanced braces")
+    return "".join(masked), depths
+
+
+def _zellij_root_match(pattern: re.Pattern[str], content: str) -> re.Match[str] | None:
+    masked, depths = _scan_zellij_kdl(content)
+    return next(
+        (match for match in pattern.finditer(masked) if depths[match.start()] == 0),
+        None,
+    )
+
+
+def _zellij_theme_option(content: str) -> re.Match[str] | None:
+    return _zellij_root_match(ZELLIJ_THEME_OPTION, content)
+
+
+def _remove_zellij_legacy_block(content: str) -> str:
+    starts = content.count(ZELLIJ_MANAGED_START)
+    ends = content.count(ZELLIJ_MANAGED_END)
+    if starts != ends or starts > 1:
+        raise ValueError("incomplete or duplicate THPM managed block")
+    if starts and content.index(ZELLIJ_MANAGED_START) > content.index(ZELLIJ_MANAGED_END):
+        raise ValueError("reversed THPM managed block")
+    return (
+        remove_managed_block(content, ZELLIJ_MANAGED_START, ZELLIJ_MANAGED_END)
+        if starts
+        else content
+    )
+
+
+def _environment_path(value: str) -> Path:
+    expanded = Path(os.path.expandvars(os.path.expanduser(value)))
+    return (
+        expanded.resolve()
+        if expanded.is_absolute()
+        else (Path.cwd() / expanded).resolve()
+    )
+
+
+def _zellij_config_path(paths: Paths) -> Path:
+    configured = os.environ.get("ZELLIJ_CONFIG_FILE")
+    if configured:
+        return _environment_path(configured)
+    directory = os.environ.get("ZELLIJ_CONFIG_DIR")
+    if directory:
+        return _environment_path(directory) / "config.kdl"
+    return paths.config_home / "zellij/config.kdl"
+
+
+def _zellij_paths(paths: Paths) -> tuple[Path, Path]:
+    config = _zellij_config_path(paths)
+    content = config.read_text() if config.is_file() else ""
+    selected = _zellij_root_match(ZELLIJ_THEME_DIR_OPTION, content)
+    if selected:
+        try:
+            raw_directory = json.loads(selected.group("value"))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Zellij theme_dir is invalid: {config}") from exc
+        directory = Path(os.path.expandvars(os.path.expanduser(raw_directory)))
+        if not directory.is_absolute():
+            directory = config.parent / directory
+        theme_directory = directory.resolve()
+    else:
+        theme_directory = config.parent / "themes"
+    return config, theme_directory / "thpm.kdl"
+
+
+def _write_zellij_config(path: Path, content: str) -> None:
+    destination = path.resolve() if path.is_symlink() else path
+    if destination.exists() and not destination.is_file():
+        raise RuntimeError(f"Zellij configuration is not a file: {path}")
+    mode = destination.stat().st_mode & 0o777 if destination.is_file() else 0o644
+    atomic_text(destination, content, mode)
+
+
 def _read_zellij_state(path: Path) -> dict[str, object] | None:
     if not path.is_file():
         return None
@@ -723,33 +895,53 @@ def _read_zellij_state(path: Path) -> dict[str, object] | None:
     option = saved.get("themeOption")
     if not isinstance(saved.get("configExisted"), bool) or not isinstance(option, str):
         return None
-    if option and (
-        "\n" in option
-        or ZELLIJ_THEME_OPTION.fullmatch(option) is None
-        or ZELLIJ_THEME_OPTION.fullmatch(option).group("name") == "thpm-current"
-    ):
-        return None
+    if option:
+        try:
+            selected = _zellij_theme_option(option)
+        except ValueError:
+            return None
+        if (
+            "\n" in option
+            or selected is None
+            or selected.span() != (0, len(option))
+            or selected.group("name") == "thpm-current"
+        ):
+            return None
+    for key in ("configFile", "themeTarget"):
+        value = saved.get(key)
+        if value is not None and (
+            not isinstance(value, str) or not value or not Path(value).is_absolute()
+        ):
+            return None
     return saved
 
 
-def _validate_zellij_takeover(paths: Paths, source: Path) -> None:
-    content = source.read_text()
-    if not ZELLIJ_THEME_DECLARATION.search(content):
+def _validate_zellij_takeover(paths: Paths, content: str, source: Path) -> None:
+    declaration = _zellij_root_match(ZELLIJ_THEME_DECLARATION, content)
+    if declaration is None:
         raise ValueError(f"Zellij theme has no theme declaration: {source}")
-    config = paths.config_home / "zellij/config.kdl"
+    config, target = _zellij_paths(paths)
     existing = config.read_text() if config.is_file() else ""
-    if (ZELLIJ_MANAGED_START in existing) != (ZELLIJ_MANAGED_END in existing):
-        raise RuntimeError("Zellij legacy THPM block is incomplete")
-    if ZELLIJ_MANAGED_START in existing:
-        existing = remove_managed_block(
-            existing, ZELLIJ_MANAGED_START, ZELLIJ_MANAGED_END
-        )
-    selected = ZELLIJ_THEME_OPTION.search(existing)
+    try:
+        existing = _remove_zellij_legacy_block(existing)
+    except ValueError as exc:
+        raise RuntimeError("Zellij legacy THPM block is invalid") from exc
+    selected = _zellij_theme_option(existing)
     state = paths.zellij_theme_state_file
-    if state.exists() and _read_zellij_state(state) is None and (
+    saved = _read_zellij_state(state)
+    if state.exists() and saved is None and (
         selected is None or selected.group("name") == "thpm-current"
     ):
         raise RuntimeError(f"Zellij restoration state is invalid: {state}")
+    if saved and (
+        Path(str(saved.get("configFile", paths.config_home / "zellij/config.kdl")))
+        != config
+        or Path(
+            str(saved.get("themeTarget", paths.config_home / "zellij/themes/thpm.kdl"))
+        )
+        != target
+    ):
+        raise RuntimeError("Zellij configuration location changed; disable the integration before re-enabling it")
 
 
 def _current_plugin_sources(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
@@ -862,16 +1054,14 @@ def reload_restored_integration(plugin_id: str, changed: list[str]) -> tuple[lis
         return [], [str(exc)]
 
 
-def _select_zellij_theme(paths: Paths) -> tuple[Path, bool]:
-    config = paths.config_home / "zellij/config.kdl"
-    config_existed = config.is_file()
+def _select_zellij_theme(paths: Paths, config: Path, target: Path) -> tuple[Path, bool]:
+    config_existed = config.exists() or config.is_symlink()
     original = config.read_text() if config_existed else ""
-    existing = original
-    if ZELLIJ_MANAGED_START in existing or ZELLIJ_MANAGED_END in existing:
-        existing = remove_managed_block(
-            existing, ZELLIJ_MANAGED_START, ZELLIJ_MANAGED_END
-        )
-    selected = ZELLIJ_THEME_OPTION.search(existing)
+    try:
+        existing = _remove_zellij_legacy_block(original)
+    except ValueError as exc:
+        raise RuntimeError("Zellij legacy THPM block is invalid") from exc
+    selected = _zellij_theme_option(existing)
     state_file = paths.zellij_theme_state_file
     saved = _read_zellij_state(state_file)
     if state_file.exists() and saved is None and (
@@ -881,20 +1071,24 @@ def _select_zellij_theme(paths: Paths) -> tuple[Path, bool]:
     if saved is None:
         previous = ""
         if selected and selected.group("name") != "thpm-current":
-            previous = selected.group(0)
+            previous = existing[selected.start() : selected.end()]
         atomic_text(
             state_file,
             json.dumps(
-                {"configExisted": config_existed, "themeOption": previous},
+                {
+                    "configExisted": config_existed,
+                    "themeOption": previous,
+                    "configFile": str(config),
+                    "themeTarget": str(target),
+                },
                 separators=(",", ":"),
             )
             + "\n",
         )
     if selected:
-        updated = ZELLIJ_THEME_OPTION.sub(
-            lambda match: f'{match.group("indent")}theme "thpm-current"',
-            existing,
-            count=1,
+        start, end = selected.span("value")
+        updated = (
+            existing[:start] + '"thpm-current"' + existing[end:]
         )
     else:
         updated = 'theme "thpm-current"\n' + (
@@ -903,34 +1097,51 @@ def _select_zellij_theme(paths: Paths) -> tuple[Path, bool]:
     if not updated.endswith("\n"):
         updated += "\n"
     if updated != original:
-        atomic_text(config, updated)
+        _write_zellij_config(config, updated)
     return config, updated != original
 
 
 def cleanup_zellij(paths: Paths) -> tuple[list[str], list[str]]:
     """Relinquish THPM's Zellij selection and restore the previous/default state."""
-    config = paths.config_home / "zellij/config.kdl"
-    target = paths.config_home / "zellij/themes/thpm.kdl"
     state = paths.zellij_theme_state_file
     saved = _read_zellij_state(state)
     if state.exists() and saved is None:
         return [], [f"preserved Zellij configuration because restoration state is invalid: {state}"]
+    if saved:
+        config = Path(
+            str(saved.get("configFile", paths.config_home / "zellij/config.kdl"))
+        )
+        target = Path(
+            str(
+                saved.get(
+                    "themeTarget", paths.config_home / "zellij/themes/thpm.kdl"
+                )
+            )
+        )
+    else:
+        try:
+            config, target = _zellij_paths(paths)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return [], [f"preserved Zellij configuration because its paths are invalid: {exc}"]
     original = config.read_text() if config.is_file() else ""
-    if (ZELLIJ_MANAGED_START in original) != (ZELLIJ_MANAGED_END in original):
-        return [], ["preserved Zellij configuration because its legacy THPM block is incomplete"]
+    try:
+        without_legacy = _remove_zellij_legacy_block(original)
+    except ValueError:
+        return [], ["preserved Zellij configuration because its legacy THPM block is invalid"]
+    try:
+        selected = _zellij_theme_option(without_legacy) if config.is_file() else None
+    except ValueError:
+        return [], ["preserved Zellij configuration because its KDL is invalid"]
 
     changed: list[str] = []
+    warnings: list[str] = []
     config_existed = bool(saved.get("configExisted", True)) if saved else True
     previous = str(saved.get("themeOption", "")) if saved else ""
     if config.is_file():
-        updated = original
-        if ZELLIJ_MANAGED_START in updated:
-            updated = remove_managed_block(
-                updated, ZELLIJ_MANAGED_START, ZELLIJ_MANAGED_END
-            )
-        selected = ZELLIJ_THEME_OPTION.search(updated)
+        updated = without_legacy
         if selected and selected.group("name") == "thpm-current":
-            updated = ZELLIJ_THEME_OPTION.sub(previous, updated, count=1)
+            start, end = selected.span()
+            updated = updated[:start] + previous + updated[end:]
         updated = updated.lstrip("\n")
         if updated and not updated.endswith("\n"):
             updated += "\n"
@@ -938,28 +1149,216 @@ def cleanup_zellij(paths: Paths) -> tuple[list[str], list[str]]:
             if not config_existed and not updated.strip():
                 config.unlink()
             else:
-                atomic_text(config, updated)
+                _write_zellij_config(config, updated)
             changed.append(str(config))
-    if target.exists():
-        target.unlink()
-        changed.append(str(target))
-    state.unlink(missing_ok=True)
-    return changed, []
-
-
-def _install_zellij_theme(source: Path, target: Path) -> bool:
-    content = source.read_text()
-    if not ZELLIJ_THEME_DECLARATION.search(content):
-        raise ValueError(f"Zellij theme has no theme declaration: {source}")
-    normalized = ZELLIJ_THEME_DECLARATION.sub(
-        lambda match: f"{match.group('prefix')}thpm-current{match.group('suffix')}",
-        content,
-        count=1,
+    target_key = _target_key("zellij-theme", target)
+    target_changed, target_warnings = _cleanup_optional_asset(
+        paths,
+        target_key,
+        target,
+        legacy_owned=_matches_normalized_zellij_source(paths, target),
     )
-    changed = not target.is_file() or target.read_text() != normalized
-    if changed:
-        atomic_text(target, normalized)
-    return changed
+    changed.extend(target_changed)
+    warnings.extend(target_warnings)
+    if target.exists() and not target_changed and not target_warnings:
+        warnings.append(f"preserved untracked Zellij theme instead of deleting it: {target}")
+    target_state, _backup = _asset_state_paths(paths, target_key)
+    if not target_state.exists():
+        state.unlink(missing_ok=True)
+    return changed, warnings
+
+
+def _normalized_zellij_theme(source: Path) -> str:
+    content = source.read_text()
+    declaration = _zellij_root_match(ZELLIJ_THEME_DECLARATION, content)
+    if declaration is None:
+        raise ValueError(f"Zellij theme has no theme declaration: {source}")
+    start, end = declaration.span("name")
+    return content[:start] + "thpm-current" + content[end:]
+
+
+def _zellij_rgb(value: str) -> str:
+    return " ".join(str(int(value[index : index + 2], 16)) for index in (1, 3, 5))
+
+
+def _generated_zellij_theme(colors_path: Path) -> str:
+    colors = load_palette(colors_path)
+
+    def color(name: str) -> str:
+        return _zellij_rgb(colors[name])
+
+    border = _zellij_rgb(colors.get("active_border_color", colors["blue"]))
+    sections = {
+        "text_unselected": ("fg", "bg", "red", "green", "blue", "magenta"),
+        "text_selected": (
+            "bright_fg",
+            "selection",
+            "bright_red",
+            "bright_green",
+            "bright_blue",
+            "bright_magenta",
+        ),
+        "ribbon_selected": (
+            "bright_fg",
+            "blue",
+            "bright_red",
+            "bright_green",
+            "bright_cyan",
+            "bright_magenta",
+        ),
+        "ribbon_unselected": (
+            "fg",
+            "lighter_bg",
+            "red",
+            "green",
+            "cyan",
+            "magenta",
+        ),
+        "table_cell_selected": (
+            "bright_fg",
+            "selection",
+            "bright_red",
+            "bright_green",
+            "bright_blue",
+            "bright_magenta",
+        ),
+        "table_cell_unselected": (
+            "fg",
+            "bg",
+            "red",
+            "green",
+            "blue",
+            "magenta",
+        ),
+        "list_selected": (
+            "bright_fg",
+            "selection",
+            "bright_red",
+            "bright_green",
+            "bright_blue",
+            "bright_magenta",
+        ),
+        "list_unselected": ("fg", "bg", "red", "green", "blue", "magenta"),
+    }
+    lines = ["themes {", "    thpm-current {"]
+    for section, names in sections.items():
+        lines.extend(
+            [
+                f"        {section} {{",
+                f"            base {color(names[0])}",
+                f"            background {color(names[1])}",
+                f"            emphasis_0 {color(names[2])}",
+                f"            emphasis_1 {color(names[3])}",
+                f"            emphasis_2 {color(names[4])}",
+                f"            emphasis_3 {color(names[5])}",
+                "        }",
+            ]
+        )
+    lines.extend(
+        [
+            "        table_title {",
+            f"            base {color('blue')}",
+            "            background 0",
+            f"            emphasis_0 {color('red')}",
+            f"            emphasis_1 {color('green')}",
+            f"            emphasis_2 {color('cyan')}",
+            f"            emphasis_3 {color('magenta')}",
+            "        }",
+            "        frame_selected {",
+            f"            base {border}",
+            "            background 0",
+            f"            emphasis_0 {color('red')}",
+            f"            emphasis_1 {color('green')}",
+            f"            emphasis_2 {color('yellow')}",
+            f"            emphasis_3 {color('cyan')}",
+            "        }",
+            "        frame_highlight {",
+            f"            base {color('bright_cyan')}",
+            "            background 0",
+            f"            emphasis_0 {color('bright_red')}",
+            f"            emphasis_1 {color('bright_yellow')}",
+            f"            emphasis_2 {color('bright_green')}",
+            f"            emphasis_3 {color('bright_magenta')}",
+            "        }",
+            "        exit_code_success {",
+            f"            base {color('green')}",
+            "            background 0",
+            f"            emphasis_0 {color('bright_green')}",
+            f"            emphasis_1 {color('bg')}",
+            f"            emphasis_2 {color('cyan')}",
+            f"            emphasis_3 {color('blue')}",
+            "        }",
+            "        exit_code_error {",
+            f"            base {color('red')}",
+            "            background 0",
+            f"            emphasis_0 {color('yellow')}",
+            "            emphasis_1 0",
+            "            emphasis_2 0",
+            "            emphasis_3 0",
+            "        }",
+            "        multiplayer_user_colors {",
+            f"            player_1 {color('magenta')}",
+            f"            player_2 {color('cyan')}",
+            f"            player_3 {color('green')}",
+            f"            player_4 {color('yellow')}",
+            f"            player_5 {color('blue')}",
+            f"            player_6 {color('orange')}",
+            f"            player_7 {color('red')}",
+            f"            player_8 {color('bright_magenta')}",
+            f"            player_9 {color('bright_cyan')}",
+            f"            player_10 {color('brown')}",
+            "        }",
+            "    }",
+            "}",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _matches_normalized_zellij_source(paths: Paths, target: Path) -> bool:
+    if not target.is_file() or target.is_symlink():
+        return False
+    sources = (paths.current_theme / "zellij.kdl",) + tuple(
+        (paths.config_home / "omarchy/themes").glob("*/zellij.kdl")
+    )
+    palettes = (paths.current_theme / "colors.toml",) + tuple(
+        (paths.config_home / "omarchy/themes").glob("*/colors.toml")
+    )
+    try:
+        target_data = target.read_text()
+        return any(
+            source.is_file()
+            and not source.is_symlink()
+            and _normalized_zellij_theme(source) == target_data
+            for source in sources
+        ) or any(
+            palette.is_file()
+            and not palette.is_symlink()
+            and _generated_zellij_theme(palette) == target_data
+            for palette in palettes
+        )
+    except (OSError, UnicodeError, ValueError):
+        return False
+
+
+def _install_zellij_theme(paths: Paths, content: str, target: Path) -> bool:
+    paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=".zellij-theme-", dir=paths.thpm_state_dir, text=True
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(content)
+        return _install_optional_asset(
+            paths,
+            _target_key("zellij-theme", target),
+            temporary,
+            target,
+            legacy_owned=_matches_normalized_zellij_source(paths, target),
+        )
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _reload(plugin_id: str) -> list[str]:
@@ -1031,7 +1430,6 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
     warnings: list[str] = []
     home, config = paths.home, paths.config_home
     targets = _standard_output_targets(paths)
-    zellij_target = config / "zellij/themes/thpm.kdl"
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),
         "cava": ("cava_theme", GENERATED["cava"]),
@@ -1039,20 +1437,29 @@ def apply(plugin_id: str, paths: Paths) -> ApplyResult:
 
     if plugin_id == "zellij":
         source = paths.current_theme / "zellij.kdl"
-        if not source.is_file():
+        colors = paths.current_theme / "colors.toml"
+        if source.is_file():
+            content = _normalized_zellij_theme(source)
+        elif colors.is_file():
+            content = _generated_zellij_theme(colors)
+        else:
             cleanup_changed, cleanup_warnings = cleanup_zellij(paths)
             changed.extend(cleanup_changed)
             warnings.extend(cleanup_warnings)
             if cleanup_changed:
                 warnings.append(ZELLIJ_RESTART_WARNING)
             return _result(plugin_id, changed, [], warnings)
-        _validate_zellij_takeover(paths, source)
-        if _install_zellij_theme(source, zellij_target):
+        _validate_zellij_takeover(paths, content, source if source.is_file() else colors)
+        zellij_config, zellij_target = _zellij_paths(paths)
+        if _install_zellij_theme(paths, content, zellij_target):
             changed.append(str(zellij_target))
-        config_file, config_changed = _select_zellij_theme(paths)
+        config_file, config_changed = _select_zellij_theme(
+            paths, zellij_config, zellij_target
+        )
         if config_changed:
             changed.append(str(config_file))
-        warnings.append(ZELLIJ_RESTART_WARNING)
+        if changed:
+            warnings.append(ZELLIJ_RESTART_WARNING)
     elif plugin_id in targets:
         source_names = candidates.get(plugin_id, (GENERATED[plugin_id],))
         source = next(

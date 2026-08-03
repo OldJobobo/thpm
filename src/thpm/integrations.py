@@ -1545,11 +1545,12 @@ def _reload(
     command = commands.get(plugin_id)
     if not command:
         return [], []
-    if plugin_id == "cava":
+    if plugin_id in {"swaync", "cava"}:
         if not shutil.which("pgrep"):
             return [], []
+        process = "swaync" if plugin_id == "swaync" else "cava"
         running = subprocess.run(
-            ["pgrep", "-x", "cava"],
+            ["pgrep", "-x", process],
             text=True,
             capture_output=True,
             check=False,

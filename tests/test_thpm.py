@@ -3459,18 +3459,55 @@ class IntegrationTests(Sandbox):
         self.assertEqual(payload["actions"], ["spicetify refresh"])
         self.assertEqual(payload["restartRequired"], ["Spotify"])
 
-    def test_app_reload_timeout_is_reported_without_stalling(self):
-        with patch("thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"), patch(
-            "thpm.integrations.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(["swaync-client", "--reload-css"], 5),
-        ) as run, self.assertRaisesRegex(RuntimeError, "reload timed out"):
-            _reload("swaync")
+    def test_swaync_reload_skips_when_daemon_is_not_running(self):
+        stopped = subprocess.CompletedProcess([], 1, "", "")
+        with patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
+        ), patch(
+            "thpm.integrations.subprocess.run", return_value=stopped
+        ) as run:
+            actions, restart_required = _reload("swaync")
+
+        self.assertEqual(actions, [])
+        self.assertEqual(restart_required, [])
         run.assert_called_once_with(
-            ["swaync-client", "--reload-css"],
+            ["pgrep", "-x", "swaync"],
             text=True,
             capture_output=True,
             check=False,
-            timeout=5,
+            timeout=2,
+        )
+
+    def test_app_reload_timeout_is_reported_without_stalling(self):
+        running = subprocess.CompletedProcess([], 0, "123\n", "")
+        with patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
+        ), patch(
+            "thpm.integrations.subprocess.run",
+            side_effect=[
+                running,
+                subprocess.TimeoutExpired(["swaync-client", "--reload-css"], 5),
+            ],
+        ) as run, self.assertRaisesRegex(RuntimeError, "reload timed out"):
+            _reload("swaync")
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(
+                    ["pgrep", "-x", "swaync"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=2,
+                ),
+                call(
+                    ["swaync-client", "--reload-css"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                ),
+            ],
         )
 
     def test_explicit_reapply_forces_reload_when_spotify_colors_are_unchanged(self):

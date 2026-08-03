@@ -3539,7 +3539,9 @@ class IntegrationTests(Sandbox):
             with self.subTest(plugin_id=plugin_id), patch(
                 "thpm.integrations._reload",
                 return_value=[f"{plugin_id} reload"],
-            ) as reload_app:
+            ) as reload_app, patch(
+                "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
+            ):
                 first = apply(plugin_id, self.paths)
                 second = apply(plugin_id, self.paths)
 

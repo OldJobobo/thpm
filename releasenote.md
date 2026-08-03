@@ -1,4 +1,4 @@
-## THPM 1.0.0rc15 is now available
+## THPM 1.0.0rc16 is now available
 
 **THPM is made for Omarchy Quattro and supports Omarchy 4.x.**
 
@@ -21,6 +21,31 @@ thpm ui install
 The second command deploys the latest graphical-manager files from the updated package.
 
 ## What’s new since rc5
+
+### Application restarts are now under your control
+
+The GUI, TUI, and CLI now share one restart policy. Choose automatic restarts for applications with a safe adapter, or keep applications open and receive one notification naming the pending restarts:
+
+```sh
+thpm config restart-policy automatic
+thpm config restart-policy notify
+```
+
+Closed applications are never launched just to apply a theme. GTK applications and nwg-dock-hyprland remain notification-only because THPM cannot restart them safely without risking work or losing launch arguments.
+
+**Apply active theme** now genuinely reapplies the current theme even when managed files are already current, including Spotify's refresh and policy-controlled restart behavior.
+
+### Spotify integration is repaired
+
+THPM now writes Spicetify colors to the active `omarchy` theme location, checks backup and selected-theme readiness, refreshes generated files, and restarts only an already-running Spotify client when automatic restarts are enabled.
+
+### Obsolete integrations are retired safely
+
+Vicinae, Windsurf, and Typora no longer appear as active integrations. Upgrade cleanup restores tracked displaced files and preserves unknown or user-modified content at their former destinations.
+
+### Inactive SwayNC no longer blocks theme hooks
+
+Systems that still have `swaync-client` installed but use Omarchy Shell for notifications no longer wait on SwayNC's masked D-Bus service or fail the theme hook. THPM reloads SwayNC CSS only when its daemon is actually running.
 
 ### Theme changes now show every integration result
 
@@ -65,9 +90,7 @@ THPM now does a better job of telling you when an app is missing or when the cur
 If you use any of these apps, feedback would be especially helpful:
 
 - Qt6ct
-- Vicinae
 - nwg-dock-hyprland
-- Windsurf
 - Qutebrowser
 - Heroic Games Launcher
 - Spicetify
@@ -78,4 +101,4 @@ Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//
 
 This remains a release candidate. Please report any issues you find.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc15)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc16)

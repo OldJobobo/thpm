@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Replace the obsolete compact Discord variable fallback with an Omarchy-colored Midnight surface, hosted from THPM's own MIT-compliant vendored base and rendered from the complete semantic palette.
+
 ## 1.0.0rc16 - 2026-08-02
 
 - Skip SwayNC's reload command when its daemon is not running, preventing the installed but inactive client from waiting on a masked D-Bus service and timing out the theme hook.

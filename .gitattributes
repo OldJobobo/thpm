@@ -1,0 +1,2 @@
+# Preserve the byte-identical vendored upstream payload at EOF.
+assets/vencord/thpm-midnight.css whitespace=-blank-at-eof

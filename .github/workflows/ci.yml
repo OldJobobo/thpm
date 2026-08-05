@@ -42,10 +42,11 @@ jobs:
       - name: Run Python and shell static checks
         run: |
           ruff check --select E9,F src tests
-          shellcheck install.sh uninstall.sh assets/hooks/90-thpm scripts/release-assets.sh
+          shellcheck install.sh uninstall.sh assets/hooks/90-thpm scripts/release-assets.sh scripts/update-vencord-base.sh
 
       - name: Build and inspect wheel
         run: |
           python -m build --wheel
+          python -c 'import glob, zipfile; names = zipfile.ZipFile(glob.glob("dist/thpm-*.whl")[0]).namelist(); assert any(name.endswith("share/thpm/vencord/thpm-midnight.css") for name in names); assert any(name.endswith("share/thpm/vencord/LICENSE.midnight") for name in names)'
           python -m pip install --force-reinstall --no-deps dist/thpm-*.whl
           python -c 'from thpm.tui import ThpmTui; import thpm; print(thpm.__version__)'

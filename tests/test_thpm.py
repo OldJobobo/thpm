@@ -289,6 +289,65 @@ class StateTests(Sandbox):
         self.assertEqual(document["schemaVersion"], 1)
         self.assertIn("brightWhite", document["theme"]["darkTerminal"])
 
+    def test_vencord_fallback_uses_owned_licensed_midnight_base(self):
+        root = Path(__file__).parents[1]
+        template = (root / "assets/templates/thpm-vencord.theme.css.tpl").read_text()
+        base = (root / "assets/vencord/thpm-midnight.css").read_text()
+        license_text = (root / "assets/vencord/LICENSE.midnight").read_text()
+        upstream = (root / "assets/vencord/UPSTREAM.md").read_text()
+
+        self.assertIn(
+            "https://cdn.jsdelivr.net/gh/OldJobobo/thpm@main/assets/vencord/thpm-midnight.css",
+            template,
+        )
+        self.assertNotIn("imbypass", template.lower())
+        self.assertNotIn("refact0r.github.io", template)
+        self.assertIn("--text-0: #000000", template)
+        for role in ("red", "green", "yellow", "blue", "magenta"):
+            self.assertGreaterEqual(template.count(f"{{{{ {role} }}}}, #ffffff 40%"), 2)
+        self.assertIn("--accent-2: color-mix(in srgb, {{ blue }}, #ffffff 40%)", template)
+        self.assertIn("--red-2: color-mix(in srgb, {{ red }}, #ffffff 40%)", template)
+        self.assertIn("Derived from refact0r/midnight-discord", base)
+        self.assertIn("--background-base-lowest", base)
+        self.assertIn("MIT License", license_text)
+        self.assertIn("Permission is hereby granted", base)
+        css_commit = re.search(r"Upstream commit: ([0-9a-f]{40})", base)
+        provenance_commit = re.search(r"Upstream commit: `([0-9a-f]{40})`", upstream)
+        self.assertIsNotNone(css_commit)
+        self.assertIsNotNone(provenance_commit)
+        self.assertEqual(css_commit.group(1), provenance_commit.group(1))
+        recorded_hash = re.search(r"Upstream artifact SHA-256: `([0-9a-f]{64})`", upstream)
+        self.assertIsNotNone(recorded_hash)
+        upstream_artifact = base[base.index("/* main.css */"):]
+        self.assertEqual(
+            hashlib.sha256(upstream_artifact.encode()).hexdigest(),
+            recorded_hash.group(1),
+        )
+
+    def test_vencord_colored_controls_keep_readable_text(self):
+        palettes = {
+            "catppuccin-latte": ("#d20f39", "#40a02b", "#df8e1d", "#1e66f5", "#8839ef"),
+            "flexoki-light": ("#af3029", "#66800b", "#ad8301", "#205ea6", "#a02f6f"),
+            "miasma": ("#685742", "#5f875f", "#b36d43", "#78824b", "#bb7744"),
+            "white": ("#2a2a2a", "#3a3a3a", "#4a4a4a", "#1a1a1a", "#2e2e2e"),
+        }
+
+        def luminance(rgb: tuple[int, int, int]) -> float:
+            channels = [value / 255 for value in rgb]
+            linear = [
+                value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+                for value in channels
+            ]
+            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+        for name, colors in palettes.items():
+            for color in colors:
+                raw = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5))
+                lifted = tuple(round(value * 0.6 + 255 * 0.4) for value in raw)
+                contrast = (luminance(lifted) + 0.05) / 0.05
+                with self.subTest(theme=name, color=color):
+                    self.assertGreaterEqual(contrast, 4.5)
+
     def test_unimplemented_plugins_are_not_exposed(self):
         self.assertNotIn("obsidian-terminal", {plugin.id for plugin in PLUGINS})
 

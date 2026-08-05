@@ -9,7 +9,7 @@ description = "Omarchy 4-native manager for external theme integrations"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "assets/vencord/LICENSE.midnight"]
 authors = [{name = "OldJobobo"}]
 dependencies = ["rich>=14,<16", "textual>=8.2.8,<9"]
 
@@ -30,6 +30,7 @@ thpm = ["*.tcss"]
 "share/thpm/qml" = ["assets/qml/*"]
 "share/thpm/hooks" = ["assets/hooks/*"]
 "share/thpm/compat" = ["assets/compat/*"]
+"share/thpm/vencord" = ["assets/vencord/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

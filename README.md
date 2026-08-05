@@ -100,7 +100,7 @@ thpm config restart-policy notify
 
 The same control appears as **Restart apps automatically** in the GUI and TUI System sections. The default is `automatic`; THPM never launches an application that was closed. Applications without a safe restart contract, including generic GTK applications and nwg-dock-hyprland, are always reported rather than killed. **Apply active theme** in either frontend, and the equivalent `thpm run`, explicitly force restart-required adapters such as Spotify even when their managed files are already current; ordinary theme hooks retain no-op behavior when nothing changed.
 
-The two Discord choices are mutually exclusive: `discord` provides the compact palette mapping, while `discord-system24` provides the full System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template.
+The two Discord choices are mutually exclusive. `discord` provides an Omarchy-colored Midnight surface from THPM's MIT-licensed vendored base, while `discord-system24` provides the more opinionated System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template. The Midnight fallback imports THPM's hosted base at runtime, so it requires network access; the hosted `main` artifact intentionally remains updateable so Discord selector repairs can land without waiting for a THPM package release.
 
 ### Application setup
 

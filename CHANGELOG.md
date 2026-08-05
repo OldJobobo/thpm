@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a Pi live-reload compatibility integration that signals persistent Pi sessions after Omarchy atomically replaces the generated `omarchy-system` theme.
+
 ## 1.0.0rc17 - 2026-08-05
 
 - Replace the obsolete compact Discord variable fallback with an Omarchy-colored Midnight surface, hosted from THPM's own MIT-compliant vendored base and rendered from the complete semantic palette.

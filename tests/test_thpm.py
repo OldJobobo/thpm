@@ -244,6 +244,7 @@ class StateTests(Sandbox):
         self.assertTrue(all(not enabled[plugin_id] for plugin_id in ("firefox", "zen", "steam", "zed-extra")))
         self.assertTrue(enabled["gtk-css-compat"])
         self.assertTrue(enabled["vscode-local-compat"])
+        self.assertTrue(enabled["pi-hot-reload"])
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -2443,6 +2444,43 @@ class ZedTests(Sandbox):
 
 
 class IntegrationTests(Sandbox):
+    def test_pi_hot_reload_touches_native_theme_without_replacing_it(self):
+        target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        target.parent.mkdir(parents=True)
+        target.write_text('{"name":"omarchy-system"}\n')
+        os.utime(target, ns=(1_000_000_000, 1_000_000_000))
+        inode = target.stat().st_ino
+
+        result = apply("pi-hot-reload", self.paths)
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(result.changed, [str(target)])
+        self.assertEqual(target.stat().st_ino, inode)
+        self.assertGreater(target.stat().st_mtime_ns, 1_000_000_000)
+        self.assertEqual(target.read_text(), '{"name":"omarchy-system"}\n')
+
+    def test_pi_hot_reload_requires_native_generated_theme(self):
+        ready, missing, warnings = inspect_readiness(
+            "pi-hot-reload", self.paths, which=lambda _command: "/usr/bin/pi"
+        )
+        self.assertFalse(ready)
+        self.assertIn("regular Omarchy-generated Pi theme", missing[0])
+        self.assertEqual(warnings, [])
+        result = apply("pi-hot-reload", self.paths)
+        self.assertEqual(result.status, "skipped")
+        self.assertFalse((self.paths.home / ".pi").exists())
+
+    def test_pi_hot_reload_refuses_symlink_target(self):
+        target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        source = self.paths.home / "user-theme.json"
+        target.parent.mkdir(parents=True)
+        source.write_text("user theme\n")
+        target.symlink_to(source)
+
+        with self.assertRaisesRegex(RuntimeError, "refusing symlink"):
+            apply("pi-hot-reload", self.paths)
+        self.assertEqual(source.read_text(), "user theme\n")
+
     def write_local_vscode_theme(self, *, unsafe: bool = False):
         theme = self.paths.current_theme
         extension = theme / "vscode-extension"

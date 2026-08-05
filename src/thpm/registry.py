@@ -5,6 +5,7 @@ from .models import Plugin
 PLUGINS: tuple[Plugin, ...] = (
     Plugin("gtk-css-compat", "GTK theme CSS compatibility", "Compatibility", "Deploy theme-provided GTK CSS not yet handled by Omarchy.", "action", theme_assets=("gtk.css",)),
     Plugin("vscode-local-compat", "Local VS Code theme compatibility", "Compatibility", "Install validated theme-bundled local editor themes.", "action"),
+    Plugin("pi-hot-reload", "Pi live theme reload", "Compatibility", "Signal persistent Pi sessions after Omarchy atomically replaces their generated theme.", "action", ("pi",)),
     Plugin("fish", "Fish", "Terminal", "Synchronize Fish shell colors.", "hybrid", ("fish",), templates=("thpm-fish.fish.tpl",)),
     Plugin("fzf", "fzf", "Terminal", "Provide an Omarchy-colored fzf palette.", "hybrid", ("fzf",), templates=("thpm-fzf.fish.tpl",)),
     Plugin("branding", "Branding extras", "Desktop", "Synchronize optional branding text and restore prior defaults when absent.", "action", theme_assets=("about.txt", "screensaver.txt"), default_enabled=False),

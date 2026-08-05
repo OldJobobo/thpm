@@ -113,6 +113,8 @@ The same control appears as **Restart apps automatically** in the GUI and TUI Sy
 
 The two Discord choices are mutually exclusive. `discord` provides an Omarchy-colored Midnight surface from THPM's MIT-licensed vendored base, while `discord-system24` provides the more opinionated System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template. The Midnight fallback imports THPM's hosted base at runtime, so it requires network access; the hosted `main` artifact intentionally remains updateable so Discord selector repairs can land without waiting for a THPM package release.
 
+The `pi-hot-reload` compatibility integration sends a metadata-only change signal after Omarchy atomically replaces `~/.pi/agent/themes/omarchy-system.json`. This preserves the generated theme's contents and inode while prompting long-lived Pi sessions inside Zellij, Splinterm, and similar persistent terminals to repaint. It is enabled by default and becomes actionable when Pi and Omarchy's generated Pi theme are installed.
+
 ### Application setup
 
 The Spotify integration expects Spicetify's one-time application setup to be complete and the lowercase `omarchy` theme to be selected. THPM's Doctor reports either missing prerequisite instead of letting every theme hook fail. Initialize it with:

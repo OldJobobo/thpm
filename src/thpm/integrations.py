@@ -587,6 +587,12 @@ def _browser_default_profile(base: Path) -> str:
     return ""
 
 
+def _pi_theme_path(paths: Paths) -> Path:
+    # Match Omarchy's native omarchy-theme-set-pi destination. Pi config-dir
+    # overrides are outside that native synchronization contract.
+    return paths.home / ".pi/agent/themes/omarchy-system.json"
+
+
 def inspect_applicability(plugin_id: str, paths: Paths) -> bool:
     if plugin_id == "gtk-css-compat":
         return gtk_requested(paths)
@@ -684,6 +690,10 @@ def inspect_readiness(
     elif plugin_id == "vscode-local-compat":
         ready, missing = vscode_readiness(paths)
         return ready, missing, warnings
+    elif plugin_id == "pi-hot-reload":
+        target = _pi_theme_path(paths)
+        if not target.is_file() or target.is_symlink():
+            missing.append(f"regular Omarchy-generated Pi theme at {target}")
     elif plugin_id == "spotify" and not missing:
         missing.extend(_spicetify_missing(paths))
     elif plugin_id == "hermes" and (
@@ -1625,6 +1635,24 @@ def apply(
         return apply_gtk(paths, force_restart=force_reload)
     if plugin_id == "vscode-local-compat":
         return apply_vscode_local(paths)
+    if plugin_id == "pi-hot-reload":
+        target = _pi_theme_path(paths)
+        if target.is_symlink():
+            raise RuntimeError(f"pi-hot-reload: refusing symlink theme target: {target}")
+        if not target.is_file():
+            return ApplyResult(
+                plugin_id,
+                "skipped",
+                message="Omarchy-generated Pi theme is not installed",
+            )
+        os.utime(target, follow_symlinks=False)
+        return ApplyResult(
+            plugin_id,
+            "applied",
+            changed=[str(target)],
+            actions=[f"touched {target}"],
+            message="Pi theme reload signal sent",
+        )
     if plugin_id == "zed-extra":
         return _apply_zed_asset(paths)
     paths.current_theme.mkdir(parents=True, exist_ok=True)

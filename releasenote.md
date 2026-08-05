@@ -1,26 +1,25 @@
-## THPM 1.0.0rc16 is now available
+## THPM 1.0.0rc17 is now available
 
 **THPM is made for Omarchy Quattro and supports Omarchy 4.x.**
 
-### First installation
+### Temporary Arch installation while AUR submissions are unavailable
+
+Download and inspect the temporary release-source installer, then run it as your normal user:
 
 ```sh
-omarchy pkg aur add thpm
-thpm install
+curl -fsSLO https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install-arch-release.sh
+less install-arch-release.sh
+bash install-arch-release.sh 1.0.0rc17
+rm install-arch-release.sh
 ```
 
-The second command completes your user setup, including the theme hook and graphical manager.
-
-### Upgrade
-
-```sh
-omarchy update aur pkgs
-thpm ui install
-```
-
-The second command deploys the latest graphical-manager files from the updated package.
+It downloads the rc17 GitHub source archive and checksum, verifies the source, builds the stable Arch package with `makepkg`, installs it through pacman, and completes THPM's per-user setup. Existing installations are upgraded through the same path without replacing pacman ownership.
 
 ## What’s new since rc5
+
+### Stock Discord themes work again
+
+The standard Discord integration now wraps THPM's own hosted Midnight base instead of setting a handful of obsolete Discord variables. Stock Omarchy themes such as Everforest receive a complete current Discord surface from their semantic palette. The vendored base is pinned, reviewed, and redistributed under Midnight's MIT License.
 
 ### Application restarts are now under your control
 
@@ -101,4 +100,4 @@ Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//
 
 This remains a release candidate. Please report any issues you find.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc16)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc17)

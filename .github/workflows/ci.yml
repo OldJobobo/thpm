@@ -42,7 +42,7 @@ jobs:
       - name: Run Python and shell static checks
         run: |
           ruff check --select E9,F src tests
-          shellcheck install.sh uninstall.sh assets/hooks/90-thpm scripts/release-assets.sh scripts/update-vencord-base.sh
+          shellcheck install.sh uninstall.sh assets/hooks/90-thpm scripts/install-arch-release.sh scripts/release-assets.sh scripts/update-vencord-base.sh
 
       - name: Build and inspect wheel
         run: |

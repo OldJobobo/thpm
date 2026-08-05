@@ -2,7 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc17 - 2026-08-05
+
 - Replace the obsolete compact Discord variable fallback with an Omarchy-colored Midnight surface, hosted from THPM's own MIT-compliant vendored base and rendered from the complete semantic palette.
+- Add a temporary verified release-source installer for Arch systems while AUR submissions are unavailable; it builds the stable package with `makepkg`, installs it through pacman, and completes per-user setup.
 
 ## 1.0.0rc16 - 2026-08-02
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repository="OldJobobo/thpm"
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 version="${1:-}"
 
 usage() {
@@ -86,10 +86,10 @@ printf 'Building the verified release source with makepkg...\n'
     makepkg --syncdeps --cleanbuild --clean --force --noconfirm
 )
 packages=("$package_dir"/thpm-"$version"-*-any.pkg.tar.*)
-(( ${#packages[@]} == 1 )) && [[ -f "${packages[0]}" ]] || {
+if (( ${#packages[@]} != 1 )) || [[ ! -f "${packages[0]}" ]]; then
     printf 'Could not identify the built Arch package\n' >&2
     exit 1
-}
+fi
 
 printf 'Installing %s through pacman...\n' "${packages[0]##*/}"
 sudo pacman -U --noconfirm -- "${packages[0]}"

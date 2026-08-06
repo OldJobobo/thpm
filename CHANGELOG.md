@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add a Pi live-reload compatibility integration that signals persistent Pi sessions after Omarchy atomically replaces the generated `omarchy-system` theme.
+- Add an opt-in Pi live-reload compatibility integration that safely emits a metadata event only when the installed `omarchy-system` theme matches Omarchy's current native output, without claiming sessions using other theme overrides repainted.
 
 ## 1.0.0rc17 - 2026-08-05
 

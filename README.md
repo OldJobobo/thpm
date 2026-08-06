@@ -113,7 +113,7 @@ The same control appears as **Restart apps automatically** in the GUI and TUI Sy
 
 The two Discord choices are mutually exclusive. `discord` provides an Omarchy-colored Midnight surface from THPM's MIT-licensed vendored base, while `discord-system24` provides the more opinionated System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template. The Midnight fallback imports THPM's hosted base at runtime, so it requires network access; the hosted `main` artifact intentionally remains updateable so Discord selector repairs can land without waiting for a THPM package release.
 
-The `pi-hot-reload` compatibility integration sends a metadata-only change signal after Omarchy atomically replaces `~/.pi/agent/themes/omarchy-system.json`. This preserves the generated theme's contents and inode while prompting long-lived Pi sessions inside Zellij, Splinterm, and similar persistent terminals to repaint. It is enabled by default and becomes actionable when Pi and Omarchy's generated Pi theme are installed.
+The opt-in `pi-hot-reload` compatibility integration emits a metadata-only change event after Omarchy atomically replaces `~/.pi/agent/themes/omarchy-system.json`. It first verifies that the installed file exactly matches the current native `pi.json`, then advances only its modification time while preserving its contents, access time, and inode. Long-lived Pi sessions currently using `omarchy-system`—including sessions inside Zellij, Splinterm, and similar persistent terminals—can then repaint; sessions using another global, project, CLI, automatic, or in-memory theme ignore the event.
 
 ### Application setup
 

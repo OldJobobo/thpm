@@ -241,10 +241,20 @@ class StateTests(Sandbox):
 
     def test_sensitive_plugins_are_opt_in_by_default(self):
         enabled = load(self.paths)
-        self.assertTrue(all(not enabled[plugin_id] for plugin_id in ("firefox", "zen", "steam", "zed-extra")))
+        self.assertTrue(
+            all(
+                not enabled[plugin_id]
+                for plugin_id in (
+                    "firefox",
+                    "zen",
+                    "steam",
+                    "zed-extra",
+                    "pi-hot-reload",
+                )
+            )
+        )
         self.assertTrue(enabled["gtk-css-compat"])
         self.assertTrue(enabled["vscode-local-compat"])
-        self.assertTrue(enabled["pi-hot-reload"])
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -2444,10 +2454,14 @@ class ZedTests(Sandbox):
 
 
 class IntegrationTests(Sandbox):
-    def test_pi_hot_reload_touches_native_theme_without_replacing_it(self):
+    def test_pi_hot_reload_touches_synchronized_theme_without_replacing_it(self):
+        content = '{"name":"omarchy-system"}\n'
+        source = self.paths.current_theme / "pi.json"
         target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        source.parent.mkdir(parents=True)
         target.parent.mkdir(parents=True)
-        target.write_text('{"name":"omarchy-system"}\n')
+        source.write_text(content)
+        target.write_text(content)
         os.utime(target, ns=(1_000_000_000, 1_000_000_000))
         inode = target.stat().st_ino
 
@@ -2455,20 +2469,45 @@ class IntegrationTests(Sandbox):
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(result.changed, [str(target)])
+        self.assertEqual(result.message, "Pi omarchy-system theme change event emitted")
         self.assertEqual(target.stat().st_ino, inode)
+        self.assertEqual(target.stat().st_atime_ns, 1_000_000_000)
         self.assertGreater(target.stat().st_mtime_ns, 1_000_000_000)
-        self.assertEqual(target.read_text(), '{"name":"omarchy-system"}\n')
+        self.assertEqual(target.read_text(), content)
 
     def test_pi_hot_reload_requires_native_generated_theme(self):
         ready, missing, warnings = inspect_readiness(
             "pi-hot-reload", self.paths, which=lambda _command: "/usr/bin/pi"
         )
         self.assertFalse(ready)
-        self.assertIn("regular Omarchy-generated Pi theme", missing[0])
+        self.assertIn("regular current Omarchy Pi theme source", " ".join(missing))
+        self.assertIn("regular Omarchy-generated Pi theme", " ".join(missing))
         self.assertEqual(warnings, [])
         result = apply("pi-hot-reload", self.paths)
         self.assertEqual(result.status, "skipped")
         self.assertFalse((self.paths.home / ".pi").exists())
+
+    def test_pi_hot_reload_refuses_stale_native_theme(self):
+        source = self.paths.current_theme / "pi.json"
+        target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        source.write_text("current theme\n")
+        target.write_text("stale theme\n")
+        os.utime(target, ns=(1_000_000_000, 2_000_000_000))
+        before = target.stat()
+
+        ready, missing, _warnings = inspect_readiness(
+            "pi-hot-reload", self.paths, which=lambda _command: "/usr/bin/pi"
+        )
+        result = apply("pi-hot-reload", self.paths)
+
+        self.assertFalse(ready)
+        self.assertIn("Pi theme synchronized from the current Omarchy pi.json", missing)
+        self.assertEqual(result.status, "skipped")
+        self.assertIn("synchronization is stale", result.message)
+        self.assertEqual(target.stat().st_atime_ns, before.st_atime_ns)
+        self.assertEqual(target.stat().st_mtime_ns, before.st_mtime_ns)
 
     def test_pi_hot_reload_refuses_symlink_target(self):
         target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
@@ -2477,9 +2516,23 @@ class IntegrationTests(Sandbox):
         source.write_text("user theme\n")
         target.symlink_to(source)
 
-        with self.assertRaisesRegex(RuntimeError, "refusing symlink"):
+        with self.assertRaisesRegex(RuntimeError, "refusing symlink theme target"):
             apply("pi-hot-reload", self.paths)
         self.assertEqual(source.read_text(), "user theme\n")
+
+    def test_pi_hot_reload_refuses_symlink_source(self):
+        source = self.paths.current_theme / "pi.json"
+        authored = self.paths.home / "authored-theme.json"
+        target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        authored.write_text("authored theme\n")
+        target.write_text("authored theme\n")
+        source.symlink_to(authored)
+
+        with self.assertRaisesRegex(RuntimeError, "refusing symlink theme source"):
+            apply("pi-hot-reload", self.paths)
+        self.assertEqual(authored.read_text(), "authored theme\n")
 
     def write_local_vscode_theme(self, *, unsafe: bool = False):
         theme = self.paths.current_theme

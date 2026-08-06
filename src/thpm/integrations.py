@@ -587,10 +587,22 @@ def _browser_default_profile(base: Path) -> str:
     return ""
 
 
-def _pi_theme_path(paths: Paths) -> Path:
-    # Match Omarchy's native omarchy-theme-set-pi destination. Pi config-dir
-    # overrides are outside that native synchronization contract.
-    return paths.home / ".pi/agent/themes/omarchy-system.json"
+def _pi_theme_paths(paths: Paths) -> tuple[Path, Path]:
+    # Match Omarchy's native omarchy-theme-set-pi source and destination. Pi
+    # config-dir overrides are outside that native synchronization contract.
+    return (
+        paths.current_theme / "pi.json",
+        paths.home / ".pi/agent/themes/omarchy-system.json",
+    )
+
+
+def _read_pi_theme(path: Path) -> bytes:
+    # Reading a stale target must not update atime and accidentally trigger the
+    # same directory watcher this adapter is deciding whether it is safe to wake.
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NOATIME
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as stream:
+        return stream.read()
 
 
 def inspect_applicability(plugin_id: str, paths: Paths) -> bool:
@@ -691,9 +703,20 @@ def inspect_readiness(
         ready, missing = vscode_readiness(paths)
         return ready, missing, warnings
     elif plugin_id == "pi-hot-reload":
-        target = _pi_theme_path(paths)
-        if not target.is_file() or target.is_symlink():
+        source, target = _pi_theme_paths(paths)
+        source_ready = source.is_file() and not source.is_symlink()
+        target_ready = target.is_file() and not target.is_symlink()
+        if not source_ready:
+            missing.append(f"regular current Omarchy Pi theme source at {source}")
+        if not target_ready:
             missing.append(f"regular Omarchy-generated Pi theme at {target}")
+        if source_ready and target_ready:
+            try:
+                synchronized = _read_pi_theme(source) == _read_pi_theme(target)
+            except OSError:
+                synchronized = False
+            if not synchronized:
+                missing.append("Pi theme synchronized from the current Omarchy pi.json")
     elif plugin_id == "spotify" and not missing:
         missing.extend(_spicetify_missing(paths))
     elif plugin_id == "hermes" and (
@@ -1636,22 +1659,35 @@ def apply(
     if plugin_id == "vscode-local-compat":
         return apply_vscode_local(paths)
     if plugin_id == "pi-hot-reload":
-        target = _pi_theme_path(paths)
-        if target.is_symlink():
-            raise RuntimeError(f"pi-hot-reload: refusing symlink theme target: {target}")
-        if not target.is_file():
+        source, target = _pi_theme_paths(paths)
+        for label, path in (("source", source), ("target", target)):
+            if path.is_symlink():
+                raise RuntimeError(f"pi-hot-reload: refusing symlink theme {label}: {path}")
+        if not source.is_file() or not target.is_file():
             return ApplyResult(
                 plugin_id,
                 "skipped",
-                message="Omarchy-generated Pi theme is not installed",
+                message="current native Pi theme source or installed theme is missing",
             )
-        os.utime(target, follow_symlinks=False)
+        metadata = target.stat(follow_symlinks=False)
+        if _read_pi_theme(source) != _read_pi_theme(target):
+            return ApplyResult(
+                plugin_id,
+                "skipped",
+                message="native Pi theme synchronization is stale; reload event not emitted",
+            )
+        mtime_ns = max(time.time_ns(), metadata.st_mtime_ns + 1)
+        os.utime(
+            target,
+            ns=(metadata.st_atime_ns, mtime_ns),
+            follow_symlinks=False,
+        )
         return ApplyResult(
             plugin_id,
             "applied",
             changed=[str(target)],
-            actions=[f"touched {target}"],
-            message="Pi theme reload signal sent",
+            actions=[f"updated mtime for {target}"],
+            message="Pi omarchy-system theme change event emitted",
         )
     if plugin_id == "zed-extra":
         return _apply_zed_asset(paths)

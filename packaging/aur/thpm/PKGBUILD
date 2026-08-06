@@ -29,6 +29,7 @@ package() {
     install -Dm755 assets/hooks/90-thpm "$pkgdir/usr/share/thpm/hooks/90-thpm"
     install -Dm644 assets/compat/theme-env.sh "$pkgdir/usr/share/thpm/compat/theme-env.sh"
     install -Dm644 -t "$pkgdir/usr/share/thpm/vencord" assets/vencord/*
+    install -Dm644 -t "$pkgdir/usr/share/thpm/spicetify" assets/spicetify/*
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 assets/vencord/LICENSE.midnight "$pkgdir/usr/share/licenses/$pkgname/LICENSE.midnight"
 }

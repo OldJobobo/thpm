@@ -115,6 +115,10 @@ The two Discord choices are mutually exclusive. `discord` provides an Omarchy-co
 
 The opt-in `pi-hot-reload` compatibility integration emits a metadata-only change event after Omarchy atomically replaces `~/.pi/agent/themes/omarchy-system.json`. It first verifies that the installed file exactly matches the current native `pi.json`, then advances only its modification time while preserving its contents, access time, and inode. Long-lived Pi sessions currently using `omarchy-system`—including sessions inside Zellij, Splinterm, and similar persistent terminals—can then repaint; sessions using another global, project, CLI, automatic, or in-memory theme ignore the event.
 
+Cava integration is opt-in because enabling it safely changes the `[color] theme` selector in Cava's user configuration. A saved `cava = true` value from releases where Cava was enabled by default is treated as disabled until confirmed setup succeeds and records a durable opt-in marker. THPM preserves comments, formatting, symlinked dotfile layouts, unrelated edits, and the previous selector for guarded restoration on disable or uninstall. Run `thpm doctor cava` for detailed checks or `thpm doctor cava --fix` for a confirmed transactional repair. Only running Cava processes whose effective config and theme directory can be verified are sent a PID-specific `SIGUSR1`; ambiguous processes are left alone and reported as requiring a manual reload or restart. Cava 0.10.6 or newer is required.
+
+THPM keeps a bounded, mode-`0600` structured operation journal under `~/.local/state/thpm/logs/`. It records integration outcomes and durations without raw environments or configuration contents; logging is best-effort and never changes hook success. For remote troubleshooting, run `thpm report cava` (or another integration ID) to create a privacy-preserving JSON report under `~/.local/state/thpm/reports/`. Use `--output PATH` to choose its destination or `--json` to include the versioned report object in one CLI envelope. Reports normalize home paths wherever they occur, remove URL credentials, queries, and fragments, redact secret-like fields and authorization values, cap recent history and total size, and list omitted/redacted categories.
+
 ### Application setup
 
 The Spotify integration expects Spicetify's one-time application setup to be complete and the lowercase `omarchy` theme to be selected. THPM's Doctor reports either missing prerequisite instead of letting every theme hook fail. Initialize it with:
@@ -125,7 +129,7 @@ spicetify config current_theme omarchy color_scheme Base
 spicetify apply
 ```
 
-THPM then keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized and preserves the theme's `user.css`. It always refreshes Spicetify's generated theme files after a palette change. Under the `automatic` restart policy, an already-running Spotify client is restarted so the colors take effect; under `notify`, Spotify remains open and is named in the pending-restart notification. A closed client stays closed under either policy. Hooks never perform Spicetify's privileged or destructive first-time backup.
+THPM then keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized. It initializes a missing companion `user.css` from its bundled Omarchy stylesheet, but never overwrites or removes an existing stylesheet. It always refreshes Spicetify's generated theme files after a palette change. Under the `automatic` restart policy, an already-running Spotify client is restarted so the colors take effect; under `notify`, Spotify remains open and is named in the pending-restart notification. A closed client stays closed under either policy. Hooks never perform Spicetify's privileged or destructive first-time backup.
 
 ### Zed authored themes
 

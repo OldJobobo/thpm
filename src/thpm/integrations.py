@@ -12,6 +12,30 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from .cava import (
+    CavaError,
+)
+from .cava import (
+    default_config_path as cava_config_path,
+)
+from .cava import (
+    installed_version as installed_cava_version,
+)
+from .cava import (
+    parse_selector as parse_cava_selector,
+)
+from .cava import (
+    reload_matching_processes as reload_cava_processes,
+)
+from .cava import (
+    safe_config_target as safe_cava_config_target,
+)
+from .cava import (
+    theme_source as cava_theme_source,
+)
+from .cava import (
+    theme_target as cava_theme_target,
+)
 from .compat import (
     apply_gtk,
     apply_vscode_local,
@@ -24,6 +48,7 @@ from .models import ApplyResult
 from .palette import load as load_palette
 from .paths import Paths
 from .registry import BY_ID, PLUGINS
+from .resources import asset as packaged_asset
 from .zed import ZedThemeError
 from .zed import legacy_target as zed_legacy_target
 from .zed import normalized as normalized_zed_theme
@@ -626,6 +651,23 @@ def _spotify_prefs_version(path: Path) -> str:
     return ""
 
 
+def _spotify_stylesheet(paths: Paths) -> Path:
+    return paths.config_home / "spicetify/Themes/omarchy/user.css"
+
+
+def _initialize_spotify_stylesheet(paths: Paths) -> Path | None:
+    target = _spotify_stylesheet(paths)
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        raise RuntimeError(f"spotify: refusing unsafe stylesheet target: {target}")
+    if target.is_file():
+        return None
+    source = packaged_asset("spicetify", "omarchy-user.css")
+    if not source.is_file() or source.is_symlink():
+        raise RuntimeError("spotify: packaged Omarchy stylesheet is unavailable")
+    atomic_copy(source, target, 0o644)
+    return target
+
+
 def _spicetify_missing(paths: Paths) -> list[str]:
     config = paths.config_home / "spicetify/config-xpui.ini"
     if not config.is_file():
@@ -658,9 +700,9 @@ def _spicetify_missing(paths: Paths) -> list[str]:
             "Spicetify current_theme=omarchy "
             "(run `spicetify config current_theme omarchy color_scheme Base`)"
         )
-    stylesheet = paths.config_home / "spicetify/Themes/omarchy/user.css"
-    if not stylesheet.is_file():
-        missing.append(f"Omarchy Spicetify stylesheet at {stylesheet}")
+    stylesheet = _spotify_stylesheet(paths)
+    if stylesheet.is_symlink() or (stylesheet.exists() and not stylesheet.is_file()):
+        missing.append(f"safe regular Omarchy Spicetify stylesheet target at {stylesheet}")
     return missing
 
 
@@ -717,8 +759,17 @@ def inspect_readiness(
                 synchronized = False
             if not synchronized:
                 missing.append("Pi theme synchronized from the current Omarchy pi.json")
+    elif plugin_id == "cava" and not missing:
+        version = installed_cava_version(command_path("cava") or "cava")
+        if version is None or version < (0, 10, 6):
+            missing.append("Cava 0.10.6 or newer with theme-file support")
     elif plugin_id == "spotify" and not missing:
         missing.extend(_spicetify_missing(paths))
+        stylesheet = _spotify_stylesheet(paths)
+        if not missing and not stylesheet.is_file():
+            warnings.append(
+                f"THPM will initialize the missing Omarchy Spicetify stylesheet at {stylesheet}"
+            )
     elif plugin_id == "hermes" and (
         (paths.config_home / "Hermes").is_dir()
         or command_path("hermes-desktop-remote")
@@ -1573,17 +1624,15 @@ def _reload(
     commands = {
         "spotify": ["spicetify", "refresh"],
         "swaync": ["swaync-client", "--reload-css"],
-        "cava": ["pkill", "-USR2", "cava"],
     }
     command = commands.get(plugin_id)
     if not command:
         return [], []
-    if plugin_id in {"swaync", "cava"}:
+    if plugin_id == "swaync":
         if not shutil.which("pgrep"):
             return [], []
-        process = "swaync" if plugin_id == "swaync" else "cava"
         running = subprocess.run(
-            ["pgrep", "-x", process],
+            ["pgrep", "-x", "swaync"],
             text=True,
             capture_output=True,
             check=False,
@@ -1651,6 +1700,7 @@ def apply(
     *,
     automatic_restarts: bool = True,
     force_reload: bool = False,
+    defer_reload: bool = False,
 ) -> ApplyResult:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
@@ -1699,7 +1749,6 @@ def apply(
     targets = _standard_output_targets(paths)
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),
-        "cava": ("cava_theme", GENERATED["cava"]),
     }
 
     if plugin_id == "zellij":
@@ -1724,6 +1773,67 @@ def apply(
         )
         if config_changed:
             changed.append(str(config_file))
+    elif plugin_id == "cava":
+        command = shutil.which("cava")
+        version = installed_cava_version(command or "cava") if command else None
+        if version is None or version < (0, 10, 6):
+            return ApplyResult(
+                plugin_id,
+                "failed",
+                message="Cava 0.10.6 or newer with theme-file support is required",
+            )
+        try:
+            config = safe_cava_config_target(paths, cava_config_path(paths))
+            selected = (
+                parse_cava_selector(config.read_text(encoding="utf-8")).value
+                if config.is_file()
+                else None
+            )
+        except (OSError, UnicodeError, CavaError) as exc:
+            return ApplyResult(
+                plugin_id,
+                "failed",
+                message=f"Cava config is not safely usable: {exc}",
+                warnings=["run `thpm doctor cava` for repair guidance"],
+            )
+        if selected != "thpm":
+            return ApplyResult(
+                plugin_id,
+                "failed",
+                message=(
+                    f"Cava selects '{selected or 'none'}', not THPM's generated theme"
+                ),
+                warnings=["run `thpm doctor cava --fix` to select the managed theme"],
+            )
+        source = cava_theme_source(paths)
+        if source is None:
+            return ApplyResult(
+                plugin_id,
+                "failed",
+                message="Cava expected a regular rendered theme output",
+            )
+        if source.name == GENERATED["cava"]:
+            try:
+                _ensure_generated_output_is_rendered(source)
+            except RuntimeError as exc:
+                return ApplyResult(plugin_id, "failed", message=str(exc))
+        target = cava_theme_target(paths)
+        if _install_optional_asset(
+            paths,
+            _standard_output_state_key(plugin_id),
+            source,
+            target,
+            legacy_owned=_matches_sources(
+                target, _current_plugin_sources(paths, plugin_id)
+            ),
+        ):
+            changed.append(str(target))
+        actions: list[str] = []
+        if (changed or force_reload) and not defer_reload:
+            actions, reload_restarts, reload_warnings = reload_cava_processes(paths)
+            warnings.extend(reload_warnings)
+            restart_required.extend(reload_restarts)
+        return _result(plugin_id, changed, actions, warnings, restart_required)
     elif plugin_id in targets:
         source_names = candidates.get(plugin_id, (GENERATED[plugin_id],))
         source = next(
@@ -1739,6 +1849,10 @@ def apply(
         if source.name in set(GENERATED.values()):
             _ensure_generated_output_is_rendered(source)
         target = targets[plugin_id]
+        if plugin_id == "spotify":
+            initialized = _initialize_spotify_stylesheet(paths)
+            if initialized is not None:
+                changed.append(str(initialized))
         legacy = _legacy_standard_output_targets(paths).get(plugin_id)
         legacy_key = f"generated-{plugin_id}"
         legacy_state, _backup = _asset_state_paths(paths, legacy_key)
@@ -1896,6 +2010,7 @@ def apply_enabled(
     if events is not None:
         events({"type": "integrations_started", "total": total})
     for current, plugin in enumerate(plugins, start=1):
+        started_ns = time.monotonic_ns()
         if events is not None:
             events(
                 {
@@ -1907,12 +2022,15 @@ def apply_enabled(
             )
         ready, missing, readiness_warnings = inspect_readiness(plugin.id, paths)
         if not ready:
+            status = "failed" if plugin.id == "cava" else "skipped"
             result = ApplyResult(
                 plugin.id,
-                "skipped",
+                status,
                 message="missing prerequisites: " + ", ".join(missing),
                 warnings=readiness_warnings,
             )
+            if status == "failed":
+                errors.append({"plugin": plugin.id, "message": result.message})
         else:
             try:
                 result = apply(
@@ -1940,6 +2058,9 @@ def apply_enabled(
         ):
             errors.append({"plugin": plugin.id, "message": result.message})
         result_payload = result.json()
+        result_payload["durationMs"] = max(
+            0, (time.monotonic_ns() - started_ns) // 1_000_000
+        )
         results.append(result_payload)
         for warning in result.warnings:
             warnings.append({"plugin": plugin.id, "message": warning})
@@ -1954,6 +2075,7 @@ def apply_enabled(
                     "total": total,
                     "status": result.status,
                     "message": result.message,
+                    "durationMs": result_payload["durationMs"],
                 }
             )
     counts = {

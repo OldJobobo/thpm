@@ -4188,7 +4188,7 @@ class IntegrationTests(Sandbox):
         prefs.write_text('app.last-launched-version="1.2.3"\n')
         config.parent.mkdir(parents=True)
         config.write_text(
-            "[Setting]\ncurrent_theme = omarchy\n"
+            "[Setting]\ncurrent_theme = omarchy\ncolor_scheme = Base\n"
             f"prefs_path = {prefs}\n"
             "[Backup]\nversion = 1.2.3\n"
         )
@@ -4208,6 +4208,118 @@ class IntegrationTests(Sandbox):
         self.assertTrue(ready)
         self.assertEqual(missing, [])
         self.assertEqual(warnings, [])
+
+    def test_spotify_readiness_treats_theme_selection_as_repairable(self):
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        prefs = self.paths.config_home / "spotify/prefs"
+        prefs.parent.mkdir(parents=True)
+        prefs.write_text('app.last-launched-version="1.2.3"\n')
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            "[Setting]\ncurrent_theme = text\ncolor_scheme = Text\n"
+            f"prefs_path = {prefs}\n"
+            "[Backup]\nversion = 1.2.3\n"
+        )
+
+        ready, missing, warnings = inspect_readiness(
+            "spotify", self.paths, lambda _command: "/usr/bin/spicetify"
+        )
+
+        self.assertTrue(ready)
+        self.assertEqual(missing, [])
+        self.assertIn("will select", " ".join(warnings))
+
+    def test_spotify_apply_selects_managed_theme(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            "[Setting]\ncurrent_theme = text\ncolor_scheme = Text\n"
+        )
+        assets = Path(__file__).parents[1] / "assets"
+
+        def select_theme(*_args, **_kwargs):
+            self.assertTrue(
+                (self.paths.config_home / "spicetify/Themes/omarchy/user.css").is_file()
+            )
+            self.assertTrue(
+                (self.paths.config_home / "spicetify/Themes/omarchy/color.ini").is_file()
+            )
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.integrations.subprocess.run", side_effect=select_theme
+        ) as run_command, patch("thpm.integrations._reload", return_value=[]):
+            result = apply("spotify", self.paths)
+
+        run_command.assert_called_once_with(
+            [
+                "spicetify",
+                "config",
+                "current_theme",
+                "omarchy",
+                "color_scheme",
+                "Base",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        self.assertIn(str(config), result.changed)
+        self.assertIn(
+            "spicetify config current_theme omarchy color_scheme Base",
+            result.actions,
+        )
+
+    def test_spotify_selection_failure_reports_files_installed_before_failure(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        config.parent.mkdir(parents=True)
+        config.write_text("[Setting]\ncurrent_theme = text\ncolor_scheme = Text\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
+        failed = subprocess.CompletedProcess([], 1, "", "selection failed")
+
+        with patch("thpm.integrations.subprocess.run", return_value=failed), self.assertRaisesRegex(
+            ApplyFailure, "selection failed"
+        ) as raised:
+            apply("spotify", self.paths)
+
+        target = self.paths.config_home / "spicetify/Themes/omarchy/color.ini"
+        self.assertTrue(target.is_file())
+        self.assertIn(str(target), raised.exception.changed)
+        self.assertEqual(raised.exception.actions, [])
+
+    def test_spotify_refresh_failure_preserves_successful_selection_action(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        config.parent.mkdir(parents=True)
+        config.write_text("[Setting]\ncurrent_theme = text\ncolor_scheme = Text\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
+        selected = subprocess.CompletedProcess([], 0, "", "")
+
+        with patch(
+            "thpm.integrations.subprocess.run", return_value=selected
+        ), patch(
+            "thpm.integrations._reload", side_effect=RuntimeError("refresh failed")
+        ), self.assertRaisesRegex(ApplyFailure, "refresh failed") as raised:
+            apply("spotify", self.paths)
+
+        self.assertIn(str(config), raised.exception.changed)
+        self.assertEqual(
+            raised.exception.actions,
+            ["spicetify config current_theme omarchy color_scheme Base"],
+        )
 
     def test_spotify_apply_initializes_missing_companion_stylesheet(self):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
@@ -4347,6 +4459,7 @@ class IntegrationTests(Sandbox):
         target = self.paths.config_home / "spicetify/Themes/omarchy/color.ini"
         target.parent.mkdir(parents=True)
         target.write_text("user current theme\n")
+        (target.parent / "user.css").write_text("/* existing theme */\n")
 
         with patch("thpm.integrations._reload", return_value=[]):
             first = apply("spotify", self.paths)
@@ -4453,6 +4566,9 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
         generated.write_text("[base]\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
         refreshed = subprocess.CompletedProcess([], 0, "", "")
         running = subprocess.CompletedProcess([], 0, "123\n", "")
         failed = subprocess.CompletedProcess([], 1, "", "restart failed")
@@ -4525,6 +4641,9 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
         generated.write_text("[base]\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
         with patch(
             "thpm.integrations._reload",
             return_value=(["spicetify refresh", "spicetify restart"], []),
@@ -4543,6 +4662,9 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
         generated.write_text("[base]\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
         swaync = self.paths.current_theme / "colors.css"
         swaync.write_text("@define-color background #000000;\n")
 
@@ -4776,6 +4898,9 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
         generated.write_text("[base]\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
         with patch("thpm.integrations.inspect_readiness", return_value=(True, [], [])), patch(
             "thpm.integrations._reload", side_effect=RuntimeError("reload failed")
         ):

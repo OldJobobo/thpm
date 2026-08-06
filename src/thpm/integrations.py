@@ -668,6 +668,51 @@ def _initialize_spotify_stylesheet(paths: Paths) -> Path | None:
     return target
 
 
+def _spotify_theme_selection(paths: Paths) -> tuple[str, str]:
+    config = paths.config_home / "spicetify/config-xpui.ini"
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        with config.open(encoding="utf-8") as stream:
+            parser.read_file(stream)
+    except (configparser.Error, OSError, UnicodeError):
+        return "", ""
+    return (
+        parser.get("Setting", "current_theme", fallback="").strip(),
+        parser.get("Setting", "color_scheme", fallback="").strip(),
+    )
+
+
+def _select_spotify_theme(paths: Paths) -> list[str]:
+    config = paths.config_home / "spicetify/config-xpui.ini"
+    if not config.is_file():
+        return []
+    current_theme, color_scheme = _spotify_theme_selection(paths)
+    if current_theme == "omarchy" and color_scheme == "Base":
+        return []
+    command = [
+        "spicetify",
+        "config",
+        "current_theme",
+        "omarchy",
+        "color_scheme",
+        "Base",
+    ]
+    try:
+        completed = subprocess.run(
+            command, text=True, capture_output=True, check=False, timeout=5
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("spotify: theme selection timed out") from exc
+    if completed.returncode != 0:
+        detail = (
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or f"exit {completed.returncode}"
+        )
+        raise RuntimeError(f"spotify: theme selection failed: {detail}")
+    return [" ".join(command)]
+
+
 def _spicetify_missing(paths: Paths) -> list[str]:
     config = paths.config_home / "spicetify/config-xpui.ini"
     if not config.is_file():
@@ -695,11 +740,6 @@ def _spicetify_missing(paths: Paths) -> list[str]:
                 f"(current backup is {backup_version}; reinstall Spotify, then run "
                 "`spicetify backup apply`)"
             )
-    if parser.get("Setting", "current_theme", fallback="").strip() != "omarchy":
-        missing.append(
-            "Spicetify current_theme=omarchy "
-            "(run `spicetify config current_theme omarchy color_scheme Base`)"
-        )
     stylesheet = _spotify_stylesheet(paths)
     if stylesheet.is_symlink() or (stylesheet.exists() and not stylesheet.is_file()):
         missing.append(f"safe regular Omarchy Spicetify stylesheet target at {stylesheet}")
@@ -769,6 +809,11 @@ def inspect_readiness(
         if not missing and not stylesheet.is_file():
             warnings.append(
                 f"THPM will initialize the missing Omarchy Spicetify stylesheet at {stylesheet}"
+            )
+        current_theme, color_scheme = _spotify_theme_selection(paths)
+        if not missing and (current_theme != "omarchy" or color_scheme != "Base"):
+            warnings.append(
+                "THPM will select Spicetify current_theme=omarchy and color_scheme=Base"
             )
     elif plugin_id == "hermes" and (
         (paths.config_home / "Hermes").is_dir()
@@ -1745,6 +1790,7 @@ def apply(
     changed: list[str] = []
     warnings: list[str] = []
     restart_required: list[str] = []
+    setup_actions: list[str] = []
     home = paths.home
     targets = _standard_output_targets(paths)
     candidates = {
@@ -1877,6 +1923,19 @@ def apply(
             ),
         ):
             changed.append(str(target))
+        if plugin_id == "spotify":
+            try:
+                setup_actions.extend(_select_spotify_theme(paths))
+            except RuntimeError as exc:
+                raise ApplyFailure(
+                    str(exc),
+                    changed=changed,
+                    actions=setup_actions,
+                    warnings=warnings,
+                    restart_required=restart_required,
+                ) from exc
+            if setup_actions:
+                changed.append(str(paths.config_home / "spicetify/config-xpui.ini"))
         if plugin_id == "nwg-dock" and (changed or force_reload):
             restart_required.append("nwg-dock-hyprland")
     elif plugin_id in OPTIONAL_ASSET_PLUGINS:
@@ -1977,20 +2036,27 @@ def apply(
             else ([], [])
         )
         if isinstance(reload_result, tuple):
-            actions, reload_restarts = reload_result
+            reload_actions, reload_restarts = reload_result
         else:  # compatibility for injected adapters using the former return contract
-            actions, reload_restarts = reload_result, []
+            reload_actions, reload_restarts = reload_result, []
+        actions = [*setup_actions, *reload_actions]
         restart_required.extend(reload_restarts)
     except ApplyFailure as exc:
         raise ApplyFailure(
             str(exc),
             changed=changed,
-            actions=exc.actions,
+            actions=[*setup_actions, *exc.actions],
             warnings=[*warnings, *exc.warnings],
             restart_required=exc.restart_required,
         ) from exc
     except RuntimeError as exc:
-        raise ApplyFailure(str(exc), changed=changed, warnings=warnings) from exc
+        raise ApplyFailure(
+            str(exc),
+            changed=changed,
+            actions=setup_actions,
+            warnings=warnings,
+            restart_required=restart_required,
+        ) from exc
     return _result(plugin_id, changed, actions, warnings, restart_required)
 
 

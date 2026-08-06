@@ -121,15 +121,14 @@ THPM keeps a bounded, mode-`0600` structured operation journal under `~/.local/s
 
 ### Application setup
 
-The Spotify integration expects Spicetify's one-time application setup to be complete and the lowercase `omarchy` theme to be selected. THPM's Doctor reports either missing prerequisite instead of letting every theme hook fail. Initialize it with:
+The Spotify integration expects Spicetify's one-time backup to be complete. THPM's Doctor reports a missing or stale backup instead of letting every theme hook fail. Initialize Spicetify, then enable the integration:
 
 ```bash
 spicetify backup apply
-spicetify config current_theme omarchy color_scheme Base
-spicetify apply
+thpm enable spotify
 ```
 
-THPM then keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized. It initializes a missing companion `user.css` from its bundled Omarchy stylesheet, but never overwrites or removes an existing stylesheet. It always refreshes Spicetify's generated theme files after a palette change. Under the `automatic` restart policy, an already-running Spotify client is restarted so the colors take effect; under `notify`, Spotify remains open and is named in the pending-restart notification. A closed client stays closed under either policy. Hooks never perform Spicetify's privileged or destructive first-time backup.
+THPM keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized, initializes a missing companion `user.css` from its bundled Omarchy stylesheet, and selects the lowercase `omarchy` theme with the `Base` color scheme. Existing stylesheets are never overwritten or removed. It always refreshes Spicetify's generated theme files after a palette change. Under the `automatic` restart policy, an already-running Spotify client is restarted so the colors take effect; under `notify`, Spotify remains open and is named in the pending-restart notification. A closed client stays closed under either policy. Hooks never perform Spicetify's privileged or destructive first-time backup.
 
 ### Zed authored themes
 

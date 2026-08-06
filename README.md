@@ -26,16 +26,13 @@ thpm install
 
 The package installs THPM and its assets under `/usr`. The required `thpm install` step creates your theme hook and templates, migrates an older installation, and deploys the graphical manager and menu entry under your user configuration. Pacman cannot safely perform that per-user setup on its own. Use `thpm install --no-ui` only when you intentionally do not want the graphical manager; you can add it later with `thpm ui install`.
 
-While AUR submissions are unavailable, use the temporary release-source installer instead. Download it for inspection rather than piping it directly into a shell:
+While AUR submissions are unavailable, install or upgrade directly from the newest published GitHub release with:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install-arch-release.sh
-less install-arch-release.sh
-bash install-arch-release.sh
-rm install-arch-release.sh
+curl -fsSL https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install-arch-release.sh | bash
 ```
 
-It downloads the matching GitHub release archive and mandatory SHA-256 file, verifies the source, builds the stable Arch package with `makepkg`, installs it through pacman, and runs the per-user `thpm install` step. It does not install an untracked Python runtime or replace pacman ownership.
+The installer resolves GitHub's newest published release—including release candidates—then downloads its source archive and mandatory SHA-256 file, verifies the source, builds the stable Arch package with `makepkg`, installs it through pacman, and runs the per-user `thpm install` step. It does not install an untracked Python runtime or replace pacman ownership. To inspect it first, download the same URL to a file before running it; pass an explicit version argument to pin an older release.
 
 To build locally instead, choose either the stable package or the development package; they conflict, so install only one:
 

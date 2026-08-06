@@ -2,7 +2,6 @@
 set -euo pipefail
 
 repository="OldJobobo/thpm"
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 version="${1:-}"
 
 usage() {
@@ -12,7 +11,7 @@ Usage: scripts/install-arch-release.sh [VERSION]
 Download a verified THPM GitHub release source archive, build its Arch package,
 install it through pacman, and complete THPM's per-user setup.
 
-VERSION defaults to the checkout VERSION file or the version published on main.
+VERSION defaults to the newest published GitHub release, including release candidates.
 EOF
 }
 
@@ -31,12 +30,16 @@ for command in curl makepkg sha256sum sudo tar; do
     }
 done
 
-if [[ -z "$version" && -f "$script_dir/../VERSION" ]]; then
-    version="$(<"$script_dir/../VERSION")"
-fi
 if [[ -z "$version" ]]; then
-    version="$(curl --fail --silent --show-error --location \
-        "https://raw.githubusercontent.com/$repository/main/VERSION")"
+    releases="$(curl --fail --silent --show-error --location \
+        --header "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/$repository/releases?per_page=1")"
+    tag="$(printf '%s\n' "$releases" | awk -F '"' '/"tag_name"[[:space:]]*:/{print $4; exit}')"
+    [[ "$tag" == v* ]] || {
+        printf 'Could not determine the latest published THPM release\n' >&2
+        exit 1
+    }
+    version="${tag#v}"
 fi
 version="${version//$'\r'/}"
 version="${version//$'\n'/}"

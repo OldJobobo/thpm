@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0rc18 - 2026-08-06
+
 - Make Cava integration opt-in and complete its lifecycle with safe selector setup/restoration, Cava 0.10.6+ checks, PID-specific `SIGUSR1` reloads, repairable Doctor diagnostics, and transactional `thpm doctor cava --fix` support. Persisted `cava = true` defaults from older releases remain disabled until a successful confirmed setup records new consent.
 - Add bounded private operation journaling and `thpm report [plugin]` JSON support reports with duration evidence, filtered recent outcomes, file metadata, redaction, symlink-safe rotation, and strict size/permission limits.
 - Make Spotify setup self-healing after Spicetify's backup exists: ship and initialize the missing Omarchy companion stylesheet, select `current_theme = omarchy` with `color_scheme = Base`, and preserve existing user-owned styles.

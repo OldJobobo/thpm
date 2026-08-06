@@ -96,7 +96,7 @@ If you use any of these apps, feedback would be especially helpful:
 
 ### Special thanks
 
-Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//directive.
+Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, @signal//directive, @Dead Gamer, and @Ibr.
 
 This remains a release candidate. Please report any issues you find.
 

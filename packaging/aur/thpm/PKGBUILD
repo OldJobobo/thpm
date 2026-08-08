@@ -14,7 +14,7 @@ replaces=('theme-hook-plugin-manager')
 makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 install=thpm.install
 source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('5e90ddfa02cf15dd7133ed03f165f0822b35e3b84e2de086dca03ec4d8e18ad9')
 
 build() {
     cd "$pkgname-$pkgver"

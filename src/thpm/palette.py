@@ -34,7 +34,13 @@ REQUIRED = (
     "bright_magenta",
 )
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
-OPTIONAL_HEX = ("active_border_color",)
+OPTIONAL_HEX = (
+    "active_border_color",
+    "accent",
+    "cursor",
+    "selection_background",
+    "selection_foreground",
+)
 CANONICAL_TO_INTERNAL = {
     "background": "bg",
     "dark_background": "dark_bg",

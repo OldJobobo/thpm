@@ -630,6 +630,96 @@ def _read_pi_theme(path: Path) -> bytes:
         return stream.read()
 
 
+def _obsidian_terminal_data_files(paths: Paths) -> tuple[Path, ...]:
+    candidates: list[Path] = []
+
+    def add(candidate: Path) -> None:
+        expanded = Path(os.path.expandvars(str(candidate))).expanduser()
+        if not expanded.is_absolute():
+            expanded = (Path.cwd() / expanded).resolve()
+        if expanded.is_file() and expanded not in candidates:
+            candidates.append(expanded)
+
+    def add_vault(vault: str | Path) -> None:
+        add(Path(vault) / ".obsidian/plugins/terminal/data.json")
+
+    for variable in ("OBSIDIAN_TERMINAL_DATA_JSON", "OBSIDIAN_TERMINAL_DATA"):
+        for value in os.environ.get(variable, "").split(os.pathsep):
+            if value:
+                add(Path(value))
+    for variable in ("OBSIDIAN_VAULT_PATH", "OBSIDIAN_VAULT"):
+        for value in os.environ.get(variable, "").split(os.pathsep):
+            if value:
+                add_vault(value)
+
+    registries = (
+        paths.config_home / "obsidian/obsidian.json",
+        paths.home / ".config/obsidian/obsidian.json",
+    )
+    for registry in dict.fromkeys(registries):
+        if not registry.is_file() or registry.is_symlink():
+            continue
+        try:
+            document = json.loads(registry.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            continue
+        vaults = document.get("vaults", {}) if isinstance(document, dict) else {}
+        if not isinstance(vaults, dict):
+            continue
+        for entry in vaults.values():
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                add_vault(entry["path"])
+
+    for root_name in ("Documents", "Desktop", "Projects", "Notes", "Vaults"):
+        root = paths.home / root_name
+        if root.is_dir():
+            for candidate in root.glob("*/.obsidian/plugins/terminal/data.json"):
+                add(candidate)
+    return tuple(candidates)
+
+
+def _read_obsidian_terminal_data(path: Path) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"refusing unsafe Obsidian Terminal settings file: {path}")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid Obsidian Terminal settings JSON: {path}") from exc
+    if not isinstance(document, dict):
+        raise TypeError(f"Obsidian Terminal settings root is not an object: {path}")
+    options = document.get("terminalOptions")
+    if options is not None and not isinstance(options, dict):
+        raise TypeError(f"Obsidian Terminal terminalOptions is not an object: {path}")
+    return document
+
+
+def _obsidian_terminal_theme(colors: dict[str, str]) -> dict[str, str]:
+    return {
+        "background": colors["bg"],
+        "foreground": colors["fg"],
+        "cursor": colors.get("cursor", colors.get("accent", colors["bright_fg"])),
+        "cursorAccent": colors["bg"],
+        "selectionBackground": colors.get("selection_background", colors["selection"]),
+        "selectionForeground": colors.get("selection_foreground", colors["bright_fg"]),
+        "black": colors["dark_bg"],
+        "red": colors["red"],
+        "green": colors["green"],
+        "yellow": colors["yellow"],
+        "blue": colors["blue"],
+        "magenta": colors["magenta"],
+        "cyan": colors["cyan"],
+        "white": colors["light_fg"],
+        "brightBlack": colors["muted"],
+        "brightRed": colors["bright_red"],
+        "brightGreen": colors["bright_green"],
+        "brightYellow": colors["bright_yellow"],
+        "brightBlue": colors["bright_blue"],
+        "brightMagenta": colors["bright_magenta"],
+        "brightCyan": colors["bright_cyan"],
+        "brightWhite": colors["bright_fg"],
+    }
+
+
 def inspect_applicability(plugin_id: str, paths: Paths) -> bool:
     if plugin_id == "gtk-css-compat":
         return gtk_requested(paths)
@@ -799,6 +889,18 @@ def inspect_readiness(
                 synchronized = False
             if not synchronized:
                 missing.append("Pi theme synchronized from the current Omarchy pi.json")
+    elif plugin_id == "obsidian-terminal":
+        settings = _obsidian_terminal_data_files(paths)
+        if not settings:
+            missing.append(
+                "Obsidian Terminal plugin data.json (set OBSIDIAN_VAULT_PATH or OBSIDIAN_TERMINAL_DATA_JSON)"
+            )
+        else:
+            for path in settings:
+                try:
+                    _read_obsidian_terminal_data(path)
+                except (TypeError, ValueError) as exc:
+                    missing.append(str(exc))
     elif plugin_id == "cava" and not missing:
         version = installed_cava_version(command_path("cava") or "cava")
         if version is None or version < (0, 10, 6):
@@ -1797,7 +1899,30 @@ def apply(
         "superfile": ("superfile.toml", GENERATED["superfile"]),
     }
 
-    if plugin_id == "zellij":
+    if plugin_id == "obsidian-terminal":
+        settings = _obsidian_terminal_data_files(paths)
+        if not settings:
+            return ApplyResult(
+                plugin_id,
+                "skipped",
+                message="no Obsidian Terminal plugin settings were found",
+            )
+        documents = [(path, _read_obsidian_terminal_data(path)) for path in settings]
+        theme = _obsidian_terminal_theme(
+            load_palette(paths.current_theme / "colors.toml")
+        )
+        for path, document in documents:
+            options = document.setdefault("terminalOptions", {})
+            assert isinstance(options, dict)
+            if options.get("theme") == theme:
+                continue
+            options["theme"] = theme
+            mode = path.stat(follow_symlinks=False).st_mode & 0o777
+            atomic_text(path, json.dumps(document, indent=2) + "\n", mode)
+            changed.append(str(path))
+        if changed:
+            restart_required.append("Obsidian")
+    elif plugin_id == "zellij":
         source = paths.current_theme / "zellij.kdl"
         colors = paths.current_theme / "colors.toml"
         if source.is_file():

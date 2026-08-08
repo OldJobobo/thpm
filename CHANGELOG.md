@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restore the Obsidian Terminal community-plugin integration with vault discovery, validated atomic settings updates, semantic xterm.js colors, preserved unrelated options, and honest Obsidian restart reporting.
+
 ## 1.0.0rc18 - 2026-08-06
 
 - Make Cava integration opt-in and complete its lifecycle with safe selector setup/restoration, Cava 0.10.6+ checks, PID-specific `SIGUSR1` reloads, repairable Doctor diagnostics, and transactional `thpm doctor cava --fix` support. Persisted `cava = true` defaults from older releases remain disabled until a successful confirmed setup records new consent.

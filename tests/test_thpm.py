@@ -158,6 +158,18 @@ class PaletteTests(Sandbox):
             result = palette.load(self.paths.current_theme / "colors.toml")
         self.assertEqual(result["mode"], "dark")
 
+    def test_optional_native_palette_colors_are_retained_for_adapters(self):
+        optional: dict[str, object] = {
+            "accent": "#123456",
+            "cursor": "#234567",
+            "selection_background": "#345678",
+            "selection_foreground": "#456789",
+        }
+        self.assertEqual(
+            {key: palette._validate({**COLORS, **optional})[key] for key in optional},
+            optional,
+        )
+
     def test_uses_omarchy_resolver_as_native_palette_contract(self):
         self.paths.current_theme.mkdir(parents=True)
         colors = self.paths.current_theme / "colors.toml"
@@ -483,8 +495,10 @@ class StateTests(Sandbox):
                 with self.subTest(theme=name, color=color):
                     self.assertGreaterEqual(contrast, 4.5)
 
-    def test_unimplemented_plugins_are_not_exposed(self):
-        self.assertNotIn("obsidian-terminal", {plugin.id for plugin in PLUGINS})
+    def test_obsidian_terminal_plugin_is_exposed_separately_from_native_obsidian(self):
+        plugins = {plugin.id: plugin for plugin in PLUGINS}
+        self.assertIn("obsidian-terminal", plugins)
+        self.assertEqual(plugins["obsidian-terminal"].kind, "action")
 
 
 class ConfigTests(Sandbox):
@@ -556,13 +570,13 @@ class MigrationTests(Sandbox):
         self.assertTrue(updates["vscode-local-compat"])
         self.assertEqual(set(files), {gtk, vscode})
 
-    def test_migration_preserves_hooks_without_a_replacement_adapter(self):
+    def test_migration_replaces_legacy_obsidian_terminal_hook(self):
         self.paths.hook_dir.mkdir(parents=True)
         legacy = self.paths.hook_dir / "40-obsidian-terminal.sh"
         legacy.write_text("legacy integration\n")
         updates, files = inspect(self.paths)
-        self.assertNotIn("obsidian-terminal", updates)
-        self.assertNotIn(legacy, files)
+        self.assertTrue(updates["obsidian-terminal"])
+        self.assertIn(legacy, files)
 
     def test_upgrade_archives_known_install_and_preserves_unknown_files(self):
         launcher = self.paths.home / ".local/bin/thpm"
@@ -3249,6 +3263,67 @@ class CavaTests(Sandbox):
 
 
 class IntegrationTests(Sandbox):
+    def test_obsidian_terminal_updates_discovered_vault_and_preserves_settings(self):
+        self.write_palette()
+        vault = self.paths.home / "Documents/My Vault"
+        settings = vault / ".obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "preferredRenderer": "webgl",
+                    "terminalOptions": {"fontSize": 14, "theme": {"background": "#000000"}},
+                }
+            )
+        )
+        registry = self.paths.config_home / "obsidian/obsidian.json"
+        registry.parent.mkdir(parents=True)
+        registry.write_text(json.dumps({"vaults": {"one": {"path": str(vault)}}}))
+        colors = {
+            **COLORS,
+            "accent": "#abcdef",
+            "cursor": "#fedcba",
+            "selection_background": "#123456",
+            "selection_foreground": "#654321",
+        }
+
+        with patch("thpm.integrations.load_palette", return_value=colors):
+            result = apply("obsidian-terminal", self.paths)
+            unchanged = apply("obsidian-terminal", self.paths)
+
+        document = json.loads(settings.read_text())
+        theme = document["terminalOptions"]["theme"]
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(result.changed, [str(settings)])
+        self.assertEqual(result.restartRequired, ["Obsidian"])
+        self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(document["preferredRenderer"], "webgl")
+        self.assertEqual(document["terminalOptions"]["fontSize"], 14)
+        self.assertEqual(theme["background"], COLORS["bg"])
+        self.assertEqual(theme["foreground"], COLORS["fg"])
+        self.assertEqual(theme["cursor"], "#fedcba")
+        self.assertEqual(theme["selectionBackground"], "#123456")
+        self.assertEqual(theme["selectionForeground"], "#654321")
+        self.assertEqual(theme["brightWhite"], COLORS["bright_fg"])
+
+    def test_obsidian_terminal_readiness_reports_missing_or_invalid_settings(self):
+        ready, missing, warnings = inspect_readiness(
+            "obsidian-terminal", self.paths, which=lambda _command: "/bin/true"
+        )
+        self.assertFalse(ready)
+        self.assertIn("OBSIDIAN_VAULT_PATH", " ".join(missing))
+        self.assertEqual(warnings, [])
+
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("not json\n")
+        with patch.dict(os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}):
+            ready, missing, _warnings = inspect_readiness(
+                "obsidian-terminal", self.paths, which=lambda _command: "/bin/true"
+            )
+        self.assertFalse(ready)
+        self.assertIn("invalid Obsidian Terminal settings JSON", " ".join(missing))
+
     def test_pi_hot_reload_touches_synchronized_theme_without_replacing_it(self):
         content = '{"name":"omarchy-system"}\n'
         source = self.paths.current_theme / "pi.json"

@@ -5055,6 +5055,38 @@ class IntegrationTests(Sandbox):
         self.assertIn("composerRing", document["theme"]["colors"])
         self.assertIn("brightWhite", document["theme"]["darkTerminal"])
 
+    def test_heroic_template_defines_heroic_css_variables(self):
+        template = (Path(__file__).parents[1] / "assets/templates/thpm-heroic.css.tpl").read_text()
+
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            self.assertIn(key, CANONICAL_COLORS)
+            return CANONICAL_COLORS[key]
+
+        rendered = re.sub(r"\{\{ ([a-z_]+) \}\}", replace, template)
+
+        self.assertIn("body.thpm {", rendered)
+        for variable in (
+            "--background",
+            "--background-darker",
+            "--background-lighter",
+            "--body-background",
+            "--navbar-background",
+            "--input-background",
+            "--modal-background",
+            "--text-default",
+            "--text-secondary",
+            "--accent",
+            "--primary",
+            "--primary-button",
+            "--success",
+            "--danger",
+            "--action-icon",
+            "--divider",
+        ):
+            self.assertRegex(rendered, re.compile(rf"^[ \t]*{re.escape(variable)}:", re.MULTILINE))
+        self.assertIn("body {", rendered)
+        self.assertIn("background: var(--body-background)", rendered)
 
 class SourceScriptTests(Sandbox):
     def run_uninstaller(self, root: Path) -> subprocess.CompletedProcess[str]:

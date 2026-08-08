@@ -5130,7 +5130,7 @@ class AuditAndReportTests(Sandbox):
             "journalSchemaVersion": 1,
             "timestamp": "2026-08-06T12:00:00Z",
             "runId": "run-1",
-            "thpmVersion": "1.0.0rc18",
+            "thpmVersion": "1.0.0rc19",
             "operation": "hook-run",
             "plugin": "cava",
             "status": "applied",
@@ -5554,7 +5554,7 @@ class UpdateTests(Sandbox):
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc18")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc19")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)

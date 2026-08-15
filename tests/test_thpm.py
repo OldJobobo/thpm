@@ -5079,6 +5079,7 @@ class IntegrationTests(Sandbox):
             "--accent",
             "--primary",
             "--primary-button",
+            "--secondary",
             "--success",
             "--danger",
             "--action-icon",

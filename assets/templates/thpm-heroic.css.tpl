@@ -40,6 +40,7 @@ body.thpm {
   --primary-hover: {{ bright_blue }};
   --primary-button: var(--accent);
   --secondary-button: {{ cyan }};
+  --secondary: var(--secondary-button);
   --button-stroke: var(--accent);
   --link-highlight: var(--accent);
   --play-button: {{ green }};

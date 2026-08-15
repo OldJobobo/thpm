@@ -178,5 +178,5 @@ def capabilities() -> Capabilities:
 def shell_running() -> bool:
     try:
         return run("shell", "shell", "ping", check=False, timeout=3).returncode == 0
-    except subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         return False

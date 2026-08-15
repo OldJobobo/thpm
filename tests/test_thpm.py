@@ -76,7 +76,7 @@ from thpm.integrations import (
 )
 from thpm.migrate import archive, artifacts, inspect, needs_compat
 from thpm.models import ApplyResult
-from thpm.omarchy import capabilities
+from thpm.omarchy import capabilities, shell_running
 from thpm.omarchy import run as run_omarchy
 from thpm.paths import Paths
 from thpm.presentation import Activity, operation_name, render, reporter
@@ -1317,6 +1317,10 @@ class ServiceTests(Sandbox):
             result = capabilities()
         self.assertTrue(result.available)
         self.assertEqual(result.missing, ())
+
+    def test_shell_running_is_false_when_omarchy_is_missing(self):
+        with patch("thpm.omarchy.run", side_effect=FileNotFoundError("omarchy")):
+            self.assertFalse(shell_running())
 
     def test_omarchy_runner_consumes_events_while_process_is_running(self):
         bin_dir = self.paths.home / "bin"
@@ -4927,7 +4931,11 @@ class IntegrationTests(Sandbox):
         cava_config.parent.mkdir(parents=True)
         cava_config.write_text("[color]\ntheme = 'thpm'\n")
         superfile = apply("superfile", self.paths)
-        with patch("thpm.integrations._reload", return_value=[]):
+        with patch(
+            "thpm.integrations.shutil.which", return_value="/usr/bin/cava"
+        ), patch(
+            "thpm.integrations.installed_cava_version", return_value=(0, 10, 6)
+        ), patch("thpm.integrations._reload", return_value=[]):
             cava = apply("cava", self.paths)
         self.assertEqual((self.paths.config_home / "superfile/theme/thpm.toml").read_text(), "native")
         self.assertEqual((self.paths.config_home / "cava/themes/thpm").read_text(), "native cava")

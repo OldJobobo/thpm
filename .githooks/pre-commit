@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+if [[ "$branch" == 'main' ]]; then
+    cat >&2 <<'EOF'
+Direct commits to main are disabled.
+
+Create an isolated task worktree instead:
+  scripts/agent-worktree.sh create <task-slug>
+
+Do not bypass this guard with --no-verify.
+EOF
+    exit 1
+fi

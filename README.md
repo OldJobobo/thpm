@@ -135,6 +135,15 @@ THPM validates the authored JSON and normalizes its single dark or light theme t
 
 ## Development
 
+All changes use isolated Git worktrees, short-lived branches, and pull requests. Do not develop directly on `main`; start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and the mandatory agent rules in [`AGENTS.md`](AGENTS.md). Enable the committed local guards once per clone, then create a task worktree:
+
+```bash
+scripts/setup-dev.sh
+scripts/agent-worktree.sh create <task-slug>
+```
+
+From inside the task worktree, run the project checks:
+
 ```bash
 python -m unittest discover -s tests -v
 python -m compileall -q src

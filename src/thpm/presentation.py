@@ -319,6 +319,49 @@ def _print_details(console: Console, payload: dict[str, Any], *, verbose: bool) 
             table.add_row(Text("●" if enabled else "○", style="green" if enabled else "grey50"), str(item.get("id", "")), str(item.get("ownership", "")))
         console.print(table)
 
+    checks = payload.get("checks")
+    if isinstance(checks, list) and checks and payload.get("operation") == "doctor":
+        table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
+        table.add_column("Status", width=8)
+        table.add_column("Check", style="bold")
+        table.add_column("Detail")
+        check_styles = {
+            "pass": "green",
+            "warning": "yellow",
+            "error": "bold red",
+            "unknown": "yellow",
+            "skipped": "dim",
+        }
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            status = str(check.get("status", "unknown"))
+            table.add_row(
+                Text(status, style=check_styles.get(status, "white")),
+                str(check.get("id", "")),
+                str(check.get("summary", "")),
+            )
+        console.print(table)
+        repair_plan = payload.get("repairPlan")
+        repair_available = isinstance(repair_plan, list) and bool(repair_plan)
+        if not repair_available:
+            repair_available = any(
+                isinstance(check, dict)
+                and isinstance(check.get("repair"), dict)
+                and bool(check["repair"].get("available"))
+                for check in checks
+            )
+        if repair_available:
+            console.print("[yellow]Repair available:[/] [bold]thpm doctor cava --fix[/]")
+
+    if payload.get("operation") == "report" and payload.get("reportPath"):
+        console.print(
+            f"[green]Report:[/] [bold]{payload['reportPath']}[/]", highlight=False
+        )
+        console.print(
+            "[cyan]Next:[/] Share this JSON file with the THPM maintainer."
+        )
+
     restart_required = payload.get("restartRequired")
     if isinstance(restart_required, list) and restart_required:
         names = ", ".join(str(app) for app in restart_required)

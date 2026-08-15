@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.0.0rc19 - 2026-08-07
+
+- Restore the Obsidian Terminal community-plugin integration with vault discovery, validated atomic settings updates, semantic xterm.js colors, preserved unrelated options, and honest Obsidian restart reporting.
+
+## 1.0.0rc18 - 2026-08-06
+
+- Make Cava integration opt-in and complete its lifecycle with safe selector setup/restoration, Cava 0.10.6+ checks, PID-specific `SIGUSR1` reloads, repairable Doctor diagnostics, and transactional `thpm doctor cava --fix` support. Persisted `cava = true` defaults from older releases remain disabled until a successful confirmed setup records new consent.
+- Add bounded private operation journaling and `thpm report [plugin]` JSON support reports with duration evidence, filtered recent outcomes, file metadata, redaction, symlink-safe rotation, and strict size/permission limits.
+- Make Spotify setup self-healing after Spicetify's backup exists: ship and initialize the missing Omarchy companion stylesheet, select `current_theme = omarchy` with `color_scheme = Base`, and preserve existing user-owned styles.
+- Add an opt-in Pi live-reload compatibility integration that safely emits a metadata event only when the installed `omarchy-system` theme matches Omarchy's current native output, without claiming sessions using other theme overrides repainted.
+
 ## 1.0.0rc17 - 2026-08-05
 
 - Replace the obsolete compact Discord variable fallback with an Omarchy-colored Midnight surface, hosted from THPM's own MIT-compliant vendored base and rendered from the complete semantic palette.

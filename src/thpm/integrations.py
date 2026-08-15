@@ -12,6 +12,30 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from .cava import (
+    CavaError,
+)
+from .cava import (
+    default_config_path as cava_config_path,
+)
+from .cava import (
+    installed_version as installed_cava_version,
+)
+from .cava import (
+    parse_selector as parse_cava_selector,
+)
+from .cava import (
+    reload_matching_processes as reload_cava_processes,
+)
+from .cava import (
+    safe_config_target as safe_cava_config_target,
+)
+from .cava import (
+    theme_source as cava_theme_source,
+)
+from .cava import (
+    theme_target as cava_theme_target,
+)
 from .compat import (
     apply_gtk,
     apply_vscode_local,
@@ -24,6 +48,7 @@ from .models import ApplyResult
 from .palette import load as load_palette
 from .paths import Paths
 from .registry import BY_ID, PLUGINS
+from .resources import asset as packaged_asset
 from .zed import ZedThemeError
 from .zed import legacy_target as zed_legacy_target
 from .zed import normalized as normalized_zed_theme
@@ -587,6 +612,114 @@ def _browser_default_profile(base: Path) -> str:
     return ""
 
 
+def _pi_theme_paths(paths: Paths) -> tuple[Path, Path]:
+    # Match Omarchy's native omarchy-theme-set-pi source and destination. Pi
+    # config-dir overrides are outside that native synchronization contract.
+    return (
+        paths.current_theme / "pi.json",
+        paths.home / ".pi/agent/themes/omarchy-system.json",
+    )
+
+
+def _read_pi_theme(path: Path) -> bytes:
+    # Reading a stale target must not update atime and accidentally trigger the
+    # same directory watcher this adapter is deciding whether it is safe to wake.
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NOATIME
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as stream:
+        return stream.read()
+
+
+def _obsidian_terminal_data_files(paths: Paths) -> tuple[Path, ...]:
+    candidates: list[Path] = []
+
+    def add(candidate: Path) -> None:
+        expanded = Path(os.path.expandvars(str(candidate))).expanduser()
+        if not expanded.is_absolute():
+            expanded = (Path.cwd() / expanded).resolve()
+        if expanded.is_file() and expanded not in candidates:
+            candidates.append(expanded)
+
+    def add_vault(vault: str | Path) -> None:
+        add(Path(vault) / ".obsidian/plugins/terminal/data.json")
+
+    for variable in ("OBSIDIAN_TERMINAL_DATA_JSON", "OBSIDIAN_TERMINAL_DATA"):
+        for value in os.environ.get(variable, "").split(os.pathsep):
+            if value:
+                add(Path(value))
+    for variable in ("OBSIDIAN_VAULT_PATH", "OBSIDIAN_VAULT"):
+        for value in os.environ.get(variable, "").split(os.pathsep):
+            if value:
+                add_vault(value)
+
+    registries = (
+        paths.config_home / "obsidian/obsidian.json",
+        paths.home / ".config/obsidian/obsidian.json",
+    )
+    for registry in dict.fromkeys(registries):
+        if not registry.is_file() or registry.is_symlink():
+            continue
+        try:
+            document = json.loads(registry.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            continue
+        vaults = document.get("vaults", {}) if isinstance(document, dict) else {}
+        if not isinstance(vaults, dict):
+            continue
+        for entry in vaults.values():
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                add_vault(entry["path"])
+
+    for root_name in ("Documents", "Desktop", "Projects", "Notes", "Vaults"):
+        root = paths.home / root_name
+        if root.is_dir():
+            for candidate in root.glob("*/.obsidian/plugins/terminal/data.json"):
+                add(candidate)
+    return tuple(candidates)
+
+
+def _read_obsidian_terminal_data(path: Path) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"refusing unsafe Obsidian Terminal settings file: {path}")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid Obsidian Terminal settings JSON: {path}") from exc
+    if not isinstance(document, dict):
+        raise TypeError(f"Obsidian Terminal settings root is not an object: {path}")
+    options = document.get("terminalOptions")
+    if options is not None and not isinstance(options, dict):
+        raise TypeError(f"Obsidian Terminal terminalOptions is not an object: {path}")
+    return document
+
+
+def _obsidian_terminal_theme(colors: dict[str, str]) -> dict[str, str]:
+    return {
+        "background": colors["bg"],
+        "foreground": colors["fg"],
+        "cursor": colors.get("cursor", colors.get("accent", colors["bright_fg"])),
+        "cursorAccent": colors["bg"],
+        "selectionBackground": colors.get("selection_background", colors["selection"]),
+        "selectionForeground": colors.get("selection_foreground", colors["bright_fg"]),
+        "black": colors["dark_bg"],
+        "red": colors["red"],
+        "green": colors["green"],
+        "yellow": colors["yellow"],
+        "blue": colors["blue"],
+        "magenta": colors["magenta"],
+        "cyan": colors["cyan"],
+        "white": colors["light_fg"],
+        "brightBlack": colors["muted"],
+        "brightRed": colors["bright_red"],
+        "brightGreen": colors["bright_green"],
+        "brightYellow": colors["bright_yellow"],
+        "brightBlue": colors["bright_blue"],
+        "brightMagenta": colors["bright_magenta"],
+        "brightCyan": colors["bright_cyan"],
+        "brightWhite": colors["bright_fg"],
+    }
+
+
 def inspect_applicability(plugin_id: str, paths: Paths) -> bool:
     if plugin_id == "gtk-css-compat":
         return gtk_requested(paths)
@@ -606,6 +739,68 @@ def _spotify_prefs_version(path: Path) -> str:
     except (OSError, UnicodeError):
         pass
     return ""
+
+
+def _spotify_stylesheet(paths: Paths) -> Path:
+    return paths.config_home / "spicetify/Themes/omarchy/user.css"
+
+
+def _initialize_spotify_stylesheet(paths: Paths) -> Path | None:
+    target = _spotify_stylesheet(paths)
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        raise RuntimeError(f"spotify: refusing unsafe stylesheet target: {target}")
+    if target.is_file():
+        return None
+    source = packaged_asset("spicetify", "omarchy-user.css")
+    if not source.is_file() or source.is_symlink():
+        raise RuntimeError("spotify: packaged Omarchy stylesheet is unavailable")
+    atomic_copy(source, target, 0o644)
+    return target
+
+
+def _spotify_theme_selection(paths: Paths) -> tuple[str, str]:
+    config = paths.config_home / "spicetify/config-xpui.ini"
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        with config.open(encoding="utf-8") as stream:
+            parser.read_file(stream)
+    except (configparser.Error, OSError, UnicodeError):
+        return "", ""
+    return (
+        parser.get("Setting", "current_theme", fallback="").strip(),
+        parser.get("Setting", "color_scheme", fallback="").strip(),
+    )
+
+
+def _select_spotify_theme(paths: Paths) -> list[str]:
+    config = paths.config_home / "spicetify/config-xpui.ini"
+    if not config.is_file():
+        return []
+    current_theme, color_scheme = _spotify_theme_selection(paths)
+    if current_theme == "omarchy" and color_scheme == "Base":
+        return []
+    command = [
+        "spicetify",
+        "config",
+        "current_theme",
+        "omarchy",
+        "color_scheme",
+        "Base",
+    ]
+    try:
+        completed = subprocess.run(
+            command, text=True, capture_output=True, check=False, timeout=5
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("spotify: theme selection timed out") from exc
+    if completed.returncode != 0:
+        detail = (
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or f"exit {completed.returncode}"
+        )
+        raise RuntimeError(f"spotify: theme selection failed: {detail}")
+    return [" ".join(command)]
 
 
 def _spicetify_missing(paths: Paths) -> list[str]:
@@ -635,14 +830,9 @@ def _spicetify_missing(paths: Paths) -> list[str]:
                 f"(current backup is {backup_version}; reinstall Spotify, then run "
                 "`spicetify backup apply`)"
             )
-    if parser.get("Setting", "current_theme", fallback="").strip() != "omarchy":
-        missing.append(
-            "Spicetify current_theme=omarchy "
-            "(run `spicetify config current_theme omarchy color_scheme Base`)"
-        )
-    stylesheet = paths.config_home / "spicetify/Themes/omarchy/user.css"
-    if not stylesheet.is_file():
-        missing.append(f"Omarchy Spicetify stylesheet at {stylesheet}")
+    stylesheet = _spotify_stylesheet(paths)
+    if stylesheet.is_symlink() or (stylesheet.exists() and not stylesheet.is_file()):
+        missing.append(f"safe regular Omarchy Spicetify stylesheet target at {stylesheet}")
     return missing
 
 
@@ -684,8 +874,49 @@ def inspect_readiness(
     elif plugin_id == "vscode-local-compat":
         ready, missing = vscode_readiness(paths)
         return ready, missing, warnings
+    elif plugin_id == "pi-hot-reload":
+        source, target = _pi_theme_paths(paths)
+        source_ready = source.is_file() and not source.is_symlink()
+        target_ready = target.is_file() and not target.is_symlink()
+        if not source_ready:
+            missing.append(f"regular current Omarchy Pi theme source at {source}")
+        if not target_ready:
+            missing.append(f"regular Omarchy-generated Pi theme at {target}")
+        if source_ready and target_ready:
+            try:
+                synchronized = _read_pi_theme(source) == _read_pi_theme(target)
+            except OSError:
+                synchronized = False
+            if not synchronized:
+                missing.append("Pi theme synchronized from the current Omarchy pi.json")
+    elif plugin_id == "obsidian-terminal":
+        settings = _obsidian_terminal_data_files(paths)
+        if not settings:
+            missing.append(
+                "Obsidian Terminal plugin data.json (set OBSIDIAN_VAULT_PATH or OBSIDIAN_TERMINAL_DATA_JSON)"
+            )
+        else:
+            for path in settings:
+                try:
+                    _read_obsidian_terminal_data(path)
+                except (TypeError, ValueError) as exc:
+                    missing.append(str(exc))
+    elif plugin_id == "cava" and not missing:
+        version = installed_cava_version(command_path("cava") or "cava")
+        if version is None or version < (0, 10, 6):
+            missing.append("Cava 0.10.6 or newer with theme-file support")
     elif plugin_id == "spotify" and not missing:
         missing.extend(_spicetify_missing(paths))
+        stylesheet = _spotify_stylesheet(paths)
+        if not missing and not stylesheet.is_file():
+            warnings.append(
+                f"THPM will initialize the missing Omarchy Spicetify stylesheet at {stylesheet}"
+            )
+        current_theme, color_scheme = _spotify_theme_selection(paths)
+        if not missing and (current_theme != "omarchy" or color_scheme != "Base"):
+            warnings.append(
+                "THPM will select Spicetify current_theme=omarchy and color_scheme=Base"
+            )
     elif plugin_id == "hermes" and (
         (paths.config_home / "Hermes").is_dir()
         or command_path("hermes-desktop-remote")
@@ -1540,17 +1771,15 @@ def _reload(
     commands = {
         "spotify": ["spicetify", "refresh"],
         "swaync": ["swaync-client", "--reload-css"],
-        "cava": ["pkill", "-USR2", "cava"],
     }
     command = commands.get(plugin_id)
     if not command:
         return [], []
-    if plugin_id in {"swaync", "cava"}:
+    if plugin_id == "swaync":
         if not shutil.which("pgrep"):
             return [], []
-        process = "swaync" if plugin_id == "swaync" else "cava"
         running = subprocess.run(
-            ["pgrep", "-x", process],
+            ["pgrep", "-x", "swaync"],
             text=True,
             capture_output=True,
             check=False,
@@ -1618,6 +1847,7 @@ def apply(
     *,
     automatic_restarts: bool = True,
     force_reload: bool = False,
+    defer_reload: bool = False,
 ) -> ApplyResult:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
@@ -1625,20 +1855,74 @@ def apply(
         return apply_gtk(paths, force_restart=force_reload)
     if plugin_id == "vscode-local-compat":
         return apply_vscode_local(paths)
+    if plugin_id == "pi-hot-reload":
+        source, target = _pi_theme_paths(paths)
+        for label, path in (("source", source), ("target", target)):
+            if path.is_symlink():
+                raise RuntimeError(f"pi-hot-reload: refusing symlink theme {label}: {path}")
+        if not source.is_file() or not target.is_file():
+            return ApplyResult(
+                plugin_id,
+                "skipped",
+                message="current native Pi theme source or installed theme is missing",
+            )
+        metadata = target.stat(follow_symlinks=False)
+        if _read_pi_theme(source) != _read_pi_theme(target):
+            return ApplyResult(
+                plugin_id,
+                "skipped",
+                message="native Pi theme synchronization is stale; reload event not emitted",
+            )
+        mtime_ns = max(time.time_ns(), metadata.st_mtime_ns + 1)
+        os.utime(
+            target,
+            ns=(metadata.st_atime_ns, mtime_ns),
+            follow_symlinks=False,
+        )
+        return ApplyResult(
+            plugin_id,
+            "applied",
+            changed=[str(target)],
+            actions=[f"updated mtime for {target}"],
+            message="Pi omarchy-system theme change event emitted",
+        )
     if plugin_id == "zed-extra":
         return _apply_zed_asset(paths)
     paths.current_theme.mkdir(parents=True, exist_ok=True)
     changed: list[str] = []
     warnings: list[str] = []
     restart_required: list[str] = []
+    setup_actions: list[str] = []
     home = paths.home
     targets = _standard_output_targets(paths)
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),
-        "cava": ("cava_theme", GENERATED["cava"]),
     }
 
-    if plugin_id == "zellij":
+    if plugin_id == "obsidian-terminal":
+        settings = _obsidian_terminal_data_files(paths)
+        if not settings:
+            return ApplyResult(
+                plugin_id,
+                "skipped",
+                message="no Obsidian Terminal plugin settings were found",
+            )
+        documents = [(path, _read_obsidian_terminal_data(path)) for path in settings]
+        theme = _obsidian_terminal_theme(
+            load_palette(paths.current_theme / "colors.toml")
+        )
+        for path, document in documents:
+            options = document.setdefault("terminalOptions", {})
+            assert isinstance(options, dict)
+            if options.get("theme") == theme:
+                continue
+            options["theme"] = theme
+            mode = path.stat(follow_symlinks=False).st_mode & 0o777
+            atomic_text(path, json.dumps(document, indent=2) + "\n", mode)
+            changed.append(str(path))
+        if changed:
+            restart_required.append("Obsidian")
+    elif plugin_id == "zellij":
         source = paths.current_theme / "zellij.kdl"
         colors = paths.current_theme / "colors.toml"
         if source.is_file():
@@ -1660,6 +1944,67 @@ def apply(
         )
         if config_changed:
             changed.append(str(config_file))
+    elif plugin_id == "cava":
+        command = shutil.which("cava")
+        version = installed_cava_version(command or "cava") if command else None
+        if version is None or version < (0, 10, 6):
+            return ApplyResult(
+                plugin_id,
+                "failed",
+                message="Cava 0.10.6 or newer with theme-file support is required",
+            )
+        try:
+            config = safe_cava_config_target(paths, cava_config_path(paths))
+            selected = (
+                parse_cava_selector(config.read_text(encoding="utf-8")).value
+                if config.is_file()
+                else None
+            )
+        except (OSError, UnicodeError, CavaError) as exc:
+            return ApplyResult(
+                plugin_id,
+                "failed",
+                message=f"Cava config is not safely usable: {exc}",
+                warnings=["run `thpm doctor cava` for repair guidance"],
+            )
+        if selected != "thpm":
+            return ApplyResult(
+                plugin_id,
+                "failed",
+                message=(
+                    f"Cava selects '{selected or 'none'}', not THPM's generated theme"
+                ),
+                warnings=["run `thpm doctor cava --fix` to select the managed theme"],
+            )
+        source = cava_theme_source(paths)
+        if source is None:
+            return ApplyResult(
+                plugin_id,
+                "failed",
+                message="Cava expected a regular rendered theme output",
+            )
+        if source.name == GENERATED["cava"]:
+            try:
+                _ensure_generated_output_is_rendered(source)
+            except RuntimeError as exc:
+                return ApplyResult(plugin_id, "failed", message=str(exc))
+        target = cava_theme_target(paths)
+        if _install_optional_asset(
+            paths,
+            _standard_output_state_key(plugin_id),
+            source,
+            target,
+            legacy_owned=_matches_sources(
+                target, _current_plugin_sources(paths, plugin_id)
+            ),
+        ):
+            changed.append(str(target))
+        actions: list[str] = []
+        if (changed or force_reload) and not defer_reload:
+            actions, reload_restarts, reload_warnings = reload_cava_processes(paths)
+            warnings.extend(reload_warnings)
+            restart_required.extend(reload_restarts)
+        return _result(plugin_id, changed, actions, warnings, restart_required)
     elif plugin_id in targets:
         source_names = candidates.get(plugin_id, (GENERATED[plugin_id],))
         source = next(
@@ -1675,6 +2020,10 @@ def apply(
         if source.name in set(GENERATED.values()):
             _ensure_generated_output_is_rendered(source)
         target = targets[plugin_id]
+        if plugin_id == "spotify":
+            initialized = _initialize_spotify_stylesheet(paths)
+            if initialized is not None:
+                changed.append(str(initialized))
         legacy = _legacy_standard_output_targets(paths).get(plugin_id)
         legacy_key = f"generated-{plugin_id}"
         legacy_state, _backup = _asset_state_paths(paths, legacy_key)
@@ -1699,6 +2048,19 @@ def apply(
             ),
         ):
             changed.append(str(target))
+        if plugin_id == "spotify":
+            try:
+                setup_actions.extend(_select_spotify_theme(paths))
+            except RuntimeError as exc:
+                raise ApplyFailure(
+                    str(exc),
+                    changed=changed,
+                    actions=setup_actions,
+                    warnings=warnings,
+                    restart_required=restart_required,
+                ) from exc
+            if setup_actions:
+                changed.append(str(paths.config_home / "spicetify/config-xpui.ini"))
         if plugin_id == "nwg-dock" and (changed or force_reload):
             restart_required.append("nwg-dock-hyprland")
     elif plugin_id in OPTIONAL_ASSET_PLUGINS:
@@ -1799,20 +2161,27 @@ def apply(
             else ([], [])
         )
         if isinstance(reload_result, tuple):
-            actions, reload_restarts = reload_result
+            reload_actions, reload_restarts = reload_result
         else:  # compatibility for injected adapters using the former return contract
-            actions, reload_restarts = reload_result, []
+            reload_actions, reload_restarts = reload_result, []
+        actions = [*setup_actions, *reload_actions]
         restart_required.extend(reload_restarts)
     except ApplyFailure as exc:
         raise ApplyFailure(
             str(exc),
             changed=changed,
-            actions=exc.actions,
+            actions=[*setup_actions, *exc.actions],
             warnings=[*warnings, *exc.warnings],
             restart_required=exc.restart_required,
         ) from exc
     except RuntimeError as exc:
-        raise ApplyFailure(str(exc), changed=changed, warnings=warnings) from exc
+        raise ApplyFailure(
+            str(exc),
+            changed=changed,
+            actions=setup_actions,
+            warnings=warnings,
+            restart_required=restart_required,
+        ) from exc
     return _result(plugin_id, changed, actions, warnings, restart_required)
 
 
@@ -1832,6 +2201,7 @@ def apply_enabled(
     if events is not None:
         events({"type": "integrations_started", "total": total})
     for current, plugin in enumerate(plugins, start=1):
+        started_ns = time.monotonic_ns()
         if events is not None:
             events(
                 {
@@ -1843,12 +2213,15 @@ def apply_enabled(
             )
         ready, missing, readiness_warnings = inspect_readiness(plugin.id, paths)
         if not ready:
+            status = "failed" if plugin.id == "cava" else "skipped"
             result = ApplyResult(
                 plugin.id,
-                "skipped",
+                status,
                 message="missing prerequisites: " + ", ".join(missing),
                 warnings=readiness_warnings,
             )
+            if status == "failed":
+                errors.append({"plugin": plugin.id, "message": result.message})
         else:
             try:
                 result = apply(
@@ -1876,6 +2249,9 @@ def apply_enabled(
         ):
             errors.append({"plugin": plugin.id, "message": result.message})
         result_payload = result.json()
+        result_payload["durationMs"] = max(
+            0, (time.monotonic_ns() - started_ns) // 1_000_000
+        )
         results.append(result_payload)
         for warning in result.warnings:
             warnings.append({"plugin": plugin.id, "message": warning})
@@ -1890,6 +2266,7 @@ def apply_enabled(
                     "total": total,
                     "status": result.status,
                     "message": result.message,
+                    "durationMs": result_payload["durationMs"],
                 }
             )
     counts = {

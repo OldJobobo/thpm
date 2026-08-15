@@ -5,6 +5,7 @@ from .models import Plugin
 PLUGINS: tuple[Plugin, ...] = (
     Plugin("gtk-css-compat", "GTK theme CSS compatibility", "Compatibility", "Deploy theme-provided GTK CSS not yet handled by Omarchy.", "action", theme_assets=("gtk.css",)),
     Plugin("vscode-local-compat", "Local VS Code theme compatibility", "Compatibility", "Install validated theme-bundled local editor themes.", "action"),
+    Plugin("pi-hot-reload", "Pi live theme reload", "Compatibility", "Emit a reload event for Pi sessions using Omarchy's generated theme.", "action", ("pi",), default_enabled=False),
     Plugin("fish", "Fish", "Terminal", "Synchronize Fish shell colors.", "hybrid", ("fish",), templates=("thpm-fish.fish.tpl",)),
     Plugin("fzf", "fzf", "Terminal", "Provide an Omarchy-colored fzf palette.", "hybrid", ("fzf",), templates=("thpm-fzf.fish.tpl",)),
     Plugin("branding", "Branding extras", "Desktop", "Synchronize optional branding text and restore prior defaults when absent.", "action", theme_assets=("about.txt", "screensaver.txt"), default_enabled=False),
@@ -14,10 +15,11 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("spotify", "Spotify / Spicetify", "Media", "Update Spicetify colors and apply them.", "hybrid", ("spicetify",), templates=("thpm-spicetify.ini.tpl",)),
     Plugin("superfile", "Superfile", "Terminal", "Install a semantic Superfile theme.", "hybrid", ("spf",), theme_assets=("superfile.toml",), templates=("thpm-superfile.toml.tpl",)),
     Plugin("zellij", "Zellij", "Terminal", "Generate Zellij colors from the active palette, preferring an authored zellij.kdl override.", "apply", ("zellij",), theme_assets=("zellij.kdl",), default_enabled=False),
+    Plugin("obsidian-terminal", "Obsidian Terminal", "Editors", "Synchronize the Obsidian Terminal community plugin's xterm.js palette.", "action"),
     Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Install dock colors; restart the dock to apply them.", "hybrid", ("nwg-dock-hyprland",), templates=("thpm-nwg-dock.css.tpl",)),
     Plugin("zed-extra", "Zed authored theme", "Editors", "Install and select a validated zed.json or aether.zed.json override as the stable THPM Current theme.", "apply", ("zeditor",), theme_assets=("zed.json", "aether.zed.json"), default_enabled=False),
     Plugin("swaync", "SwayNC", "Desktop", "Install optional SwayNC colors, restore prior defaults when absent, and reload.", "apply", ("swaync-client",), theme_assets=("colors.css",)),
-    Plugin("cava", "Cava", "Media", "Install and reload a Cava gradient.", "hybrid", ("cava",), theme_assets=("cava_theme",), templates=("thpm-cava.ini.tpl",)),
+    Plugin("cava", "Cava", "Media", "Install, select, and safely reload a Cava gradient.", "hybrid", ("cava",), theme_assets=("cava_theme",), templates=("thpm-cava.ini.tpl",), default_enabled=False, confirmation=True),
     Plugin("firefox", "Firefox", "Browsers", "Manage Firefox userChrome imports and generated CSS.", "hybrid", ("firefox",), theme_assets=("firefox.css",), templates=("thpm-firefox.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("zen", "Zen Browser", "Browsers", "Manage Zen userChrome imports and generated CSS.", "hybrid", ("zen-browser",), theme_assets=("zen.css",), templates=("thpm-zen.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("hermes", "Hermes", "Editors", "Generate the Hermes Omarchy theme descriptor.", "hybrid", ("Hermes",), templates=("thpm-hermes.json.tpl",)),
@@ -32,7 +34,7 @@ NATIVE: tuple[Plugin, ...] = (
     Plugin("native-tmux", "tmux synchronization", "Native", "Owned by Omarchy 4.", "action", native=True),
     Plugin("native-gnome", "GNOME mode and icons", "Native", "Omarchy owns mode and icons; THPM covers optional theme GTK CSS.", "action", native=True),
     Plugin("native-vscode", "VS Code and Cursor", "Native", "Omarchy owns Marketplace and generated themes; THPM covers validated local bundles.", "action", native=True),
-    Plugin("native-obsidian", "Obsidian theme", "Native", "Owned by Omarchy 4.", "action", native=True),
+    Plugin("native-obsidian", "Obsidian theme", "Native", "Omarchy owns the application theme; THPM covers the separate Terminal community plugin palette.", "action", native=True),
     Plugin("native-keyboard", "Keyboard theming", "Native", "Owned by Omarchy 4.", "action", native=True),
 )
 

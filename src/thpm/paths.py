@@ -59,6 +59,22 @@ class Paths:
         return self.thpm_state_dir / "managed-assets"
 
     @property
+    def operation_log(self) -> Path:
+        return self.thpm_state_dir / "logs/operations.jsonl"
+
+    @property
+    def audit_lock_file(self) -> Path:
+        return self.thpm_state_dir / "logs/.lock"
+
+    @property
+    def report_dir(self) -> Path:
+        return self.thpm_state_dir / "reports"
+
+    @property
+    def cava_opt_in_marker(self) -> Path:
+        return self.thpm_state_dir / "migrations/cava-opt-in-v1"
+
+    @property
     def zed_settings_backup_file(self) -> Path:
         return self.thpm_state_dir / "zed-settings.backup.json"
 

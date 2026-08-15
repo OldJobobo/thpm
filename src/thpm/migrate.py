@@ -8,7 +8,7 @@ from .config import claims_current_format
 from .paths import Paths
 from .registry import BY_ID
 
-LEGACY_NAMES = {"fish", "fzf", "branding", "discord", "discord-system24", "gtk", "qt6ct", "spotify", "superfile", "tmux", "vicinae", "zellij", "typora", "nwg-dock-hyprland", "zed", "swaync", "foot-live-colors", "cursor", "vscode", "windsurf", "cava", "firefox", "hermes", "qutebrowser", "steam", "zen", "cliamp", "heroic"}
+LEGACY_NAMES = {"fish", "fzf", "branding", "discord", "discord-system24", "gtk", "qt6ct", "spotify", "superfile", "tmux", "vicinae", "zellij", "typora", "nwg-dock-hyprland", "zed", "swaync", "foot-live-colors", "cursor", "vscode", "windsurf", "obsidian-terminal", "cava", "firefox", "hermes", "qutebrowser", "steam", "zen", "cliamp", "heroic"}
 MAPPING = {
     "gtk": "gtk-css-compat",
     "vscode": "vscode-local-compat",

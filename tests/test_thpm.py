@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import io
 import json
 import os
+import platform
 import re
+import signal
 import subprocess
 import tarfile
 import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import call, patch
 
@@ -20,6 +24,43 @@ from textual.widgets import Button, Link
 
 from thpm import palette, ui
 from thpm import update as updater
+from thpm.audit import (
+    append_entries,
+    entries_from_payload,
+    recent_entries,
+    record_payload,
+    sanitize,
+)
+from thpm.cava import (
+    CavaError,
+)
+from thpm.cava import (
+    configure_selector as configure_cava_selector,
+)
+from thpm.cava import (
+    diagnose as diagnose_cava,
+)
+from thpm.cava import (
+    discover_processes as discover_cava_processes,
+)
+from thpm.cava import (
+    parse_selector as parse_cava_selector,
+)
+from thpm.cava import (
+    parse_version as parse_cava_version,
+)
+from thpm.cava import (
+    reload_matching_processes as reload_cava_processes,
+)
+from thpm.cava import (
+    restore_selector as restore_cava_selector,
+)
+from thpm.cava import (
+    restore_selector_text as restore_cava_selector_text,
+)
+from thpm.cava import (
+    set_selector as set_cava_selector,
+)
 from thpm.cli import _confirm, main
 from thpm.config import ConfigError, Preferences
 from thpm.config import load as load_config
@@ -40,8 +81,15 @@ from thpm.omarchy import run as run_omarchy
 from thpm.paths import Paths
 from thpm.presentation import Activity, operation_name, render, reporter
 from thpm.registry import PLUGINS
+from thpm.report import MAX_REPORT_BYTES, build_report, write_report
 from thpm.service import Service
-from thpm.state import StateError, load, save
+from thpm.state import (
+    StateError,
+    cava_opt_in_completed,
+    complete_cava_opt_in,
+    load,
+    save,
+)
 from thpm.templates import reconcile
 from thpm.tui import ThpmTui, omarchy_theme
 from thpm.zed import (
@@ -109,6 +157,18 @@ class PaletteTests(Sandbox):
         with patch("thpm.palette.shutil.which", return_value=None):
             result = palette.load(self.paths.current_theme / "colors.toml")
         self.assertEqual(result["mode"], "dark")
+
+    def test_optional_native_palette_colors_are_retained_for_adapters(self):
+        optional: dict[str, object] = {
+            "accent": "#123456",
+            "cursor": "#234567",
+            "selection_background": "#345678",
+            "selection_foreground": "#456789",
+        }
+        self.assertEqual(
+            {key: palette._validate({**COLORS, **optional})[key] for key in optional},
+            optional,
+        )
 
     def test_uses_omarchy_resolver_as_native_palette_contract(self):
         self.paths.current_theme.mkdir(parents=True)
@@ -219,6 +279,81 @@ class StateTests(Sandbox):
         save(self.paths, state)
         self.assertTrue(load(self.paths)["firefox"])
 
+    def test_legacy_saved_cava_true_requires_confirmed_opt_in_marker(self):
+        state = load(self.paths)
+        state["cava"] = True
+        save(self.paths, state)
+
+        self.assertFalse(load(self.paths)["cava"])
+        self.assertFalse(cava_opt_in_completed(self.paths))
+        complete_cava_opt_in(self.paths)
+        self.assertTrue(load(self.paths)["cava"])
+        self.assertEqual(self.paths.cava_opt_in_marker.stat().st_mode & 0o777, 0o600)
+
+    def test_invalid_or_symlinked_cava_opt_in_marker_does_not_grant_consent(self):
+        state = load(self.paths)
+        state["cava"] = True
+        save(self.paths, state)
+        marker = self.paths.cava_opt_in_marker
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("invalid\n")
+        self.assertFalse(load(self.paths)["cava"])
+        marker.unlink()
+        target = self.paths.home / "not-consent"
+        target.write_text("version = 1\n")
+        marker.symlink_to(target)
+        self.assertFalse(load(self.paths)["cava"])
+
+    def test_legacy_cava_true_is_disabled_for_hooks_and_reconcile(self):
+        state = load(self.paths)
+        state["cava"] = True
+        save(self.paths, state)
+        captured = {}
+
+        def inspect_enabled(_paths, enabled, **_kwargs):
+            captured.update(enabled)
+            return {
+                "results": [],
+                "counts": {"applied": 0, "unchanged": 0, "skipped": 0, "failed": 0},
+                "changed": [],
+                "actions": [],
+                "restartRequired": [],
+                "errors": [],
+                "warnings": [],
+            }
+
+        with patch("thpm.service.apply_enabled", side_effect=inspect_enabled):
+            Service(self.paths).hook_run("theme-set")
+        self.assertFalse(captured["cava"])
+
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            Service(self.paths).reconcile()
+        self.assertIn("cava = false", self.paths.state_file.read_text())
+        self.assertFalse(self.paths.cava_opt_in_marker.exists())
+
+    def test_install_does_not_migrate_legacy_cava_into_unconfirmed_enablement(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service.capabilities"
+        ) as caps, patch(
+            "thpm.service.inspect_legacy", return_value=({"cava": True}, [])
+        ), patch(
+            "thpm.service.needs_compat", return_value=False
+        ), patch(
+            "thpm.service.archive_legacy", return_value=None
+        ), patch(
+            "thpm.service._refresh_templates",
+            return_value=({"refreshed": False, "pending": False}, []),
+        ):
+            caps.return_value.available = True
+            caps.return_value.missing = ()
+            result = Service(self.paths).install(with_ui=False)
+        self.assertTrue(result["ok"])
+        self.assertFalse(load(self.paths)["cava"])
+        self.assertIn("cava = false", self.paths.state_file.read_text())
+        self.assertFalse(self.paths.cava_opt_in_marker.exists())
+
     def test_reconcile_only_removes_owned_templates(self):
         foreign = self.paths.themed_dir / "mine.tpl"
         foreign.parent.mkdir(parents=True)
@@ -241,7 +376,19 @@ class StateTests(Sandbox):
 
     def test_sensitive_plugins_are_opt_in_by_default(self):
         enabled = load(self.paths)
-        self.assertTrue(all(not enabled[plugin_id] for plugin_id in ("firefox", "zen", "steam", "zed-extra")))
+        self.assertTrue(
+            all(
+                not enabled[plugin_id]
+                for plugin_id in (
+                    "firefox",
+                    "zen",
+                    "steam",
+                    "zed-extra",
+                    "pi-hot-reload",
+                    "cava",
+                )
+            )
+        )
         self.assertTrue(enabled["gtk-css-compat"])
         self.assertTrue(enabled["vscode-local-compat"])
 
@@ -348,8 +495,10 @@ class StateTests(Sandbox):
                 with self.subTest(theme=name, color=color):
                     self.assertGreaterEqual(contrast, 4.5)
 
-    def test_unimplemented_plugins_are_not_exposed(self):
-        self.assertNotIn("obsidian-terminal", {plugin.id for plugin in PLUGINS})
+    def test_obsidian_terminal_plugin_is_exposed_separately_from_native_obsidian(self):
+        plugins = {plugin.id: plugin for plugin in PLUGINS}
+        self.assertIn("obsidian-terminal", plugins)
+        self.assertEqual(plugins["obsidian-terminal"].kind, "action")
 
 
 class ConfigTests(Sandbox):
@@ -421,13 +570,13 @@ class MigrationTests(Sandbox):
         self.assertTrue(updates["vscode-local-compat"])
         self.assertEqual(set(files), {gtk, vscode})
 
-    def test_migration_preserves_hooks_without_a_replacement_adapter(self):
+    def test_migration_replaces_legacy_obsidian_terminal_hook(self):
         self.paths.hook_dir.mkdir(parents=True)
         legacy = self.paths.hook_dir / "40-obsidian-terminal.sh"
         legacy.write_text("legacy integration\n")
         updates, files = inspect(self.paths)
-        self.assertNotIn("obsidian-terminal", updates)
-        self.assertNotIn(legacy, files)
+        self.assertTrue(updates["obsidian-terminal"])
+        self.assertIn(legacy, files)
 
     def test_upgrade_archives_known_install_and_preserves_unknown_files(self):
         launcher = self.paths.home / ".local/bin/thpm"
@@ -2442,7 +2591,819 @@ class ZedTests(Sandbox):
         self.assertIn("select Omazed", " ".join(result["warnings"]))
 
 
+class CavaTests(Sandbox):
+    def write_cava_process(
+        self,
+        proc_root: Path,
+        pid: int,
+        *,
+        config: Path | None = None,
+        environment: bool = True,
+        relative: bool = False,
+    ) -> None:
+        pid_root = proc_root / str(pid)
+        pid_root.mkdir(parents=True)
+        executable = self.paths.home / "bin/cava"
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.touch(exist_ok=True)
+        (pid_root / "exe").symlink_to(executable)
+        arguments = ["cava"]
+        if config is not None:
+            argument = config.name if relative else str(config)
+            arguments.extend(("-p", argument))
+            (pid_root / "cwd").symlink_to(config.parent)
+        (pid_root / "cmdline").write_bytes(b"\0".join(item.encode() for item in arguments) + b"\0")
+        if environment:
+            (pid_root / "environ").write_bytes(
+                f"HOME={self.paths.home}\0XDG_CONFIG_HOME={self.paths.config_home}\0".encode()
+            )
+        (pid_root / "stat").write_text(
+            f"{pid} (cava) S " + " ".join(["0"] * 18 + [str(pid * 10)]) + "\n"
+        )
+
+    def test_selector_edit_preserves_formatting_and_rejects_duplicates(self):
+        original = "[general]\r\nframerate = 60\r\n\r\n[color]\r\n  theme = \"omarchy\" ; keep\r\nforeground = '#fff'\r\n"
+        updated, state = set_cava_selector(original)
+        self.assertIn('  theme = "thpm" ; keep\r\n', updated)
+        self.assertIn("framerate = 60\r\n", updated)
+        restored, changed = restore_cava_selector_text(updated, state)
+        self.assertTrue(changed)
+        self.assertEqual(restored, original)
+        with self.assertRaisesRegex(CavaError, "duplicate theme"):
+            parse_cava_selector("[color]\ntheme=one\ntheme=two\n")
+
+    def test_selector_parser_accepts_comment_markers_inside_quotes(self):
+        for marker in ("#", ";"):
+            with self.subTest(marker=marker):
+                original = f'[color]\ntheme = "user{marker}theme" ; keep\n'
+                selector = parse_cava_selector(original)
+                self.assertEqual(selector.value, f"user{marker}theme")
+                updated, state = set_cava_selector(original)
+                self.assertEqual(updated, '[color]\ntheme = "thpm" ; keep\n')
+                restored, changed = restore_cava_selector_text(updated, state)
+                self.assertTrue(changed)
+                self.assertEqual(restored, original)
+
+    def test_selector_parser_refuses_malformed_configuration(self):
+        malformed = (
+            "[color]\ntheme = 'unterminated\n",
+            "[color]\ntheme = 'valid' garbage\n",
+            "[color]\ntheme == other\n",
+            "[color]\ntheme other\n",
+            "[color\ntheme = other\n",
+        )
+        for content in malformed:
+            with self.subTest(content=content):
+                with self.assertRaises(CavaError):
+                    parse_cava_selector(content)
+                with self.assertRaises(CavaError):
+                    set_cava_selector(content)
+
+    def test_selector_insertion_restores_exact_formatting(self):
+        for original in (
+            "[general]\nx=1\n\n\n",
+            "[color]\nforeground=white",
+            "[general]\nx=1",
+        ):
+            with self.subTest(original=original):
+                updated, state = set_cava_selector(original)
+                restored, changed = restore_cava_selector_text(updated, state)
+                self.assertTrue(changed)
+                self.assertEqual(restored, original)
+
+    def test_created_color_section_preserves_later_user_comments(self):
+        updated, state = set_cava_selector("[general]\nx=1\n")
+        updated = updated.replace("theme = 'thpm'\n", "theme = 'thpm'\n# user note\n")
+        restored, changed = restore_cava_selector_text(updated, state)
+        self.assertTrue(changed)
+        self.assertIn("[color]", restored)
+        self.assertIn("# user note", restored)
+        self.assertNotIn("theme = 'thpm'", restored)
+
+    def test_selector_state_preserves_symlink_and_unrelated_later_edits(self):
+        authored = self.paths.home / "dotfiles/cava/config"
+        authored.parent.mkdir(parents=True)
+        authored.write_text("[general]\nframerate = 30\n[color]\ntheme = 'omarchy'\n")
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.symlink_to(authored)
+
+        changed = configure_cava_selector(self.paths)
+        self.assertEqual(changed, [str(config)])
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(parse_cava_selector(authored.read_text()).value, "thpm")
+        authored.write_text(authored.read_text() + "\n[input]\nmethod = pipewire\n")
+
+        restored, warnings = restore_cava_selector(self.paths)
+        self.assertEqual(restored, [str(config)])
+        self.assertEqual(warnings, [])
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(parse_cava_selector(authored.read_text()).value, "omarchy")
+        self.assertIn("method = pipewire", authored.read_text())
+
+    def test_repair_refreshes_restoration_state_after_user_changes_selection(self):
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme = 'omarchy'\n")
+        configure_cava_selector(self.paths)
+        config.write_text("[color]\ntheme = 'user-new'\n")
+
+        configure_cava_selector(self.paths)
+        restored, warnings = restore_cava_selector(self.paths)
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(restored, [str(config)])
+        self.assertEqual(parse_cava_selector(config.read_text()).value, "user-new")
+
+    def test_malformed_selector_state_is_refused_without_mutating_config(self):
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme = 'omarchy'\n")
+        state = self.paths.managed_asset_state_dir / "cava-selection.json"
+        state.parent.mkdir(parents=True)
+        state.write_text("[]\n")
+        before = config.read_bytes()
+
+        with self.assertRaises(CavaError):
+            configure_cava_selector(self.paths)
+        self.assertEqual(config.read_bytes(), before)
+        _changed, warnings = restore_cava_selector(self.paths)
+        self.assertIn("JSON object", warnings[0])
+
+    def test_selector_state_rejects_multiline_and_impossible_combinations(self):
+        updated, valid = set_cava_selector("[color]\ntheme = 'omarchy'\n")
+        invalid_states = []
+        multiline = dict(valid)
+        multiline["previousLine"] = "theme = 'omarchy'\ntheme = 'attacker'\n"
+        invalid_states.append(multiline)
+        same_selection = dict(valid)
+        same_selection["previousLine"] = "theme = 'thpm'\n"
+        invalid_states.append(same_selection)
+        contradictory = dict(valid)
+        contradictory["createdColorSection"] = True
+        contradictory["createdBlock"] = "[color]\ntheme = 'thpm'\n"
+        invalid_states.append(contradictory)
+        missing_insert = dict(set_cava_selector("[color]\nforeground=white\n")[1])
+        missing_insert["insertedLine"] = ""
+        invalid_states.append(missing_insert)
+
+        for state in invalid_states:
+            with self.subTest(state=state):
+                with self.assertRaises(CavaError):
+                    restore_cava_selector_text(updated, state)
+
+    def test_version_boundary_and_diagnostics_find_unselected_target(self):
+        self.assertEqual(parse_cava_version("cava 0.10.7"), (0, 10, 7))
+        source = self.paths.current_theme / "thpm-cava.ini"
+        target = self.paths.config_home / "cava/themes/thpm"
+        config = self.paths.config_home / "cava/config"
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        source.write_text("[color]\ngradient = 1\n")
+        target.write_text(source.read_text())
+        config.write_text("[color]\ntheme = 'omarchy'\n")
+
+        result = diagnose_cava(
+            self.paths,
+            command_path="/usr/bin/cava",
+            version=(0, 10, 7),
+            proc_root=self.paths.home / "empty-proc",
+        )
+
+        selector = next(check for check in result["checks"] if check["id"] == "cava.selector")
+        self.assertEqual(result["health"], "broken")
+        self.assertEqual(selector["status"], "error")
+        self.assertEqual(selector["repair"]["command"], "thpm doctor cava --fix")
+
+    def test_process_discovery_resolves_relative_custom_config_and_signals_only_confirmed(self):
+        proc_root = self.paths.home / "proc"
+        config = self.paths.home / "profiles/cava.ini"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme = 'thpm'\n")
+        target = self.paths.config_home / "cava/themes/thpm"
+        target.parent.mkdir(parents=True)
+        target.write_text("theme\n")
+        self.write_cava_process(proc_root, 321, config=config, relative=True)
+        processes = discover_cava_processes(self.paths, proc_root)
+        self.assertEqual(processes[0].config_path, str(config))
+        self.assertEqual(processes[0].confidence, "confirmed")
+        killed: list[tuple[int, int]] = []
+
+        actions, restart_required, warnings = reload_cava_processes(
+            self.paths,
+            proc_root=proc_root,
+            kill=lambda pid, sig: killed.append((pid, sig)),
+        )
+
+        self.assertEqual(killed, [(321, signal.SIGUSR1)])
+        self.assertEqual(restart_required, [])
+        self.assertEqual(warnings, [])
+        self.assertIn("PID 321", actions[0])
+
+    def test_process_discovery_confirms_default_and_absolute_custom_configs(self):
+        proc_root = self.paths.home / "proc"
+        default = self.paths.config_home / "cava/config"
+        custom = self.paths.home / "profiles/absolute.ini"
+        default.parent.mkdir(parents=True)
+        custom.parent.mkdir(parents=True)
+        default.write_text("[color]\ntheme='thpm'\n")
+        custom.write_text("[color]\ntheme='thpm'\n")
+        self.write_cava_process(proc_root, 101)
+        self.write_cava_process(proc_root, 102, config=custom)
+
+        processes = discover_cava_processes(self.paths, proc_root)
+
+        self.assertEqual(processes[0].config_path, str(default))
+        self.assertFalse(processes[0].custom_config)
+        self.assertEqual(processes[1].config_path, str(custom))
+        self.assertTrue(processes[1].custom_config)
+        self.assertTrue(all(item.confidence == "confirmed" for item in processes))
+
+    def test_mixed_processes_signal_only_confirmed_consumers(self):
+        proc_root = self.paths.home / "proc"
+        default = self.paths.config_home / "cava/config"
+        other = self.paths.home / "profiles/other.ini"
+        default.parent.mkdir(parents=True)
+        other.parent.mkdir(parents=True)
+        default.write_text("[color]\ntheme='thpm'\n")
+        other.write_text("[color]\ntheme='other'\n")
+        target = self.paths.config_home / "cava/themes/thpm"
+        target.parent.mkdir(parents=True)
+        target.write_text("theme\n")
+        self.write_cava_process(proc_root, 201)
+        self.write_cava_process(proc_root, 202, config=other)
+        killed: list[tuple[int, int]] = []
+
+        actions, restart_required, warnings = reload_cava_processes(
+            self.paths,
+            proc_root=proc_root,
+            kill=lambda pid, sig: killed.append((pid, sig)),
+        )
+
+        self.assertEqual(killed, [(201, signal.SIGUSR1)])
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(restart_required, ["Cava"])
+        self.assertIn("does not use", warnings[0])
+
+    def test_pidfd_is_opened_before_identity_revalidation_and_always_closed(self):
+        proc_root = self.paths.home / "proc"
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme='thpm'\n")
+        target = self.paths.config_home / "cava/themes/thpm"
+        target.parent.mkdir(parents=True)
+        target.write_text("theme\n")
+        self.write_cava_process(proc_root, 275)
+        read_fd, write_fd = os.pipe()
+        signals: list[tuple[int, int]] = []
+
+        def acquire_after_reuse(pid: int) -> int:
+            (proc_root / str(pid) / "stat").write_text(
+                f"{pid} (cava) S " + " ".join(["0"] * 18 + ["changed"]) + "\n"
+            )
+            return read_fd
+
+        try:
+            actions, restart_required, warnings = reload_cava_processes(
+                self.paths,
+                proc_root=proc_root,
+                pidfd_open=acquire_after_reuse,
+                pidfd_signal=lambda fd, sig: signals.append((fd, sig)),
+            )
+            self.assertEqual(actions, [])
+            self.assertEqual(signals, [])
+            self.assertEqual(restart_required, ["Cava"])
+            self.assertIn("restart it", warnings[0])
+            with self.assertRaises(OSError):
+                os.fstat(read_fd)
+        finally:
+            os.close(write_fd)
+
+    def test_signal_failure_and_start_time_change_require_restart(self):
+        proc_root = self.paths.home / "proc"
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme='thpm'\n")
+        target = self.paths.config_home / "cava/themes/thpm"
+        target.parent.mkdir(parents=True)
+        target.write_text("theme\n")
+        self.write_cava_process(proc_root, 301)
+
+        _actions, restart_required, warnings = reload_cava_processes(
+            self.paths,
+            proc_root=proc_root,
+            kill=lambda _pid, _sig: (_ for _ in ()).throw(ProcessLookupError()),
+        )
+
+        self.assertEqual(restart_required, ["Cava"])
+        self.assertIn("restart it", warnings[0])
+
+    def test_diagnostics_report_running_custom_config_that_does_not_select_thpm(self):
+        proc_root = self.paths.home / "proc"
+        custom = self.paths.home / "profiles/cava.ini"
+        custom.parent.mkdir(parents=True)
+        custom.write_text("[color]\ntheme = 'other'\n")
+        source = self.paths.current_theme / "cava_theme"
+        target = self.paths.config_home / "cava/themes/thpm"
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        source.write_text("theme\n")
+        target.write_text("theme\n")
+        config = self.paths.config_home / "cava/config"
+        config.write_text("[color]\ntheme = 'thpm'\n")
+        state = self.paths.managed_asset_state_dir / "generated-cava.json"
+        state.parent.mkdir(parents=True)
+        digest = hashlib.sha256(b"theme\n").hexdigest()
+        state.write_text(json.dumps({"managedSha256": digest, "managedMode": 0o644}))
+        self.write_cava_process(proc_root, 333, config=custom)
+
+        result = diagnose_cava(
+            self.paths,
+            command_path="/usr/bin/cava",
+            version=(0, 10, 7),
+            proc_root=proc_root,
+        )
+
+        runtime = next(check for check in result["checks"] if check["id"] == "cava.runtime-selection")
+        self.assertEqual(runtime["status"], "error")
+        self.assertEqual(runtime["evidence"]["instances"][0]["pid"], 333)
+
+    def test_unknown_process_is_never_signalled(self):
+        proc_root = self.paths.home / "proc"
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme = 'thpm'\n")
+        target = self.paths.config_home / "cava/themes/thpm"
+        target.parent.mkdir(parents=True)
+        target.write_text("theme\n")
+        self.write_cava_process(proc_root, 444, environment=False)
+        killed: list[tuple[int, int]] = []
+
+        _actions, restart_required, warnings = reload_cava_processes(
+            self.paths,
+            proc_root=proc_root,
+            kill=lambda pid, sig: killed.append((pid, sig)),
+        )
+
+        self.assertEqual(killed, [])
+        self.assertEqual(restart_required, ["Cava"])
+        self.assertIn("unknown config", warnings[0])
+
+    def test_broken_cava_apply_fails_without_installing_target(self):
+        source = self.paths.current_theme / "cava_theme"
+        config = self.paths.config_home / "cava/config"
+        source.parent.mkdir(parents=True)
+        config.parent.mkdir(parents=True)
+        source.write_text("[color]\ngradient=1\n")
+        config.write_text("[color]\ntheme='other'\n")
+        target = self.paths.config_home / "cava/themes/thpm"
+
+        with patch("thpm.integrations.shutil.which", return_value="/usr/bin/cava"), patch(
+            "thpm.integrations.installed_cava_version", return_value=(0, 10, 7)
+        ):
+            result = apply("cava", self.paths)
+
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(target.exists())
+
+    def test_enabled_cava_prerequisite_failure_is_a_hook_error(self):
+        with patch(
+            "thpm.integrations.inspect_readiness",
+            return_value=(False, ["Cava 0.10.6 or newer"], []),
+        ):
+            payload = apply_enabled(self.paths, {"cava": True})
+        self.assertEqual(payload["results"][0]["status"], "failed")
+        self.assertEqual(payload["counts"]["failed"], 1)
+        self.assertEqual(payload["errors"][0]["plugin"], "cava")
+
+    def test_doctor_is_read_only_and_returns_stable_cava_checks(self):
+        self.write_palette()
+        source = self.paths.current_theme / "thpm-cava.ini"
+        source.write_text("[color]\ngradient = 1\n")
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme = 'omarchy'\n")
+        before = config.read_bytes()
+        enabled = load(self.paths)
+        enabled["cava"] = True
+        save(self.paths, enabled)
+        complete_cava_opt_in(self.paths)
+        with patch("thpm.service.capabilities") as caps, patch(
+            "thpm.service.load_palette", return_value=COLORS
+        ), patch("thpm.service.shutil.which", return_value="/usr/bin/cava"), patch(
+            "thpm.snapshot.shutil.which", return_value="/usr/bin/cava"
+        ), patch("thpm.cava.installed_version", return_value=(0, 10, 7)):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            result = Service(self.paths).doctor("cava")
+            confirmation = Service(self.paths).doctor("cava", fix=True)
+        self.assertFalse(result["ok"])
+        self.assertEqual(config.read_bytes(), before)
+        self.assertTrue(confirmation["confirmationRequired"])
+        self.assertTrue(confirmation["repairPlan"])
+        self.assertEqual(config.read_bytes(), before)
+
+    def test_doctor_fix_returns_json_error_for_corrupt_global_state(self):
+        self.write_palette()
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text("[invalid\n")
+        with patch("thpm.service.capabilities") as caps, patch(
+            "thpm.service.load_palette", return_value=COLORS
+        ):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            result = Service(self.paths).doctor("cava", fix=True)
+        self.assertFalse(result["ok"])
+        self.assertIn("diagnostics are unavailable", result["summary"])
+        self.assertTrue(result["errors"])
+
+    def test_doctor_fix_directs_disabled_cava_to_enable(self):
+        self.write_palette()
+        with patch("thpm.service.capabilities") as caps, patch(
+            "thpm.service.load_palette", return_value=COLORS
+        ), patch("thpm.service.shutil.which", return_value="/usr/bin/cava"), patch(
+            "thpm.snapshot.shutil.which", return_value="/usr/bin/cava"
+        ), patch("thpm.cava.installed_version", return_value=(0, 10, 7)):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            result = Service(self.paths).doctor("cava", fix=True)
+        self.assertFalse(result["ok"])
+        self.assertNotIn("confirmationRequired", result)
+        self.assertIn("thpm enable cava", str(result["errors"]))
+
+    def test_human_doctor_renders_checks_and_repair_command(self):
+        output = io.StringIO()
+        payload = {
+            "operation": "doctor",
+            "ok": False,
+            "summary": "1 errors, 0 warnings",
+            "plugins": [],
+            "errors": [],
+            "warnings": [],
+            "checks": [
+                {
+                    "id": "cava.selector",
+                    "status": "error",
+                    "summary": "wrong selector",
+                    "repair": {"available": True},
+                }
+            ],
+        }
+        render(payload, console=Console(file=output, force_terminal=False, width=120))
+        rendered = output.getvalue()
+        self.assertIn("cava.selector", rendered)
+        self.assertIn("thpm doctor cava --fix", rendered)
+
+    def test_doctor_fix_json_is_one_document_with_repair_plan(self):
+        self.write_palette()
+        source = self.paths.current_theme / "thpm-cava.ini"
+        source.write_text("[color]\ngradient = 1\n")
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme = 'omarchy'\n")
+        enabled = load(self.paths)
+        enabled["cava"] = True
+        save(self.paths, enabled)
+        complete_cava_opt_in(self.paths)
+        output = io.StringIO()
+        with patch("thpm.cli.Paths.discover", return_value=self.paths), patch(
+            "thpm.service.capabilities"
+        ) as caps, patch("thpm.service.load_palette", return_value=COLORS), patch(
+            "thpm.service.shutil.which", return_value="/usr/bin/cava"
+        ), patch("thpm.snapshot.shutil.which", return_value="/usr/bin/cava"), patch(
+            "thpm.cava.installed_version", return_value=(0, 10, 7)
+        ), patch("sys.stdout", output):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            status = main(["doctor", "cava", "--fix", "--json"])
+        payload = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertTrue(payload["confirmationRequired"])
+        self.assertTrue(payload["repairPlan"])
+        self.assertEqual(config.read_text(), "[color]\ntheme = 'omarchy'\n")
+
+    def test_confirmed_doctor_fix_repairs_existing_enabled_install(self):
+        self.write_palette()
+        source = self.paths.current_theme / "cava_theme"
+        source.write_text("[color]\ngradient = 1\n")
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme = 'omarchy'\n")
+        enabled = load(self.paths)
+        enabled["cava"] = True
+        save(self.paths, enabled)
+        complete_cava_opt_in(self.paths)
+        with patch("thpm.service.capabilities") as caps, patch(
+            "thpm.service.load_palette", return_value=COLORS
+        ), patch("thpm.service.shutil.which", return_value="/usr/bin/cava"), patch(
+            "thpm.snapshot.shutil.which", return_value="/usr/bin/cava"
+        ), patch("thpm.cava.installed_version", return_value=(0, 10, 7)), patch(
+            "thpm.integrations.installed_cava_version", return_value=(0, 10, 7)
+        ), patch(
+            "thpm.service.reload_cava_processes",
+            return_value=([], ["Cava"], ["ambiguous process"]),
+        ):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            fixed = Service(self.paths).doctor("cava", fix=True, confirmed=True)
+            after = Service(self.paths).doctor("cava")
+        self.assertTrue(fixed["ok"])
+        self.assertTrue(after["ok"])
+        self.assertEqual(fixed["operation"], "doctor")
+        self.assertEqual(fixed["restartRequired"], ["Cava"])
+        self.assertIn("ambiguous process", str(fixed["warnings"]))
+        self.assertEqual(parse_cava_selector(config.read_text()).value, "thpm")
+        self.assertTrue((self.paths.config_home / "cava/themes/thpm").is_file())
+
+    def test_enable_repairs_selection_and_disable_restores_it(self):
+        self.write_palette()
+        source = self.paths.current_theme / "cava_theme"
+        source.write_text("[color]\ngradient = 1\n")
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[general]\nframerate = 30\n[color]\ntheme = 'omarchy'\n")
+        with patch("thpm.snapshot.shutil.which", return_value="/usr/bin/cava"), patch(
+            "thpm.service.shutil.which", return_value="/usr/bin/cava"
+        ), patch("thpm.cava.installed_version", return_value=(0, 10, 7)), patch(
+            "thpm.integrations.installed_cava_version", return_value=(0, 10, 7)
+        ):
+            enabled = Service(self.paths).set_enabled("cava", True, confirmed=True)
+            self.assertTrue(cava_opt_in_completed(self.paths))
+            config.write_text(config.read_text() + "\n[input]\nmethod = pipewire\n")
+            disabled = Service(self.paths).set_enabled("cava", False)
+            self.assertTrue(cava_opt_in_completed(self.paths))
+            reenabled = Service(self.paths).set_enabled("cava", True, confirmed=True)
+            disabled_again = Service(self.paths).set_enabled("cava", False)
+        self.assertTrue(enabled["ok"])
+        self.assertTrue(disabled["ok"])
+        self.assertTrue(reenabled["ok"])
+        self.assertTrue(disabled_again["ok"])
+        self.assertEqual(parse_cava_selector(config.read_text()).value, "omarchy")
+        self.assertIn("method = pipewire", config.read_text())
+        self.assertFalse((self.paths.config_home / "cava/themes/thpm").exists())
+
+    def test_disable_preserves_target_when_selector_state_is_invalid(self):
+        config = self.paths.config_home / "cava/config"
+        target = self.paths.config_home / "cava/themes/thpm"
+        config.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme='thpm'\n")
+        target.write_text("managed theme\n")
+        state = self.paths.managed_asset_state_dir / "cava-selection.json"
+        state.parent.mkdir(parents=True)
+        state.write_text("{}\n")
+        enabled = load(self.paths)
+        enabled["cava"] = True
+        save(self.paths, enabled)
+        complete_cava_opt_in(self.paths)
+
+        result = Service(self.paths).set_enabled("cava", False)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(target.exists())
+        self.assertEqual(parse_cava_selector(config.read_text()).value, "thpm")
+        self.assertIn("preserved", str(result["errors"]))
+
+    def test_disable_preserves_selected_target_when_selector_state_is_missing(self):
+        config = self.paths.config_home / "cava/config"
+        target = self.paths.config_home / "cava/themes/thpm"
+        config.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme='thpm'\n")
+        target.write_text("managed theme\n")
+        enabled = load(self.paths)
+        enabled["cava"] = True
+        save(self.paths, enabled)
+        complete_cava_opt_in(self.paths)
+
+        result = Service(self.paths).set_enabled("cava", False)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(target.exists())
+        self.assertEqual(parse_cava_selector(config.read_text()).value, "thpm")
+        self.assertIn("restoration state is missing", str(result["warnings"]))
+        self.assertIn("preserved", str(result["errors"]))
+
+    def test_uninstall_preserves_selected_target_when_selector_state_is_missing(self):
+        config = self.paths.config_home / "cava/config"
+        target = self.paths.config_home / "cava/themes/thpm"
+        config.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme='thpm'\n")
+        target.write_text("managed theme\n")
+
+        result = Service(self.paths).uninstall()
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(target.exists())
+        self.assertEqual(parse_cava_selector(config.read_text()).value, "thpm")
+        self.assertIn("restoration state is missing", str(result["warnings"]))
+        self.assertIn("preserved Cava residual", result["summary"])
+        self.assertIn("preserved", str(result["errors"]))
+
+    def test_disable_reports_restart_for_running_cava(self):
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme='omarchy'\n")
+        configure_cava_selector(self.paths)
+        enabled = load(self.paths)
+        enabled["cava"] = True
+        save(self.paths, enabled)
+        complete_cava_opt_in(self.paths)
+        with patch("thpm.service.running_cava_requires_restart", return_value=True):
+            result = Service(self.paths).set_enabled("cava", False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["restartRequired"], ["Cava"])
+
+    def test_uninstall_restores_managed_cava_selector(self):
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme = 'omarchy'\n")
+        configure_cava_selector(self.paths)
+        complete_cava_opt_in(self.paths)
+        config.write_text(config.read_text() + "\n[general]\nframerate = 60\n")
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            result = Service(self.paths).uninstall()
+        self.assertTrue(result["ok"])
+        self.assertEqual(parse_cava_selector(config.read_text()).value, "omarchy")
+        self.assertIn("framerate = 60", config.read_text())
+        self.assertFalse(self.paths.cava_opt_in_marker.exists())
+
+    def test_enable_rolls_back_selector_and_state_when_apply_fails(self):
+        self.write_palette()
+        (self.paths.current_theme / "cava_theme").write_text("theme\n")
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        original = "[color]\ntheme = 'omarchy'\n"
+        config.write_text(original)
+
+        def fail_apply(*_args, **_kwargs):
+            concurrent = load(self.paths)
+            concurrent["fish"] = False
+            save(self.paths, concurrent)
+            raise RuntimeError("apply failed")
+
+        with patch("thpm.snapshot.shutil.which", return_value="/usr/bin/cava"), patch(
+            "thpm.service.shutil.which", return_value="/usr/bin/cava"
+        ), patch("thpm.cava.installed_version", return_value=(0, 10, 7)), patch(
+            "thpm.integrations.installed_cava_version", return_value=(0, 10, 7)
+        ), patch("thpm.service.apply_integration", side_effect=fail_apply):
+            result = Service(self.paths).set_enabled("cava", True, confirmed=True)
+        self.assertFalse(result["ok"])
+        self.assertEqual(config.read_text(), original)
+        self.assertFalse(load(self.paths)["cava"])
+        self.assertFalse(cava_opt_in_completed(self.paths))
+        self.assertFalse(load(self.paths)["fish"])
+
+
 class IntegrationTests(Sandbox):
+    def test_obsidian_terminal_updates_discovered_vault_and_preserves_settings(self):
+        self.write_palette()
+        vault = self.paths.home / "Documents/My Vault"
+        settings = vault / ".obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "preferredRenderer": "webgl",
+                    "terminalOptions": {"fontSize": 14, "theme": {"background": "#000000"}},
+                }
+            )
+        )
+        registry = self.paths.config_home / "obsidian/obsidian.json"
+        registry.parent.mkdir(parents=True)
+        registry.write_text(json.dumps({"vaults": {"one": {"path": str(vault)}}}))
+        colors = {
+            **COLORS,
+            "accent": "#abcdef",
+            "cursor": "#fedcba",
+            "selection_background": "#123456",
+            "selection_foreground": "#654321",
+        }
+
+        with patch("thpm.integrations.load_palette", return_value=colors):
+            result = apply("obsidian-terminal", self.paths)
+            unchanged = apply("obsidian-terminal", self.paths)
+
+        document = json.loads(settings.read_text())
+        theme = document["terminalOptions"]["theme"]
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(result.changed, [str(settings)])
+        self.assertEqual(result.restartRequired, ["Obsidian"])
+        self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(document["preferredRenderer"], "webgl")
+        self.assertEqual(document["terminalOptions"]["fontSize"], 14)
+        self.assertEqual(theme["background"], COLORS["bg"])
+        self.assertEqual(theme["foreground"], COLORS["fg"])
+        self.assertEqual(theme["cursor"], "#fedcba")
+        self.assertEqual(theme["selectionBackground"], "#123456")
+        self.assertEqual(theme["selectionForeground"], "#654321")
+        self.assertEqual(theme["brightWhite"], COLORS["bright_fg"])
+
+    def test_obsidian_terminal_readiness_reports_missing_or_invalid_settings(self):
+        ready, missing, warnings = inspect_readiness(
+            "obsidian-terminal", self.paths, which=lambda _command: "/bin/true"
+        )
+        self.assertFalse(ready)
+        self.assertIn("OBSIDIAN_VAULT_PATH", " ".join(missing))
+        self.assertEqual(warnings, [])
+
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("not json\n")
+        with patch.dict(os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}):
+            ready, missing, _warnings = inspect_readiness(
+                "obsidian-terminal", self.paths, which=lambda _command: "/bin/true"
+            )
+        self.assertFalse(ready)
+        self.assertIn("invalid Obsidian Terminal settings JSON", " ".join(missing))
+
+    def test_pi_hot_reload_touches_synchronized_theme_without_replacing_it(self):
+        content = '{"name":"omarchy-system"}\n'
+        source = self.paths.current_theme / "pi.json"
+        target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        source.write_text(content)
+        target.write_text(content)
+        os.utime(target, ns=(1_000_000_000, 1_000_000_000))
+        inode = target.stat().st_ino
+
+        result = apply("pi-hot-reload", self.paths)
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(result.changed, [str(target)])
+        self.assertEqual(result.message, "Pi omarchy-system theme change event emitted")
+        self.assertEqual(target.stat().st_ino, inode)
+        self.assertEqual(target.stat().st_atime_ns, 1_000_000_000)
+        self.assertGreater(target.stat().st_mtime_ns, 1_000_000_000)
+        self.assertEqual(target.read_text(), content)
+
+    def test_pi_hot_reload_requires_native_generated_theme(self):
+        ready, missing, warnings = inspect_readiness(
+            "pi-hot-reload", self.paths, which=lambda _command: "/usr/bin/pi"
+        )
+        self.assertFalse(ready)
+        self.assertIn("regular current Omarchy Pi theme source", " ".join(missing))
+        self.assertIn("regular Omarchy-generated Pi theme", " ".join(missing))
+        self.assertEqual(warnings, [])
+        result = apply("pi-hot-reload", self.paths)
+        self.assertEqual(result.status, "skipped")
+        self.assertFalse((self.paths.home / ".pi").exists())
+
+    def test_pi_hot_reload_refuses_stale_native_theme(self):
+        source = self.paths.current_theme / "pi.json"
+        target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        source.write_text("current theme\n")
+        target.write_text("stale theme\n")
+        os.utime(target, ns=(1_000_000_000, 2_000_000_000))
+        before = target.stat()
+
+        ready, missing, _warnings = inspect_readiness(
+            "pi-hot-reload", self.paths, which=lambda _command: "/usr/bin/pi"
+        )
+        result = apply("pi-hot-reload", self.paths)
+
+        self.assertFalse(ready)
+        self.assertIn("Pi theme synchronized from the current Omarchy pi.json", missing)
+        self.assertEqual(result.status, "skipped")
+        self.assertIn("synchronization is stale", result.message)
+        self.assertEqual(target.stat().st_atime_ns, before.st_atime_ns)
+        self.assertEqual(target.stat().st_mtime_ns, before.st_mtime_ns)
+
+    def test_pi_hot_reload_refuses_symlink_target(self):
+        target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        source = self.paths.home / "user-theme.json"
+        target.parent.mkdir(parents=True)
+        source.write_text("user theme\n")
+        target.symlink_to(source)
+
+        with self.assertRaisesRegex(RuntimeError, "refusing symlink theme target"):
+            apply("pi-hot-reload", self.paths)
+        self.assertEqual(source.read_text(), "user theme\n")
+
+    def test_pi_hot_reload_refuses_symlink_source(self):
+        source = self.paths.current_theme / "pi.json"
+        authored = self.paths.home / "authored-theme.json"
+        target = self.paths.home / ".pi/agent/themes/omarchy-system.json"
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        authored.write_text("authored theme\n")
+        target.write_text("authored theme\n")
+        source.symlink_to(authored)
+
+        with self.assertRaisesRegex(RuntimeError, "refusing symlink theme source"):
+            apply("pi-hot-reload", self.paths)
+        self.assertEqual(authored.read_text(), "authored theme\n")
+
     def write_local_vscode_theme(self, *, unsafe: bool = False):
         theme = self.paths.current_theme
         extension = theme / "vscode-extension"
@@ -3302,18 +4263,196 @@ class IntegrationTests(Sandbox):
         prefs.write_text('app.last-launched-version="1.2.3"\n')
         config.parent.mkdir(parents=True)
         config.write_text(
+            "[Setting]\ncurrent_theme = omarchy\ncolor_scheme = Base\n"
+            f"prefs_path = {prefs}\n"
+            "[Backup]\nversion = 1.2.3\n"
+        )
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        ready, missing, warnings = inspect_readiness(
+            "spotify", self.paths, lambda _command: "/usr/bin/spicetify"
+        )
+        self.assertTrue(ready)
+        self.assertEqual(missing, [])
+        self.assertIn("will initialize", " ".join(warnings))
+
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text(":root {}\n")
+        ready, missing, warnings = inspect_readiness(
+            "spotify", self.paths, lambda _command: "/usr/bin/spicetify"
+        )
+        self.assertTrue(ready)
+        self.assertEqual(missing, [])
+        self.assertEqual(warnings, [])
+
+    def test_spotify_readiness_treats_theme_selection_as_repairable(self):
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        prefs = self.paths.config_home / "spotify/prefs"
+        prefs.parent.mkdir(parents=True)
+        prefs.write_text('app.last-launched-version="1.2.3"\n')
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            "[Setting]\ncurrent_theme = text\ncolor_scheme = Text\n"
+            f"prefs_path = {prefs}\n"
+            "[Backup]\nversion = 1.2.3\n"
+        )
+
+        ready, missing, warnings = inspect_readiness(
+            "spotify", self.paths, lambda _command: "/usr/bin/spicetify"
+        )
+
+        self.assertTrue(ready)
+        self.assertEqual(missing, [])
+        self.assertIn("will select", " ".join(warnings))
+
+    def test_spotify_apply_selects_managed_theme(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            "[Setting]\ncurrent_theme = text\ncolor_scheme = Text\n"
+        )
+        assets = Path(__file__).parents[1] / "assets"
+
+        def select_theme(*_args, **_kwargs):
+            self.assertTrue(
+                (self.paths.config_home / "spicetify/Themes/omarchy/user.css").is_file()
+            )
+            self.assertTrue(
+                (self.paths.config_home / "spicetify/Themes/omarchy/color.ini").is_file()
+            )
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.integrations.subprocess.run", side_effect=select_theme
+        ) as run_command, patch("thpm.integrations._reload", return_value=[]):
+            result = apply("spotify", self.paths)
+
+        run_command.assert_called_once_with(
+            [
+                "spicetify",
+                "config",
+                "current_theme",
+                "omarchy",
+                "color_scheme",
+                "Base",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        self.assertIn(str(config), result.changed)
+        self.assertIn(
+            "spicetify config current_theme omarchy color_scheme Base",
+            result.actions,
+        )
+
+    def test_spotify_selection_failure_reports_files_installed_before_failure(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        config.parent.mkdir(parents=True)
+        config.write_text("[Setting]\ncurrent_theme = text\ncolor_scheme = Text\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
+        failed = subprocess.CompletedProcess([], 1, "", "selection failed")
+
+        with patch("thpm.integrations.subprocess.run", return_value=failed), self.assertRaisesRegex(
+            ApplyFailure, "selection failed"
+        ) as raised:
+            apply("spotify", self.paths)
+
+        target = self.paths.config_home / "spicetify/Themes/omarchy/color.ini"
+        self.assertTrue(target.is_file())
+        self.assertIn(str(target), raised.exception.changed)
+        self.assertEqual(raised.exception.actions, [])
+
+    def test_spotify_refresh_failure_preserves_successful_selection_action(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        config.parent.mkdir(parents=True)
+        config.write_text("[Setting]\ncurrent_theme = text\ncolor_scheme = Text\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
+        selected = subprocess.CompletedProcess([], 0, "", "")
+
+        with patch(
+            "thpm.integrations.subprocess.run", return_value=selected
+        ), patch(
+            "thpm.integrations._reload", side_effect=RuntimeError("refresh failed")
+        ), self.assertRaisesRegex(ApplyFailure, "refresh failed") as raised:
+            apply("spotify", self.paths)
+
+        self.assertIn(str(config), raised.exception.changed)
+        self.assertEqual(
+            raised.exception.actions,
+            ["spicetify config current_theme omarchy color_scheme Base"],
+        )
+
+    def test_spotify_apply_initializes_missing_companion_stylesheet(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        assets = Path(__file__).parents[1] / "assets"
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.integrations._reload", return_value=[]
+        ):
+            result = apply("spotify", self.paths)
+
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        self.assertEqual(
+            stylesheet.read_bytes(),
+            (assets / "spicetify/omarchy-user.css").read_bytes(),
+        )
+        self.assertIn(str(stylesheet), result.changed)
+        self.assertEqual(stylesheet.stat().st_mode & 0o777, 0o644)
+
+    def test_spotify_apply_preserves_existing_companion_stylesheet(self):
+        generated = self.paths.current_theme / "thpm-spicetify.ini"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("[Base]\nmain = 000000\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* user customization */\n")
+        assets = Path(__file__).parents[1] / "assets"
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.integrations._reload", return_value=[]
+        ):
+            result = apply("spotify", self.paths)
+
+        self.assertEqual(stylesheet.read_text(), "/* user customization */\n")
+        self.assertNotIn(str(stylesheet), result.changed)
+
+    def test_spotify_readiness_rejects_an_unsafe_stylesheet_target(self):
+        config = self.paths.config_home / "spicetify/config-xpui.ini"
+        prefs = self.paths.config_home / "spotify/prefs"
+        prefs.parent.mkdir(parents=True)
+        prefs.write_text('app.last-launched-version="1.2.3"\n')
+        config.parent.mkdir(parents=True)
+        config.write_text(
             "[Setting]\ncurrent_theme = omarchy\n"
             f"prefs_path = {prefs}\n"
             "[Backup]\nversion = 1.2.3\n"
         )
         stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
         stylesheet.parent.mkdir(parents=True)
-        stylesheet.write_text(":root {}\n")
+        stylesheet.symlink_to(self.paths.home / "victim")
+
         ready, missing, _warnings = inspect_readiness(
             "spotify", self.paths, lambda _command: "/usr/bin/spicetify"
         )
-        self.assertTrue(ready)
-        self.assertEqual(missing, [])
+
+        self.assertFalse(ready)
+        self.assertIn("safe regular", " ".join(missing))
 
     def test_spotify_readiness_rejects_a_stale_backup(self):
         config = self.paths.config_home / "spicetify/config-xpui.ini"
@@ -3395,6 +4534,7 @@ class IntegrationTests(Sandbox):
         target = self.paths.config_home / "spicetify/Themes/omarchy/color.ini"
         target.parent.mkdir(parents=True)
         target.write_text("user current theme\n")
+        (target.parent / "user.css").write_text("/* existing theme */\n")
 
         with patch("thpm.integrations._reload", return_value=[]):
             first = apply("spotify", self.paths)
@@ -3501,6 +4641,9 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
         generated.write_text("[base]\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
         refreshed = subprocess.CompletedProcess([], 0, "", "")
         running = subprocess.CompletedProcess([], 0, "123\n", "")
         failed = subprocess.CompletedProcess([], 1, "", "restart failed")
@@ -3573,6 +4716,9 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
         generated.write_text("[base]\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
         with patch(
             "thpm.integrations._reload",
             return_value=(["spicetify refresh", "spicetify restart"], []),
@@ -3591,6 +4737,9 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
         generated.write_text("[base]\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
         swaync = self.paths.current_theme / "colors.css"
         swaync.write_text("@define-color background #000000;\n")
 
@@ -3774,6 +4923,9 @@ class IntegrationTests(Sandbox):
         (self.paths.current_theme / "thpm-superfile.toml").write_text("{{ unresolved }}")
         (self.paths.current_theme / "cava_theme").write_text("native cava")
         (self.paths.current_theme / "thpm-cava.ini").write_text("{{ unresolved }}")
+        cava_config = self.paths.config_home / "cava/config"
+        cava_config.parent.mkdir(parents=True)
+        cava_config.write_text("[color]\ntheme = 'thpm'\n")
         superfile = apply("superfile", self.paths)
         with patch("thpm.integrations._reload", return_value=[]):
             cava = apply("cava", self.paths)
@@ -3821,6 +4973,9 @@ class IntegrationTests(Sandbox):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
         generated.write_text("[base]\n")
+        stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
+        stylesheet.parent.mkdir(parents=True)
+        stylesheet.write_text("/* existing theme */\n")
         with patch("thpm.integrations.inspect_readiness", return_value=(True, [], [])), patch(
             "thpm.integrations._reload", side_effect=RuntimeError("reload failed")
         ):
@@ -4001,6 +5156,342 @@ class SourceScriptTests(Sandbox):
                 self.assertFalse((root / "runtime").exists())
 
 
+class AuditAndReportTests(Sandbox):
+    def audit_entry(self, **updates):
+        entry = {
+            "journalSchemaVersion": 1,
+            "timestamp": "2026-08-06T12:00:00Z",
+            "runId": "run-1",
+            "thpmVersion": "1.0.0rc19",
+            "operation": "hook-run",
+            "plugin": "cava",
+            "status": "applied",
+            "reasonCode": "integration.applied",
+            "durationMs": 4,
+            "changed": [str(self.paths.home / ".config/cava/themes/thpm")],
+            "actions": ["cava.reload.sigusr1"],
+            "warnings": [],
+            "restartRequired": [],
+            "failureDetail": "",
+        }
+        entry.update(updates)
+        return entry
+
+    def test_journal_append_permissions_and_path_normalization(self):
+        append_entries(self.paths, [self.audit_entry()])
+        self.assertEqual(self.paths.operation_log.stat().st_mode & 0o777, 0o600)
+        saved = json.loads(self.paths.operation_log.read_text())
+        self.assertEqual(saved["changed"], ["~/.config/cava/themes/thpm"])
+        self.assertEqual(recent_entries(self.paths, plugin="cava")[0]["plugin"], "cava")
+        self.assertEqual(recent_entries(self.paths, plugin="fish"), [])
+
+    def test_journal_rotation_and_locking_seam(self):
+        entry = self.audit_entry(warnings=["x" * 180])
+        with patch("thpm.audit.fcntl.flock") as lock:
+            append_entries(self.paths, [entry], max_bytes=80, rotations=2)
+            append_entries(self.paths, [entry], max_bytes=80, rotations=2)
+            recent_entries(self.paths)
+        self.assertTrue(self.paths.operation_log.with_name("operations.jsonl.1").is_file())
+        self.assertTrue(any(call.args[1] == fcntl.LOCK_EX for call in lock.call_args_list))
+        self.assertTrue(any(call.args[1] == fcntl.LOCK_SH for call in lock.call_args_list))
+        self.assertTrue(any(call.args[1] == fcntl.LOCK_UN for call in lock.call_args_list))
+
+    def test_journal_rejects_symlinked_lock_active_and_rotated_files(self):
+        victim = self.paths.home / "victim"
+        victim.write_text("keep\n")
+        victim.chmod(0o644)
+        self.paths.operation_log.parent.mkdir(parents=True)
+
+        for hostile in (
+            self.paths.audit_lock_file,
+            self.paths.operation_log,
+            self.paths.operation_log.with_name("operations.jsonl.1"),
+        ):
+            for candidate in (
+                self.paths.audit_lock_file,
+                self.paths.operation_log,
+                self.paths.operation_log.with_name("operations.jsonl.1"),
+            ):
+                candidate.unlink(missing_ok=True)
+            hostile.symlink_to(victim)
+            with self.subTest(hostile=hostile), self.assertRaises(OSError):
+                append_entries(self.paths, [self.audit_entry()])
+            self.assertEqual(victim.read_text(), "keep\n")
+            self.assertEqual(victim.stat().st_mode & 0o777, 0o644)
+
+        self.paths.audit_lock_file.unlink(missing_ok=True)
+        self.paths.operation_log.with_name("operations.jsonl.1").unlink(missing_ok=True)
+        self.paths.operation_log.with_name("operations.jsonl.1").symlink_to(victim)
+        self.assertEqual(recent_entries(self.paths), [])
+        self.assertEqual(victim.read_text(), "keep\n")
+
+    def test_journal_oversized_batch_stays_bounded_valid_and_private(self):
+        entries = [self.audit_entry(runId=f"run-{index}", warnings=["x" * 500]) for index in range(20)]
+        append_entries(self.paths, entries, max_bytes=240, rotations=3)
+        journal_files = [
+            self.paths.operation_log,
+            *(self.paths.operation_log.with_name(f"operations.jsonl.{index}") for index in range(1, 4)),
+        ]
+        for path in journal_files:
+            if not path.exists():
+                continue
+            with self.subTest(path=path):
+                self.assertLessEqual(path.stat().st_size, 240)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                for line in path.read_text().splitlines():
+                    self.assertIsInstance(json.loads(line), dict)
+
+    def test_recent_entries_skips_corrupt_schema_utf8_and_symlinks(self):
+        self.paths.operation_log.parent.mkdir(parents=True)
+        self.paths.operation_log.write_bytes(b"\xff\xfe")
+        self.assertEqual(recent_entries(self.paths), [])
+        self.paths.operation_log.write_text(
+            '{"journalSchemaVersion":"bad","plugin":"cava"}\nnot-json\n'
+        )
+        self.assertEqual(recent_entries(self.paths), [])
+        self.paths.operation_log.unlink()
+        victim = self.paths.home / "private-journal"
+        victim.write_text(json.dumps(self.audit_entry()) + "\n")
+        self.paths.operation_log.symlink_to(victim)
+        self.assertEqual(recent_entries(self.paths), [])
+
+    def test_journal_truncates_and_redacts_sensitive_values(self):
+        payload = {
+            "operation": "hook-run",
+            "ok": False,
+            "results": [
+                {
+                    "id": "cava",
+                    "status": "failed",
+                    "message": "password=hunter2 " + "x" * 900,
+                    "changed": [str(self.paths.home / "file")],
+                    "actions": ["https://example.test/reload?token=secret#fragment"],
+                    "warnings": [{"apiToken": "secret"}],
+                    "restartRequired": [],
+                    "errors": [{"message": "api_key=abc " + "y" * 900}],
+                }
+            ],
+        }
+        entry = entries_from_payload(
+            self.paths,
+            payload,
+            run_id="fixed",
+            now=lambda: datetime(2026, 8, 6, 12, tzinfo=UTC),
+        )[0]
+        encoded = json.dumps(entry)
+        self.assertNotIn("hunter2", encoded)
+        self.assertNotIn("token=secret", encoded)
+        self.assertNotIn("fragment", encoded)
+        self.assertNotIn("api_key=abc", encoded)
+        self.assertIn("truncated", encoded)
+
+    def test_audit_failure_never_escapes(self):
+        with patch("thpm.audit.append_entries", side_effect=OSError("disk full")):
+            self.assertFalse(record_payload(self.paths, {"operation": "hook-run", "ok": True}))
+
+    def test_redaction_covers_headers_userinfo_and_embedded_home_paths(self):
+        raw = (
+            "failed at "
+            f"{self.paths.home}/private: Authorization: Bearer TOPSECRET; "
+            "Bearer BARESECRET; "
+            "https://user:URLSECRET@example.test/path?token=QUERY#FRAGMENT"
+        )
+        cleaned = sanitize(raw, self.paths.home)
+        self.assertIn("~/private", cleaned)
+        for secret in (
+            "TOPSECRET",
+            "BARESECRET",
+            "URLSECRET",
+            "QUERY",
+            "FRAGMENT",
+            str(self.paths.home),
+        ):
+            self.assertNotIn(secret, cleaned)
+        self.assertIn("Authorization: [redacted]", cleaned)
+        self.assertIn("https://example.test/path", cleaned)
+
+    def test_multi_plugin_failures_keep_matching_failure_details(self):
+        payload = {
+            "operation": "hook-run",
+            "ok": False,
+            "results": [
+                {"id": "cava", "status": "failed"},
+                {"id": "fish", "status": "failed"},
+            ],
+            "errors": [
+                {"plugin": "cava", "message": "CAVA DETAIL"},
+                {"plugin": "fish", "message": "FISH DETAIL"},
+            ],
+        }
+        entries = entries_from_payload(self.paths, payload)
+        self.assertEqual(entries[0]["failureDetail"], "CAVA DETAIL")
+        self.assertEqual(entries[1]["failureDetail"], "FISH DETAIL")
+
+    def test_support_report_is_deterministic_filtered_private_and_bounded(self):
+        self.write_palette()
+        (self.paths.current_theme_name).parent.mkdir(parents=True, exist_ok=True)
+        self.paths.current_theme_name.write_text("everforest\n")
+        config = self.paths.config_home / "cava/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[color]\ntheme='thpm'\npassword=never-include-this\n")
+        append_entries(self.paths, [self.audit_entry(), self.audit_entry(plugin="fish")])
+        doctor = {
+            "ok": True,
+            "summary": "healthy",
+            "checks": [{"id": "cava.selector", "status": "pass", "summary": "selected"}],
+            "diagnostics": {
+                "cava": {
+                    "processes": [{"pid": 123, "configPath": str(config)}],
+                    "apiToken": "must-redact",
+                }
+            },
+        }
+        with patch("thpm.report.cava_version", return_value=(0, 10, 7)):
+            report = build_report(
+                self.paths,
+                plugin="cava",
+                plugin_view={"id": "cava", "enabled": True},
+                doctor=doctor,
+                now=lambda: datetime(2026, 8, 6, 12, tzinfo=UTC),
+                id_factory=lambda: "report-fixed",
+                install_origin={"origin": "thpm", "repository": "https://example.test/repo?secret=yes"},
+            )
+        encoded = json.dumps(report)
+        self.assertEqual(report["reportSchemaVersion"], 1)
+        self.assertEqual(report["generatedAt"], "2026-08-06T12:00:00Z")
+        self.assertEqual(report["reportId"], "report-fixed")
+        self.assertEqual(report["scope"], "cava")
+        self.assertEqual(len(report["recentOperations"]), 1)
+        self.assertLessEqual(len(encoded.encode()), MAX_REPORT_BYTES)
+        self.assertNotIn("never-include-this", encoded)
+        self.assertNotIn("must-redact", encoded)
+        self.assertNotIn("secret=yes", encoded)
+        self.assertNotIn(platform.node(), encoded)
+        self.assertIn("~/config/cava/config", encoded)
+        self.assertIn("configuration and theme file contents", encoded)
+
+    def test_report_pretty_size_is_trimmed_before_write(self):
+        doctor = {
+            "ok": False,
+            "summary": "large",
+            "checks": [
+                {
+                    "id": f"check-{index}",
+                    "status": "error",
+                    "summary": "x" * 500,
+                    "evidence": {f"field-{item}": "y" * 500 for item in range(12)},
+                }
+                for index in range(32)
+            ],
+            "diagnostics": {f"item-{index}": "z" * 500 for index in range(32)},
+        }
+        with patch("thpm.report.MAX_REPORT_BYTES", 3500):
+            report = build_report(
+                self.paths,
+                plugin="cava",
+                plugin_view={"id": "cava", "detail": "p" * 500},
+                doctor=doctor,
+            )
+            output = write_report(self.paths, report)
+            payload = output.read_bytes()
+        self.assertLessEqual(len(payload), 3500)
+        self.assertTrue(report["privacy"]["truncated"])
+        self.assertEqual(json.loads(payload)["reportSchemaVersion"], 1)
+
+    def test_support_report_output_is_mode_0600(self):
+        report = {
+            "reportSchemaVersion": 1,
+            "generatedAt": "2026-08-06T12:00:00Z",
+            "scope": "cava",
+        }
+        output = write_report(self.paths, report)
+        self.assertTrue(output.is_file())
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(output.read_text())["scope"], "cava")
+
+    def test_service_report_embeds_schema_and_honors_output(self):
+        output = self.paths.home / "share/report.json"
+        built = {"reportSchemaVersion": 1, "scope": "cava"}
+        with patch.object(Service, "doctor", return_value={"plugins": [], "ok": True}), patch(
+            "thpm.service.build_report", return_value=built
+        ):
+            payload = Service(self.paths).support_report("cava", output=output)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["report"], built)
+        self.assertEqual(payload["reportPath"], str(output))
+        self.assertTrue(output.is_file())
+
+    def test_report_human_rendering_shows_path_and_share_instruction(self):
+        stream = io.StringIO()
+        render(
+            {
+                "operation": "report",
+                "ok": True,
+                "summary": "support report saved",
+                "reportPath": "/tmp/report.json",
+                "errors": [],
+            },
+            console=Console(file=stream, force_terminal=False, width=100),
+        )
+        output = stream.getvalue()
+        self.assertIn("/tmp/report.json", output)
+        self.assertIn("Share this JSON file", output)
+
+    def test_report_cli_json_is_one_valid_envelope(self):
+        response = {
+            "schemaVersion": 1,
+            "ok": True,
+            "operation": "report",
+            "summary": "saved",
+            "reportPath": "/tmp/report.json",
+            "report": {"reportSchemaVersion": 1},
+            "errors": [],
+        }
+        with patch("thpm.cli.Paths.discover", return_value=self.paths), patch.object(
+            Service, "support_report", return_value=response
+        ), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = main(["report", "cava", "--json"])
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["schemaVersion"], 1)
+        self.assertEqual(payload["report"]["reportSchemaVersion"], 1)
+
+    def test_hook_records_authoritative_results_without_affecting_exit(self):
+        result = {
+            "results": [],
+            "counts": {"applied": 0, "unchanged": 0, "skipped": 0, "failed": 0},
+            "changed": [],
+            "actions": [],
+            "restartRequired": [],
+            "errors": [],
+            "warnings": [],
+        }
+        with patch("thpm.service.apply_enabled", return_value=result), patch(
+            "thpm.service.record_payload", return_value=False
+        ) as record:
+            payload = Service(self.paths).hook_run("theme-set", ["everforest"])
+        self.assertTrue(payload["ok"])
+        record.assert_called_once()
+
+    def test_cava_repair_outcomes_are_journaled(self):
+        diagnostics = {
+            "checks": [
+                {
+                    "id": "cava.version",
+                    "status": "error",
+                    "summary": "Cava unavailable",
+                }
+            ]
+        }
+        with patch("thpm.service.shutil.which", return_value=None), patch(
+            "thpm.service.diagnose_cava", return_value=diagnostics
+        ), patch("thpm.service.record_payload", return_value=True) as record:
+            payload = Service(self.paths)._repair_cava(enable=True)
+        self.assertFalse(payload["ok"])
+        self.assertGreaterEqual(payload["durationMs"], 0)
+        record.assert_called_once()
+
+
 class UpdateTests(Sandbox):
     def setUp(self):
         super().setUp()
@@ -4095,7 +5586,7 @@ class UpdateTests(Sandbox):
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc17")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc19")
 
     def test_staged_runtime_installs_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)

@@ -7,10 +7,40 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__, ui
+from .audit import record_payload
+from .cava import (
+    CavaError,
+    running_cava_requires_restart,
+)
+from .cava import (
+    configure_selector as configure_cava_selector,
+)
+from .cava import (
+    default_config_path as cava_config_path,
+)
+from .cava import (
+    diagnose as diagnose_cava,
+)
+from .cava import (
+    reload_matching_processes as reload_cava_processes,
+)
+from .cava import (
+    restore_selector as restore_cava_selector,
+)
+from .cava import (
+    safe_config_target as safe_cava_config_target,
+)
+from .cava import (
+    selector_state_path as cava_selector_state_path,
+)
+from .cava import (
+    theme_source as cava_theme_source,
+)
 from .compat import cleanup_gtk, vscode_doctor_warnings
 from .config import ConfigError, Preferences
 from .config import load as load_config
@@ -33,13 +63,23 @@ from .migrate import archive as archive_legacy
 from .migrate import artifacts as legacy_artifacts
 from .migrate import inspect as inspect_legacy
 from .migrate import needs_compat
+from .models import ApplyResult
 from .omarchy import capabilities, run
 from .palette import load as load_palette
 from .paths import Paths
 from .registry import BY_ID
+from .report import build_report, write_report
 from .resources import asset
 from .snapshot import build as build_snapshot
-from .state import StateError, load, migration_lock, mutation_lock, save
+from .state import (
+    StateError,
+    complete_cava_opt_in,
+    enforce_cava_opt_in,
+    load,
+    migration_lock,
+    mutation_lock,
+    save,
+)
 from .templates import reconcile as reconcile_templates
 from .update import apply as apply_update
 from .update import check as check_update
@@ -402,8 +442,216 @@ class Service:
             errors=[],
         )
 
+    def _repair_cava(self, *, enable: bool) -> dict[str, object]:
+        operation = "cava-setup" if enable else "doctor"
+        started_ns = time.monotonic_ns()
+
+        def response(
+            successful: bool,
+            summary: str,
+            diagnostics: dict[str, object],
+            **fields: object,
+        ) -> dict[str, object]:
+            payload = envelope(
+                operation,
+                successful,
+                summary=summary,
+                diagnostics={"cava": diagnostics},
+                checks=diagnostics.get("checks", []),
+                durationMs=max(0, (time.monotonic_ns() - started_ns) // 1_000_000),
+                **fields,
+            )
+            record_payload(self.paths, payload, plugin="cava")
+            return payload
+
+        try:
+            enabled_before = load(self.paths)
+        except StateError as exc:
+            diagnostics = diagnose_cava(
+                self.paths, command_path=shutil.which("cava")
+            )
+            return response(
+                False,
+                "Cava configuration cannot be repaired",
+                diagnostics,
+                errors=[{"plugin": "cava", "message": str(exc)}],
+            )
+        if not enable and not enabled_before.get("cava"):
+            diagnostics = diagnose_cava(
+                self.paths, command_path=shutil.which("cava")
+            )
+            return response(
+                False,
+                "Cava integration is disabled",
+                diagnostics,
+                errors=[
+                    {
+                        "plugin": "cava",
+                        "message": "run `thpm enable cava` instead",
+                    }
+                ],
+            )
+        command = shutil.which("cava")
+        diagnostics = diagnose_cava(self.paths, command_path=command)
+        version_check = next(
+            check
+            for check in diagnostics["checks"]
+            if check["id"] == "cava.version"
+        )
+        if command is None or version_check["status"] != "pass":
+            return response(
+                False,
+                "Cava cannot use THPM theme files",
+                diagnostics,
+                errors=[
+                    {"plugin": "cava", "message": str(version_check["summary"])}
+                ],
+            )
+        try:
+            config_target = safe_cava_config_target(
+                self.paths, cava_config_path(self.paths)
+            )
+        except CavaError as exc:
+            return response(
+                False,
+                "Cava configuration cannot be repaired safely",
+                diagnostics,
+                errors=[{"plugin": "cava", "message": str(exc)}],
+            )
+
+        # Render the generated fallback before beginning the mutation transaction.
+        # This refresh runs with the persisted Cava setting unchanged, so its hook
+        # cannot take over or reload Cava midway through setup.
+        if cava_theme_source(self.paths) is None:
+            prepared = dict(enabled_before)
+            prepared["cava"] = True
+            with mutation_lock(self.paths):
+                reconcile_templates(self.paths, prepared)
+            try:
+                completed = run("theme", "refresh", check=False, timeout=180)
+            except (OSError, subprocess.SubprocessError) as exc:
+                completed = None
+                refresh_error = str(exc)
+            else:
+                refresh_error = completed.stderr.strip() if completed.returncode else ""
+            if completed is None or completed.returncode != 0 or cava_theme_source(self.paths) is None:
+                with mutation_lock(self.paths):
+                    reconcile_templates(self.paths, enabled_before)
+                return response(
+                    False,
+                    "unable to render the Cava theme",
+                    diagnose_cava(self.paths, command_path=command),
+                    errors=[
+                        {
+                            "plugin": "cava",
+                            "message": refresh_error
+                            or "theme refresh did not render Cava output",
+                        }
+                    ],
+                )
+
+        output = self.paths.config_home / "cava/themes/thpm"
+        state_root = self.paths.managed_asset_state_dir
+        rollback_paths = [
+            config_target,
+            cava_selector_state_path(self.paths),
+            self.paths.cava_opt_in_marker,
+            output,
+            state_root / "generated-cava.json",
+            state_root / "generated-cava.backup",
+            state_root / "generated-cava.legacy-checked",
+        ]
+        changed: list[str] = []
+        result = ApplyResult("cava", "unchanged")
+        old_cava_enabled = bool(enabled_before.get("cava"))
+        try:
+            with mutation_lock(self.paths):
+                snapshots = {path: _snapshot_file(path) for path in rollback_paths}
+                current = load(self.paths)
+                old_cava_enabled = bool(current.get("cava"))
+                current["cava"] = True
+                save(self.paths, current)
+                changed.extend(reconcile_templates(self.paths, current))
+                changed.extend(configure_cava_selector(self.paths))
+                try:
+                    result = apply_integration(
+                        "cava",
+                        self.paths,
+                        force_reload=True,
+                        defer_reload=True,
+                    )
+                    changed.extend(result.changed)
+                    if result.status in {"failed", "skipped"}:
+                        raise RuntimeError(result.message)
+                    verified = diagnose_cava(self.paths, command_path=command)
+                    blocking_ids = {
+                        "cava.binary",
+                        "cava.version",
+                        "cava.config",
+                        "cava.selector",
+                        "cava.source",
+                        "cava.target",
+                        "cava.ownership",
+                    }
+                    blocking = [
+                        check
+                        for check in verified["checks"]
+                        if check["id"] in blocking_ids
+                        and check["status"] == "error"
+                    ]
+                    if blocking:
+                        raise RuntimeError(str(blocking[0]["summary"]))
+                    # This is the durable boundary between legacy default state
+                    # and explicit consent to manage the user's Cava selector.
+                    complete_cava_opt_in(self.paths)
+                except (
+                    OSError,
+                    RuntimeError,
+                    UnicodeError,
+                    ValueError,
+                    CavaError,
+                    StateError,
+                ):
+                    for path, snapshot in snapshots.items():
+                        _restore_file(path, snapshot)
+                    rollback_state = load(self.paths)
+                    rollback_state["cava"] = old_cava_enabled
+                    save(self.paths, rollback_state)
+                    reconcile_templates(self.paths, rollback_state)
+                    raise
+        except (OSError, RuntimeError, UnicodeError, ValueError, CavaError) as exc:
+            failed = diagnose_cava(self.paths, command_path=command)
+            return response(
+                False,
+                "unable to configure Cava",
+                failed,
+                errors=[{"plugin": "cava", "message": str(exc)}],
+            )
+
+        actions, restart_required, reload_warnings = reload_cava_processes(self.paths)
+        diagnostics = diagnose_cava(self.paths, command_path=command)
+        warnings = [
+            {"plugin": "cava", "message": message}
+            for message in [*result.warnings, *reload_warnings]
+        ]
+        return response(
+            True,
+            "Cava now uses THPM's managed theme",
+            diagnostics,
+            committed=True,
+            stateChanged=not old_cava_enabled,
+            changed=list(dict.fromkeys(changed)),
+            actions=[*result.actions, *actions],
+            restartRequired=list(
+                dict.fromkeys([*result.restartRequired, *restart_required])
+            ),
+            warnings=warnings,
+            errors=[],
+        )
+
     def set_enabled(self, plugin_id: str, value: bool, *, confirmed: bool = False, refresh: bool = True) -> dict[str, object]:
         operation = "plugin-enable" if value else "plugin-disable"
+        started_ns = time.monotonic_ns()
         plugin = BY_ID.get(plugin_id)
         if plugin is None:
             matches = difflib.get_close_matches(plugin_id, BY_ID, n=1, cutoff=0.6)
@@ -420,6 +668,18 @@ class Service:
         if value and plugin.confirmation and not confirmed:
             return envelope(operation, False, summary=f"confirmation required to enable {plugin_id}",
                 confirmationRequired=True, plugin=view, errors=[])
+        if value and plugin_id == "cava":
+            result = self._repair_cava(enable=True)
+            result.update(
+                operation=operation,
+                summary=(
+                    "cava enabled and configured"
+                    if result["ok"]
+                    else str(result.get("summary", "unable to enable cava"))
+                ),
+                plugins=self.views(),
+            )
+            return result
         if value and plugin_id == "zed-extra":
             result = self.zed_setup(confirmed=True)
             result.update(
@@ -436,6 +696,13 @@ class Service:
             return result
         self._step("Checking integration")
         warnings: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = []
+        restart_required: list[str] = []
+        cava_was_running = bool(
+            not value
+            and plugin_id == "cava"
+            and running_cava_requires_restart(self.paths)
+        )
         self._step("Updating integration state")
         with mutation_lock(self.paths):
             enabled = load(self.paths)
@@ -484,15 +751,42 @@ class Service:
                 and plugin_id in MANAGED_OUTPUT_PLUGINS
                 and not shared_output_in_use
             ):
-                cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
-                    self.paths, plugin_id, assume_legacy=True
-                )
-                changed.extend(cleanup_changed)
-                warnings.extend(
-                    {"plugin": plugin_id, "message": message}
-                    for message in cleanup_warnings
-                )
-        errors: list[dict[str, str]] = []
+                selector_warnings: list[str] = []
+                if plugin_id == "cava":
+                    selector_changed, selector_warnings = restore_cava_selector(
+                        self.paths
+                    )
+                    changed.extend(selector_changed)
+                    warnings.extend(
+                        {"plugin": "cava", "message": message}
+                        for message in selector_warnings
+                    )
+                    blocking_selector_warnings = [
+                        message
+                        for message in selector_warnings
+                        if "changed outside THPM" not in message
+                    ]
+                    if blocking_selector_warnings:
+                        errors.append(
+                            {
+                                "plugin": "cava",
+                                "message": (
+                                    "Cava selector could not be restored; preserved "
+                                    "the still-selected managed theme"
+                                ),
+                            }
+                        )
+                else:
+                    blocking_selector_warnings = []
+                if not blocking_selector_warnings:
+                    cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
+                        self.paths, plugin_id, assume_legacy=True
+                    )
+                    changed.extend(cleanup_changed)
+                    warnings.extend(
+                        {"plugin": plugin_id, "message": message}
+                        for message in cleanup_warnings
+                    )
         refreshed = False
         if value and refresh:
             self._step("Refreshing active theme")
@@ -505,10 +799,16 @@ class Service:
                 errors.append({"message": f"theme refresh failed: {exc}"})
         else:
             self._step("Verifying integration state")
+        if cava_was_running and not errors:
+            restart_required.append("Cava")
         summary = f"{plugin_id} {'enabled' if value else 'disabled'}"
         if errors:
-            summary += "; setting was saved, but theme refresh failed"
-        return envelope(
+            summary += (
+                "; manual recovery is required"
+                if plugin_id == "cava" and not value
+                else "; setting was saved, but theme refresh failed"
+            )
+        payload = envelope(
             operation,
             not errors,
             summary=summary,
@@ -519,9 +819,34 @@ class Service:
             plugins=self.views(),
             errors=errors,
             warnings=warnings,
+            restartRequired=restart_required,
+            durationMs=max(0, (time.monotonic_ns() - started_ns) // 1_000_000),
         )
+        if plugin_id == "cava":
+            record_payload(self.paths, payload, plugin="cava")
+        return payload
 
-    def doctor(self, plugin_id: str | None = None) -> dict[str, object]:
+    def doctor(
+        self,
+        plugin_id: str | None = None,
+        *,
+        fix: bool = False,
+        confirmed: bool = False,
+    ) -> dict[str, object]:
+        if fix and plugin_id is None:
+            return envelope(
+                "doctor",
+                False,
+                summary="Doctor repair requires one plugin",
+                errors=[{"message": "use `thpm doctor <plugin> --fix`"}],
+            )
+        if fix and plugin_id != "cava":
+            return envelope(
+                "doctor",
+                False,
+                summary=f"Doctor repair is not available for {plugin_id}",
+                errors=[{"message": "automatic Doctor repair is currently available only for cava"}],
+            )
         errors: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
         caps = capabilities()
@@ -544,13 +869,113 @@ class Service:
                 entry = ("vscode-local-compat", message)
                 if entry not in known:
                     warnings.append({"plugin": entry[0], "message": entry[1]})
+        checks: list[dict[str, object]] = []
+        cava_diagnostics: dict[str, object] | None = None
+        cava_view = next((plugin for plugin in plugins if plugin["id"] == "cava"), None)
+        if cava_view is not None and (plugin_id == "cava" or cava_view["enabled"]):
+            cava_diagnostics = diagnose_cava(
+                self.paths, command_path=shutil.which("cava")
+            )
+            checks = list(cava_diagnostics["checks"])
+            for check in checks:
+                entry = {"plugin": "cava", "check": str(check["id"]), "message": str(check["summary"])}
+                if check["status"] == "error":
+                    errors.append(entry)
+                elif check["status"] in {"warning", "unknown"}:
+                    warnings.append(entry)
         _configured, config_warning = _preferences(self.paths)
         if config_warning:
             warnings.append({"message": config_warning})
         migration = _migration_status(self.paths)
         if migration["pending"]:
             warnings.append({"message": "template refresh migration pending; run thpm reconcile --refresh"})
-        return envelope("doctor", not errors, summary=f"{len(errors)} errors, {len(warnings)} warnings", plugins=plugins, errors=errors, warnings=warnings, migration=migration, capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)})
+        payload = envelope(
+            "doctor",
+            not errors,
+            summary=f"{len(errors)} errors, {len(warnings)} warnings",
+            plugins=plugins,
+            errors=errors,
+            warnings=warnings,
+            migration=migration,
+            capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)},
+            checks=checks,
+            diagnostics={"cava": cava_diagnostics} if cava_diagnostics else {},
+        )
+        if not fix:
+            return payload
+        if cava_diagnostics is None or cava_view is None:
+            payload.update(
+                ok=False,
+                summary="Cava diagnostics are unavailable",
+            )
+            return payload
+        if not cava_view["enabled"]:
+            payload.update(
+                ok=False,
+                summary="Cava integration is disabled",
+                errors=[
+                    *errors,
+                    {"plugin": "cava", "message": "run `thpm enable cava` instead"},
+                ],
+            )
+            return payload
+        if not confirmed:
+            payload.update(
+                ok=False,
+                confirmationRequired=True,
+                repairPlan=[
+                    check["repair"]
+                    for check in checks
+                    if isinstance(check.get("repair"), dict)
+                    and check["repair"].get("available")
+                ],
+                summary="confirmation required to repair Cava",
+            )
+            return payload
+        return self._repair_cava(enable=False)
+
+    def support_report(
+        self, plugin_id: str | None = None, *, output: Path | None = None
+    ) -> dict[str, object]:
+        if plugin_id is not None and plugin_id not in BY_ID:
+            return envelope(
+                "report",
+                False,
+                summary=f"unknown plugin: {plugin_id}",
+                errors=[{"message": "choose a registered THPM integration"}],
+            )
+        doctor = self.doctor(plugin_id)
+        plugin_view = next(
+            (
+                plugin
+                for plugin in doctor.get("plugins", [])
+                if isinstance(plugin, dict) and plugin.get("id") == plugin_id
+            ),
+            None,
+        )
+        try:
+            report = build_report(
+                self.paths,
+                plugin=plugin_id,
+                plugin_view=plugin_view,
+                doctor=doctor,
+            )
+            report_path = write_report(self.paths, report, output=output)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return envelope(
+                "report",
+                False,
+                summary=f"unable to create support report: {exc}",
+                errors=[{"message": str(exc)}],
+            )
+        return envelope(
+            "report",
+            summary=f"support report saved to {report_path}",
+            reportPath=str(report_path),
+            shareCommand=f"Share {report_path} with the THPM maintainer",
+            report=report,
+            errors=[],
+        )
 
     def reconcile(
         self, refresh: bool = False, *, defer_upgrade_refresh: bool = False
@@ -593,7 +1018,11 @@ class Service:
 
     def install_check(self) -> dict[str, object]:
         caps = capabilities()
-        missing_assets = [str(asset(kind)) for kind in ("templates", "hooks", "qml") if not asset(kind).is_dir()]
+        missing_assets = [
+            str(asset(kind))
+            for kind in ("templates", "hooks", "qml", "spicetify")
+            if not asset(kind).is_dir()
+        ]
         errors = ([{"message": item} for item in caps.missing] +
             [{"message": f"packaged asset directory missing: {item}"} for item in missing_assets])
         return envelope("install-check", not errors, summary="installation prerequisites satisfied" if not errors else "installation prerequisites missing",
@@ -613,6 +1042,7 @@ class Service:
                 self._step("Rendering managed integrations")
                 enabled = load(self.paths)
                 enabled.update(migrated)
+                enforce_cava_opt_in(self.paths, enabled)
                 save(self.paths, enabled)
                 changed = reconcile_templates(self.paths, enabled)
                 retired_changed, retired_warnings = _cleanup_retired_integrations(
@@ -654,6 +1084,9 @@ class Service:
 
     def uninstall(self) -> dict[str, object]:
         warnings: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = []
+        restart_required: list[str] = []
+        cava_was_running = running_cava_requires_restart(self.paths)
         self._step("Disabling managed integrations")
         with migration_lock(self.paths):
             with mutation_lock(self.paths):
@@ -682,9 +1115,29 @@ class Service:
                         {"plugin": plugin_id, "message": message}
                         for message in cleanup_warnings + reload_warnings
                     )
+                selector_changed, selector_warnings = restore_cava_selector(self.paths)
+                changed.extend(selector_changed)
+                warnings.extend(
+                    {"plugin": "cava", "message": message}
+                    for message in selector_warnings
+                )
+                blocking_selector_warnings = [
+                    message
+                    for message in selector_warnings
+                    if "changed outside THPM" not in message
+                ]
+                if blocking_selector_warnings:
+                    residual_message = (
+                        "preserved the Cava theme target because its still-selected "
+                        "configuration could not be restored"
+                    )
+                    warnings.append({"plugin": "cava", "message": residual_message})
+                    errors.append({"plugin": "cava", "message": residual_message})
                 for plugin_id in sorted(
                     MANAGED_OUTPUT_PLUGINS | RETIRED_MANAGED_OUTPUT_PLUGINS
                 ):
+                    if plugin_id == "cava" and blocking_selector_warnings:
+                        continue
                     cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
                         self.paths,
                         plugin_id,
@@ -708,6 +1161,12 @@ class Service:
                 if self.paths.canonical_palette_migration_marker.exists():
                     self.paths.canonical_palette_migration_marker.unlink()
                     changed.append(str(self.paths.canonical_palette_migration_marker))
+                if (
+                    self.paths.cava_opt_in_marker.exists()
+                    or self.paths.cava_opt_in_marker.is_symlink()
+                ):
+                    self.paths.cava_opt_in_marker.unlink()
+                    changed.append(str(self.paths.cava_opt_in_marker))
                 compat_asset = asset("compat", "theme-env.sh")
                 if self.paths.legacy_compat_file.is_file() and compat_asset.is_file() and self.paths.legacy_compat_file.read_bytes() == compat_asset.read_bytes():
                     self.paths.legacy_compat_file.unlink()
@@ -721,7 +1180,22 @@ class Service:
                     self.paths.install_metadata.unlink()
             except OSError:
                 pass
-        return envelope("uninstall", summary="THPM integration files removed", changed=changed, ui=ui_result, errors=[], warnings=warnings)
+        if cava_was_running and not blocking_selector_warnings:
+            restart_required.append("Cava")
+        return envelope(
+            "uninstall",
+            not errors,
+            summary=(
+                "THPM integration files removed"
+                if not errors
+                else "THPM integration files removed with a preserved Cava residual"
+            ),
+            changed=changed,
+            ui=ui_result,
+            errors=errors,
+            warnings=warnings,
+            restartRequired=restart_required,
+        )
 
     def hook_run(self, event: str, event_args: list[str] | tuple[str, ...] = ()) -> dict[str, object]:
         if event != "theme-set":
@@ -746,12 +1220,14 @@ class Service:
         counts = result.get("counts") or {"applied": 0, "unchanged": 0, "skipped": 0, "failed": len(result["errors"])}
         summary = (f"processed {subject}: {counts['applied']} applied, {counts['unchanged']} unchanged, "
             f"{counts['skipped']} skipped, {counts['failed']} failed")
-        return envelope("hook-run", not result["errors"], summary=summary,
+        payload = envelope("hook-run", not result["errors"], summary=summary,
             event=event, eventArgs=list(event_args), themeName=theme_name or None,
             restartPolicy=preferences.restart_policy,
             restartNotificationSent=notification_sent,
             forced=force_reload,
             **result)
+        record_payload(self.paths, payload)
+        return payload
 
     def run_theme(self) -> dict[str, object]:
         event_count = self._event_count

@@ -1,103 +1,33 @@
-## THPM 1.0.0rc17 is now available
+## THPM 1.0.0rc19 is now available
 
 **THPM is made for Omarchy Quattro and supports Omarchy 4.x.**
 
-### Temporary Arch installation while AUR submissions are unavailable
-
-Download and inspect the temporary release-source installer, then run it as your normal user:
+### Install or upgrade the latest release
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install-arch-release.sh
-less install-arch-release.sh
-bash install-arch-release.sh 1.0.0rc17
-rm install-arch-release.sh
+curl -fsSL https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install-arch-release.sh | bash
 ```
 
-It downloads the rc17 GitHub source archive and checksum, verifies the source, builds the stable Arch package with `makepkg`, installs it through pacman, and completes THPM's per-user setup. Existing installations are upgraded through the same path without replacing pacman ownership.
+The installer resolves the newest published GitHub release, verifies its source archive and checksum, builds the Arch package with `makepkg`, installs it through pacman, and completes THPM's per-user setup.
 
-## What’s new since rc5
+## What’s new in rc19
 
-### Stock Discord themes work again
+### Obsidian Terminal theming is restored
 
-The standard Discord integration now wraps THPM's own hosted Midnight base instead of setting a handful of obsolete Discord variables. Stock Omarchy themes such as Everforest receive a complete current Discord surface from their semantic palette. The vendored base is pinned, reviewed, and redistributed under Midnight's MIT License.
+THPM once again synchronizes the Obsidian Terminal community plugin’s xterm.js colors after Omarchy theme changes. This integration is separate from Omarchy’s native Obsidian application theme support.
 
-### Application restarts are now under your control
+### Safe discovery and updates
 
-The GUI, TUI, and CLI now share one restart policy. Choose automatic restarts for applications with a safe adapter, or keep applications open and receive one notification naming the pending restarts:
+The adapter discovers Terminal settings through Obsidian’s registered vaults, common vault locations, or explicit `OBSIDIAN_VAULT_PATH` and `OBSIDIAN_TERMINAL_DATA_JSON` overrides. It validates all discovered documents first, refuses malformed or symlinked settings, atomically updates files, and preserves every option outside `terminalOptions.theme`.
 
-```sh
-thpm config restart-policy automatic
-thpm config restart-policy notify
-```
+### Truthful restart reporting
 
-Closed applications are never launched just to apply a theme. GTK applications and nwg-dock-hyprland remain notification-only because THPM cannot restart them safely without risking work or losing launch arguments.
+The running Terminal plugin does not reliably reload settings changed on disk. RC19 therefore reports Obsidian as restart-required after a palette change rather than falsely claiming that an open terminal repainted.
 
-**Apply active theme** now genuinely reapplies the current theme even when managed files are already current, including Spotify's refresh and policy-controlled restart behavior.
+### Verification
 
-### Spotify integration is repaired
-
-THPM now writes Spicetify colors to the active `omarchy` theme location, checks backup and selected-theme readiness, refreshes generated files, and restarts only an already-running Spotify client when automatic restarts are enabled.
-
-### Obsolete integrations are retired safely
-
-Vicinae, Windsurf, and Typora no longer appear as active integrations. Upgrade cleanup restores tracked displaced files and preserves unknown or user-modified content at their former destinations.
-
-### Inactive SwayNC no longer blocks theme hooks
-
-Systems that still have `swaync-client` installed but use Omarchy Shell for notifications no longer wait on SwayNC's masked D-Bus service or fail the theme hook. THPM reloads SwayNC CSS only when its daemon is actually running.
-
-### Theme changes now show every integration result
-
-Terminal-driven Omarchy theme changes now print a compact, color-aware line for every enabled THPM integration. Each result is clearly marked as applied, unchanged, skipped, or failed.
-
-`thpm run` shows the same report without running integrations twice, and it now returns a failure when an integration genuinely fails instead of hiding the problem behind a successful theme refresh.
-
-### Zed themes now work through THPM
-
-Turn on **Zed authored theme** in THPM and it will install and select the matching Zed theme for you. Your existing Zed settings are backed up first.
-
-If you use Omazed, THPM leaves it available for themes that do not include their own Zed colors.
-
-### Commands no longer appear stuck
-
-Enable and disable commands now show what they are doing instead of sitting at 0%. Prompts remain visible, failures no longer look like successful completions, and misspelled integration names suggest the closest valid name.
-
-### Safer theme switching
-
-THPM is now better at cleaning up after itself. If you disable an integration or switch to a theme that does not support it, THPM restores what was there before whenever possible.
-
-Your own changes are preserved instead of being overwritten or removed.
-
-### A cleaner graphical manager
-
-The graphical manager now follows your Omarchy window style more closely, without the extra border and frame it had before.
-
-### Better terminal feedback
-
-THPM commands now show clearer progress, results, changed files, and useful errors. Use `--quiet` when you want shorter output.
-
-### Smoother updates
-
-Running `thpm update` now installs the available update directly. Package output and password prompts remain visible, theme colors are refreshed after the update, and THPM gives you a clear result when everything is finished. Long-running update steps now stop with an error instead of waiting forever.
-
-### Clearer app support
-
-THPM now does a better job of telling you when an app is missing or when the current theme does not include support for an integration.
-
-### Testing still needed
-
-If you use any of these apps, feedback would be especially helpful:
-
-- Qt6ct
-- nwg-dock-hyprland
-- Qutebrowser
-- Heroic Games Launcher
-- Spicetify
-
-### Special thanks
-
-Special thanks to our beta testers: @HANCORE, @sodipops, @gnugent, and @signal//directive.
+The rc19 release passes the complete automated suite: 315 tests.
 
 This remains a release candidate. Please report any issues you find.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc17)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc19)

@@ -4,10 +4,11 @@ import fcntl
 import os
 import tempfile
 import tomllib
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
+from .files import atomic_text
 from .paths import Paths
 from .registry import PLUGINS
 
@@ -18,6 +19,25 @@ class StateError(ValueError):
 
 def defaults() -> dict[str, bool]:
     return {plugin.id: plugin.default_enabled for plugin in PLUGINS}
+
+
+def cava_opt_in_completed(paths: Paths) -> bool:
+    marker = paths.cava_opt_in_marker
+    if not marker.is_file() or marker.is_symlink():
+        return False
+    try:
+        return marker.read_text(encoding="utf-8") == "version = 1\n"
+    except (OSError, UnicodeError):
+        return False
+
+
+def complete_cava_opt_in(paths: Paths) -> None:
+    atomic_text(paths.cava_opt_in_marker, "version = 1\n", 0o600)
+
+
+def enforce_cava_opt_in(paths: Paths, enabled: dict[str, bool]) -> None:
+    if enabled.get("cava") and not cava_opt_in_completed(paths):
+        enabled["cava"] = False
 
 
 def load(paths: Paths) -> dict[str, bool]:
@@ -32,6 +52,10 @@ def load(paths: Paths) -> dict[str, bool]:
     for plugin_id in enabled:
         if isinstance(saved.get(plugin_id), bool):
             enabled[plugin_id] = saved[plugin_id]
+    # Releases before managed Cava setup wrote the then-default `cava = true`
+    # into every state file. Do not interpret that legacy value as consent to
+    # edit the user's Cava selector. Confirmed setup creates the durable marker.
+    enforce_cava_opt_in(paths, enabled)
     return enabled
 
 

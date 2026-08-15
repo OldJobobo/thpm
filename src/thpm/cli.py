@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -91,7 +92,17 @@ def parser() -> argparse.ArgumentParser:
 
     doctor = commands.add_parser("doctor")
     doctor.add_argument("plugin", nargs="?")
+    doctor.add_argument("--fix", action="store_true", help="repair one diagnosed integration")
+    doctor.add_argument("--yes", action="store_true", help="confirm the repair non-interactively")
     _output_options(doctor)
+
+    report = commands.add_parser(
+        "report", help="create a privacy-preserving support report"
+    )
+    report.add_argument("plugin", nargs="?")
+    report.add_argument("--output", type=Path)
+    _output_options(report)
+
     hook = commands.add_parser("hook-run")
     hook.add_argument("event")
     hook.add_argument("event_args", nargs="*")
@@ -243,6 +254,31 @@ def _zed_setup(
     return payload
 
 
+def _doctor(
+    service: Service,
+    args: argparse.Namespace,
+    json_mode: bool,
+    activity: Activity | None,
+) -> dict[str, object]:
+    payload = service.doctor(
+        args.plugin,
+        fix=bool(args.fix),
+        confirmed=bool(args.yes),
+    )
+    if (
+        payload.get("confirmationRequired")
+        and not json_mode
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+        and _confirm(
+            "Repair Cava's managed theme selection and output? [y/N] ",
+            activity,
+        )
+    ):
+        payload = service.doctor(args.plugin, fix=True, confirmed=True)
+    return payload
+
+
 def _execute(
     service: Service,
     paths: Paths,
@@ -256,7 +292,10 @@ def _execute(
     if command == "enable": return _set_enabled(service, args, True, json_mode, activity)
     if command == "disable": return _set_enabled(service, args, False, json_mode, activity)
     if command == "plugin": return _set_enabled(service, args, args.plugin_command == "enable", json_mode, activity)
-    if command == "doctor": return service.doctor(args.plugin)
+    if command == "doctor": return _doctor(service, args, json_mode, activity)
+    if command == "report":
+        output = args.output.expanduser() if args.output else None
+        return service.support_report(args.plugin, output=output)
     if command == "reconcile": return service.reconcile(args.refresh, defer_upgrade_refresh=args.defer_upgrade_refresh)
     if command == "run": return service.run_theme()
     if command == "install": return service.install_check() if args.install_check else service.install(not args.no_ui)
@@ -330,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
         progress=reporter(activity),
         events=_hook_event_writer(command),
     )
+    started_ns = time.monotonic_ns()
     try:
         if activity is not None:
             with activity:
@@ -343,6 +383,9 @@ def main(argv: list[str] | None = None) -> int:
         payload = envelope(command, False, summary=str(exc), busy="already running" in str(exc), errors=[{"message": str(exc)}])
     except Exception as exc:
         payload = envelope(command, False, summary=str(exc), errors=[{"message": str(exc)}])
+    payload.setdefault(
+        "durationMs", max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
+    )
     if json_mode:
         print(json.dumps(payload, separators=(",", ":")))
     else:

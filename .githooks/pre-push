@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+blocked=false
+while read -r -a fields; do
+    remote_ref="${fields[2]:-}"
+    if [[ "$remote_ref" == 'refs/heads/main' ]]; then
+        blocked=true
+    fi
+done
+
+if [[ "$blocked" == true ]]; then
+    cat >&2 <<'EOF'
+Direct pushes to main are disabled.
+
+Push the task branch and open a pull request:
+  git push -u origin HEAD
+  gh pr create --draft --fill --base main
+
+Do not bypass this guard with --no-verify.
+EOF
+    exit 1
+fi

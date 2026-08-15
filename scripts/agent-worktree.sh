@@ -99,6 +99,13 @@ list_worktrees() {
     git worktree list
 }
 
+has_merged_pull_request() {
+    local branch="$1" count
+    command -v gh >/dev/null 2>&1 || return 1
+    count="$(gh pr list --head "$branch" --state merged --json number --jq 'length' 2>/dev/null)" || return 1
+    [[ "$count" =~ ^[1-9][0-9]*$ ]]
+}
+
 remove_worktree() {
     local force=false assume_yes=false
     while [[ $# -gt 0 ]]; do
@@ -123,8 +130,13 @@ remove_worktree() {
     fi
 
     git fetch --prune origin
-    if ! git merge-base --is-ancestor "$branch" origin/main; then
-        [[ "$force" == true ]] || fail "branch is not merged into origin/main: $branch"
+    local merged_by_ancestry=false merged_by_pull_request=false
+    if git merge-base --is-ancestor "$branch" origin/main; then
+        merged_by_ancestry=true
+    elif has_merged_pull_request "$branch"; then
+        merged_by_pull_request=true
+    else
+        [[ "$force" == true ]] || fail "branch is not merged into origin/main and has no merged pull request: $branch"
     fi
 
     if [[ "$force" == true && "$assume_yes" != true ]]; then
@@ -139,7 +151,13 @@ remove_worktree() {
         git branch -D "$branch"
     else
         git worktree remove "$path"
-        git branch -d "$branch"
+        if [[ "$merged_by_ancestry" == true ]]; then
+            git branch -d "$branch"
+        elif [[ "$merged_by_pull_request" == true ]]; then
+            # Squash and rebase merges do not retain the task tip as an ancestor.
+            # A merged GitHub pull request is the safety proof for local deletion.
+            git branch -D "$branch"
+        fi
     fi
     printf 'Removed worktree %s (%s)\n' "$path" "$branch"
 }

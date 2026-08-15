@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 graphify-out/
+/.pi/
 pkg/
 /packaging/aur/*/src/
 /packaging/aur/*/pkg/

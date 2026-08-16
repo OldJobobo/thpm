@@ -288,17 +288,11 @@ class StateTests(Sandbox):
         self.paths.state_file.write_text("[plugins]\nfish = false\n")
         self.assertFalse(load(self.paths)["fish"])
 
-    def test_schema_one_swaync_default_requires_new_opt_in(self):
+    def test_existing_swaync_enablement_survives_default_policy_change(self):
         self.paths.thpm_state_dir.mkdir(parents=True)
         self.paths.state_file.write_text(
             "version = 1\n\n[plugins]\nswaync = true\n"
         )
-        self.assertFalse(load(self.paths)["swaync"])
-
-        state = load(self.paths)
-        state["swaync"] = True
-        save(self.paths, state)
-        self.assertIn("version = 2", self.paths.state_file.read_text())
         self.assertTrue(load(self.paths)["swaync"])
 
     def test_rejects_conflicting_persisted_discord_state(self):
@@ -397,6 +391,30 @@ class StateTests(Sandbox):
         self.assertFalse(load(self.paths)["cava"])
         self.assertIn("cava = false", self.paths.state_file.read_text())
         self.assertFalse(self.paths.cava_opt_in_marker.exists())
+
+    def test_install_prefers_enabled_legacy_system24(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service.capabilities"
+        ) as caps, patch(
+            "thpm.service.inspect_legacy",
+            return_value=({"discord-system24": True}, []),
+        ), patch(
+            "thpm.service.needs_compat", return_value=False
+        ), patch(
+            "thpm.service.archive_legacy", return_value=None
+        ), patch(
+            "thpm.service._refresh_templates",
+            return_value=({"refreshed": False, "pending": False}, []),
+        ):
+            caps.return_value.available = True
+            caps.return_value.missing = ()
+            result = Service(self.paths).install(with_ui=False)
+
+        self.assertTrue(result["ok"])
+        enabled = load(self.paths)
+        self.assertFalse(enabled["discord"])
+        self.assertTrue(enabled["discord-system24"])
 
     def test_reconcile_only_removes_owned_templates(self):
         foreign = self.paths.themed_dir / "mine.tpl"
@@ -680,6 +698,20 @@ class MigrationTests(Sandbox):
         custom = self.paths.hook_dir / "10-custom.sh"
         custom.write_text('source "$HOME/.local/share/thpm/lib/theme-env.sh"\nsuccess done\n')
         self.assertTrue(needs_compat(self.paths, []))
+
+    def test_service_migration_prefers_enabled_legacy_system24(self):
+        self.paths.hook_dir.mkdir(parents=True)
+        old_hook = self.paths.hook_dir / "40-discord-system24.sh"
+        old_hook.write_text("legacy")
+        assets = Path(__file__).parents[1] / "assets"
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).migrate()
+
+        self.assertTrue(payload["ok"])
+        enabled = load(self.paths)
+        self.assertFalse(enabled["discord"])
+        self.assertTrue(enabled["discord-system24"])
 
     def test_service_migration_preserves_custom_hook_and_replaces_old_helper(self):
         self.paths.hook_dir.mkdir(parents=True)

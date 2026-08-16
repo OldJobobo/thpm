@@ -24,10 +24,20 @@ cleanup() {
 }
 trap cleanup ERR INT TERM
 
+source_lock="$repo_dir/requirements-source.lock"
+if [[ ! -f "$source_lock" || -L "$source_lock" ]]; then
+    printf 'Error: source dependency lock is missing or unsafe: %s\n' "$source_lock" >&2
+    exit 1
+fi
 mkdir -p "$(dirname "$runtime_dir")"
 rm -rf "$staged"
 python3 -m venv "$staged"
-"$staged/bin/python" -m pip install --disable-pip-version-check --no-input 'rich>=14,<16' 'textual>=8.2.8,<9'
+"$staged/bin/python" -m pip install \
+    --disable-pip-version-check \
+    --no-input \
+    --require-hashes \
+    --only-binary=:all: \
+    --requirement "$source_lock"
 site_packages="$("$staged/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 cp -R "$repo_dir/src/thpm" "$site_packages/thpm"
 mkdir -p "$staged/share/thpm"

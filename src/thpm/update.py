@@ -224,13 +224,27 @@ def _safe_extract(archive: Path, destination: Path) -> Path:
 
 
 def _stage_runtime(source: Path, runtime: Path) -> None:
+    source_lock = source / "requirements-source.lock"
+    if not source_lock.is_file() or source_lock.is_symlink():
+        raise RuntimeError(f"source dependency lock is missing or unsafe: {source_lock}")
     subprocess.run(
         [sys.executable, "-m", "venv", str(runtime)],
         check=True,
         timeout=RUNTIME_STAGE_TIMEOUT_SECONDS,
     )
     subprocess.run(
-        [str(runtime / "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "rich>=14,<16", "textual>=8.2.8,<9"],
+        [
+            str(runtime / "bin/python"),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-input",
+            "--require-hashes",
+            "--only-binary=:all:",
+            "--requirement",
+            str(source_lock),
+        ],
         check=True,
         timeout=RUNTIME_STAGE_TIMEOUT_SECONDS,
     )

@@ -2,12 +2,18 @@
 
 ## Unreleased
 
-- Classify every uncertified active integration as Experimental, expose that status through JSON and both frontends, and make new state opt-in, and visibly grandfather ambiguous schema-1 enablement instead of silently disabling adapters while effects may remain.
-- Publish an integration support register that records the reference Omarchy baseline, active defaults, honest certification gaps, experimental lifecycle status, retired cleanup, and the evidence required for maintainer signoff.
-- Add phased release verification for committed version surfaces, exact tagged archives and checksums, stable and VCS PKGBUILDs, and generated `.SRCINFO` metadata.
-- Pin every transitive source-runtime dependency to a SHA-256-verified universal wheel, and validate the shared lock across all supported Python versions in CI.
-- Report incomplete disable and uninstall cleanup with committed state, residuals, retained recovery paths, and retry commands; preserve the source runtime when cleanup must be retried.
-- Fail closed on unsupported or conflicting persisted state, isolate readiness inspection failures per integration, and make the experimental SwayNC adapter default-disabled while preserving existing user enablement.
+## 1.0.0rc20 - 2026-08-16
+
+- Classify every uncertified active integration as Experimental, expose lifecycle status through JSON, CLI, QML, and TUI surfaces, and make fresh state fully opt-in. Existing schema-1 enablement is visibly grandfathered because inherited defaults cannot be distinguished from explicit choices.
+- Publish an integration support register with the reference Omarchy baseline, active defaults, honest evidence gaps, retired cleanup, repeatable real-application certification procedures, and maintainer signoff requirements.
+- Report incomplete disable and uninstall cleanup with committed state, structured residuals, retained recovery paths, and exact retry commands; preserve source runtime and ownership metadata while recovery remains necessary.
+- Fail closed on unsupported or conflicting persisted state, isolate readiness inspection failures per integration, safely normalize migrated Discord intent, and preserve existing SwayNC enablement while default-disabling it for fresh state.
+- Pin every transitive source-runtime dependency to a SHA-256-verified universal wheel and validate the shared lock on Python 3.11 through 3.14.
+- Add Python 3.14 CI, clean stable and VCS Arch builds of the exact pull-request checkout (including the pre-tag phase), generated `.SRCINFO` validation, installed-package smoke tests, and an aggregate required status.
+- Add phased release verification for committed version surfaces, exact tagged archives and checksums, canonical Git trees and permissions, stable and VCS PKGBUILDs, and generated `.SRCINFO` metadata.
+- Build Arch packages with `/usr/bin/python` so pacman-owned modules cannot be mixed with mise-managed user environments.
+- Preserve Shibumi Shell's comment-terminated JSONC menu blocks when installing or removing THPM launchers.
+- Render Heroic's semantic CSS variables from the active Omarchy palette.
 
 ## 1.0.0rc19 - 2026-08-07
 

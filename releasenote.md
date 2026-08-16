@@ -1,6 +1,6 @@
-## THPM 1.0.0rc19 is now available
+## THPM 1.0.0rc20 is now available
 
-**THPM is made for Omarchy Quattro and supports Omarchy 4.x.**
+**THPM is built for Omarchy Quattro and targets Omarchy 4.x. RC20 is the final graduation candidate for THPM 1.0.**
 
 ### Install or upgrade the latest release
 
@@ -10,24 +10,35 @@ curl -fsSL https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install
 
 The installer resolves the newest published GitHub release, verifies its source archive and checksum, builds the Arch package with `makepkg`, installs it through pacman, and completes THPM's per-user setup.
 
-## What’s new in rc19
+## What’s new in rc20
 
-### Obsidian Terminal theming is restored
+### Honest Experimental integration policy
 
-THPM once again synchronizes the Obsidian Terminal community plugin’s xterm.js colors after Omarchy theme changes. This integration is separate from Omarchy’s native Obsidian application theme support.
+Every active adapter that still lacks complete real-application certification is now visibly labeled **Experimental** and default-disabled for fresh state. Existing schema-1 enablement is grandfathered because older releases serialized inherited defaults and cannot distinguish them from explicit choices; grandfathering is not evidence of certification or opt-in. Cava remains separately protected by its durable consent marker.
 
-### Safe discovery and updates
+The new integration support register records the reference Omarchy environment, evidence gaps, lifecycle disposition, repeatable certification procedure, and maintainer signoff required before an adapter can become Supported.
 
-The adapter discovers Terminal settings through Obsidian’s registered vaults, common vault locations, or explicit `OBSIDIAN_VAULT_PATH` and `OBSIDIAN_TERMINAL_DATA_JSON` overrides. It validates all discovered documents first, refuses malformed or symlinked settings, atomically updates files, and preserves every option outside `terminalOptions.theme`.
+### Safer lifecycle and recovery
 
-### Truthful restart reporting
+Persisted state now fails closed when its version is unsupported or Discord variants conflict. Readiness failures are isolated per integration, legacy Discord intent is normalized safely, and fresh SwayNC state is disabled without revoking existing enablement.
 
-The running Terminal plugin does not reliably reload settings changed on disk. RC19 therefore reports Obsidian as restart-required after a palette change rather than falsely claiming that an open terminal repainted.
+Disable and uninstall operations now distinguish committed state from incomplete cleanup. They report structured residuals, retain recovery paths and source ownership metadata, preserve the runtime needed for retries, and provide an exact recovery command instead of silently claiming success.
 
-### Verification
+### Reproducible source and Arch packaging
 
-The rc19 release passes the complete automated suite: 315 tests.
+Source installs and updates now use a complete dependency lock containing exact versions and SHA-256 hashes, require binary wheels, and validate the same graph on Python 3.11 through 3.14. Arch builds use `/usr/bin/python` to avoid mixing pacman modules with mise-managed environments.
 
-This remains a release candidate. Please report any issues you find.
+CI now builds the exact pull-request checkout as stable and VCS packages in clean Arch environments—including before a release tag exists—validates generated `.SRCINFO`, smoke-tests installed packages, covers Python 3.14, and exposes one required aggregate result. New release gates verify version surfaces, tagged archive bytes and permissions, checksums, and both AUR package trees.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc19)
+### Compatibility fixes
+
+- Preserve Shibumi Shell's comment-terminated JSONC menu blocks while installing or removing THPM entries.
+- Render Heroic's semantic CSS variables from the active Omarchy palette.
+
+### Verification and soak
+
+The rc20 preparation passes the complete automated suite: 339 tests. RC20 should soak for approximately 7–14 days before the accepted commit is promoted to stable `1.0.0`.
+
+Please report lifecycle, upgrade, uninstall, recovery, packaging, or application-integration issues during the soak period.
+
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc20)

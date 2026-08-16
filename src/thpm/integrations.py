@@ -2197,6 +2197,9 @@ def apply_enabled(
     errors: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
     plugins = [plugin for plugin in PLUGINS if enabled.get(plugin.id)]
+    discord_conflict = bool(
+        enabled.get("discord") and enabled.get("discord-system24")
+    )
     total = len(plugins)
     if events is not None:
         events({"type": "integrations_started", "total": total})
@@ -2211,39 +2214,43 @@ def apply_enabled(
                     "total": total,
                 }
             )
-        ready, missing, readiness_warnings = inspect_readiness(plugin.id, paths)
-        if not ready:
-            status = "failed" if plugin.id == "cava" else "skipped"
-            result = ApplyResult(
-                plugin.id,
-                status,
-                message="missing prerequisites: " + ", ".join(missing),
-                warnings=readiness_warnings,
-            )
-            if status == "failed":
-                errors.append({"plugin": plugin.id, "message": result.message})
-        else:
-            try:
+        try:
+            if discord_conflict and plugin.id in {"discord", "discord-system24"}:
+                raise RuntimeError(
+                    "conflicting integrations are enabled: discord and discord-system24"
+                )
+            ready, missing, readiness_warnings = inspect_readiness(plugin.id, paths)
+            if not ready:
+                status = "failed" if plugin.id == "cava" else "skipped"
+                result = ApplyResult(
+                    plugin.id,
+                    status,
+                    message="missing prerequisites: " + ", ".join(missing),
+                    warnings=readiness_warnings,
+                )
+                if status == "failed":
+                    errors.append({"plugin": plugin.id, "message": result.message})
+            else:
                 result = apply(
                     plugin.id,
                     paths,
                     automatic_restarts=automatic_restarts,
                     force_reload=force_reload,
                 )
-            except ApplyFailure as exc:
-                result = ApplyResult(
-                    plugin.id,
-                    "failed",
-                    changed=exc.changed,
-                    actions=exc.actions,
-                    message=str(exc),
-                    warnings=exc.warnings,
-                    restartRequired=exc.restart_required,
-                )
-                errors.append({"plugin": plugin.id, "message": str(exc)})
-            except Exception as exc:  # isolate plugins at the hook boundary
-                result = ApplyResult(plugin.id, "failed", message=str(exc))
-                errors.append({"plugin": plugin.id, "message": str(exc)})
+        except ApplyFailure as exc:
+            result = ApplyResult(
+                plugin.id,
+                "failed",
+                changed=exc.changed,
+                actions=exc.actions,
+                message=str(exc),
+                warnings=exc.warnings,
+                restartRequired=exc.restart_required,
+            )
+            errors.append({"plugin": plugin.id, "message": str(exc)})
+        except Exception as exc:  # isolate plugins at the hook boundary
+            result = ApplyResult(plugin.id, "failed", message=str(exc))
+            errors.append({"plugin": plugin.id, "message": str(exc)})
         if result.status == "failed" and not any(
             error["plugin"] == plugin.id for error in errors
         ):

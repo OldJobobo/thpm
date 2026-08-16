@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fail closed on unsupported or conflicting persisted state, isolate readiness inspection failures per integration, and keep the experimental SwayNC adapter disabled until a user explicitly opts in.
+
 ## 1.0.0rc19 - 2026-08-07
 
 - Restore the Obsidian Terminal community-plugin integration with vault discovery, validated atomic settings updates, semantic xterm.js colors, preserved unrelated options, and honest Obsidian restart reporting.

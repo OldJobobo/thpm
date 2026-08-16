@@ -13,6 +13,9 @@ from .paths import Paths
 from .registry import PLUGINS
 
 
+STATE_VERSION = 2
+
+
 class StateError(ValueError):
     """Raised when persisted THPM state exists but cannot be trusted."""
 
@@ -48,10 +51,27 @@ def load(paths: Paths) -> dict[str, bool]:
         return enabled
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise StateError(f"invalid THPM state at {paths.state_file}: {exc}") from exc
+    version = raw.get("version")
+    if version is not None and (
+        type(version) is not int or version not in {1, STATE_VERSION}
+    ):
+        raise StateError(
+            f"unsupported THPM state version at {paths.state_file}: {version!r}"
+        )
     saved = raw.get("plugins", {})
+    if not isinstance(saved, dict):
+        raise StateError(f"invalid THPM plugin state at {paths.state_file}")
     for plugin_id in enabled:
         if isinstance(saved.get(plugin_id), bool):
             enabled[plugin_id] = saved[plugin_id]
+    # Schema 1 persisted every registry default, so `swaync = true` did not
+    # demonstrate explicit consent to use the still-experimental integration.
+    if version in {None, 1}:
+        enabled["swaync"] = False
+    if enabled["discord"] and enabled["discord-system24"]:
+        raise StateError(
+            "conflicting THPM integrations are enabled: discord and discord-system24"
+        )
     # Releases before managed Cava setup wrote the then-default `cava = true`
     # into every state file. Do not interpret that legacy value as consent to
     # edit the user's Cava selector. Confirmed setup creates the durable marker.
@@ -60,8 +80,12 @@ def load(paths: Paths) -> dict[str, bool]:
 
 
 def save(paths: Paths, enabled: dict[str, bool]) -> None:
+    if enabled.get("discord") and enabled.get("discord-system24"):
+        raise StateError(
+            "conflicting THPM integrations are enabled: discord and discord-system24"
+        )
     paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
-    lines = ["version = 1", "", "[plugins]"]
+    lines = [f"version = {STATE_VERSION}", "", "[plugins]"]
     lines.extend(f'{key} = {str(value).lower()}' for key, value in sorted(enabled.items()))
     fd, name = tempfile.mkstemp(prefix=".state-", dir=paths.thpm_state_dir, text=True)
     try:

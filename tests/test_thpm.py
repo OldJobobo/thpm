@@ -5834,21 +5834,69 @@ class UpdateTests(Sandbox):
         self.assertLess(script.index(activation), script.index(mutating_install))
         self.assertLess(script.index(mutating_install), script.index(launcher_replace))
         self.assertIn('origin = "source"', script)
-        self.assertIn("textual>=8.2.8,<9", script)
+        self.assertIn('source_lock="$repo_dir/requirements-source.lock"', script)
+        self.assertIn("--require-hashes", script)
+        self.assertIn("--only-binary=:all:", script)
+        self.assertNotIn("textual>=8.2.8,<9", script)
         self.assertIn('mv "$previous" "$runtime_dir"', script)
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
         self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc19")
 
-    def test_staged_runtime_installs_and_smoke_tests_textual(self):
+    def test_source_dependency_lock_is_complete_and_hashed(self):
+        lock = Path(__file__).parents[1] / "requirements-source.lock"
+        content = lock.read_text()
+        requirements = [
+            line.split("==", 1)[0]
+            for line in content.splitlines()
+            if line and not line.startswith(("#", " "))
+        ]
+        self.assertEqual(
+            requirements,
+            [
+                "linkify-it-py",
+                "markdown-it-py",
+                "mdit-py-plugins",
+                "mdurl",
+                "platformdirs",
+                "pygments",
+                "rich",
+                "textual",
+                "typing-extensions",
+                "uc-micro-py",
+            ],
+        )
+        self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", content)), 10)
+        self.assertEqual(len(set(re.findall(r"sha256:([0-9a-f]{64})", content))), 10)
+
+    def test_staged_runtime_uses_lock_and_smoke_tests_textual(self):
         source = __import__("inspect").getsource(updater._stage_runtime)
         update_source = __import__("inspect").getsource(updater.apply)
-        self.assertIn('"textual>=8.2.8,<9"', source)
+        self.assertIn('"requirements-source.lock"', source)
+        self.assertIn('"--require-hashes"', source)
+        self.assertIn('"--only-binary=:all:"', source)
+        self.assertNotIn('"textual>=8.2.8,<9"', source)
         self.assertIn("from thpm.tui import ThpmTui", source)
         self.assertIn('"--defer-upgrade-refresh"', update_source)
         self.assertIn('"refreshRequired"', update_source)
         self.assertIn('"thpm reconcile --refresh"', update_source)
+
+    def test_staged_runtime_refuses_missing_or_symlinked_dependency_lock(self):
+        source = self.paths.home / "source"
+        source.mkdir()
+        runtime = self.paths.home / "runtime"
+        with patch("thpm.update.subprocess.run") as run:
+            with self.assertRaisesRegex(RuntimeError, "dependency lock"):
+                updater._stage_runtime(source, runtime)
+            run.assert_not_called()
+        target = self.paths.home / "external.lock"
+        target.write_text("textual==8.2.8")
+        (source / "requirements-source.lock").symlink_to(target)
+        with patch("thpm.update.subprocess.run") as run:
+            with self.assertRaisesRegex(RuntimeError, "dependency lock"):
+                updater._stage_runtime(source, runtime)
+            run.assert_not_called()
 
     def test_checksum_mismatch_stops_before_runtime_staging(self):
         result = {"status": "available", "origin": "source", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1",

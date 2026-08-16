@@ -33,8 +33,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install THPM and build tools
-        run: python -m pip install . build ruff
+      - name: Install locked source runtime, THPM, and build tools
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: --requirement requirements-source.lock
+          python -m pip install --no-deps .
+          python -m pip install build ruff
 
       - name: Run tests and syntax checks
         run: tests/run.sh

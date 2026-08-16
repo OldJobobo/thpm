@@ -58,7 +58,7 @@ thpm ui install
 ./install.sh
 ```
 
-The source installer builds and validates a private runtime at `~/.local/share/thpm/runtime`, activates it with rollback protection, and then runs the per-user migration and integration setup. Pip runs only inside that isolated environment. Recognized legacy files are archived under `~/.local/state/thpm/legacy-backups/`; unrecognized user files are left alone.
+The source installer builds and validates a private runtime at `~/.local/share/thpm/runtime`, activates it with rollback protection, and then runs the per-user migration and integration setup. Pip runs only inside that isolated environment and installs the exact universal wheels pinned with SHA-256 hashes in `requirements-source.lock`; source distributions and unlisted dependency versions are rejected. Recognized legacy files are archived under `~/.local/state/thpm/legacy-backups/`; unrecognized user files are left alone.
 
 ## Use
 

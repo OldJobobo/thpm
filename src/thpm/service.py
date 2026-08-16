@@ -92,6 +92,16 @@ SCHEMA_VERSION = 1
 CANONICAL_PALETTE_MIGRATION = "canonical-palette-v1"
 
 
+def _merge_migrated_enabled(
+    enabled: dict[str, bool], updates: dict[str, bool]
+) -> None:
+    enabled.update(updates)
+    if updates.get("discord-system24"):
+        enabled["discord"] = False
+    elif updates.get("discord"):
+        enabled["discord-system24"] = False
+
+
 def _cleanup_retired_integrations(paths: Paths) -> tuple[list[str], list[dict[str, str]]]:
     changed: list[str] = []
     warnings: list[dict[str, str]] = []
@@ -1041,7 +1051,7 @@ class Service:
             with mutation_lock(self.paths):
                 self._step("Rendering managed integrations")
                 enabled = load(self.paths)
-                enabled.update(migrated)
+                _merge_migrated_enabled(enabled, migrated)
                 enforce_cava_opt_in(self.paths, enabled)
                 save(self.paths, enabled)
                 changed = reconcile_templates(self.paths, enabled)
@@ -1363,7 +1373,9 @@ class Service:
         compat_required = needs_compat(self.paths, files)
         with mutation_lock(self.paths):
             self._step("Rendering migrated integration state")
-            enabled = load(self.paths); enabled.update(enabled_updates); save(self.paths, enabled)
+            enabled = load(self.paths)
+            _merge_migrated_enabled(enabled, enabled_updates)
+            save(self.paths, enabled)
             changed = reconcile_templates(self.paths, enabled)
             self._step("Archiving legacy hooks")
             destination = archive_legacy(self.paths, files, legacy_artifacts(self.paths))

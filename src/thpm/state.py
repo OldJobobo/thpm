@@ -13,7 +13,7 @@ from .paths import Paths
 from .registry import PLUGINS
 
 
-STATE_VERSION = 2
+STATE_VERSION = 1
 
 
 class StateError(ValueError):
@@ -53,7 +53,7 @@ def load(paths: Paths) -> dict[str, bool]:
         raise StateError(f"invalid THPM state at {paths.state_file}: {exc}") from exc
     version = raw.get("version")
     if version is not None and (
-        type(version) is not int or version not in {1, STATE_VERSION}
+        type(version) is not int or version != STATE_VERSION
     ):
         raise StateError(
             f"unsupported THPM state version at {paths.state_file}: {version!r}"
@@ -64,10 +64,6 @@ def load(paths: Paths) -> dict[str, bool]:
     for plugin_id in enabled:
         if isinstance(saved.get(plugin_id), bool):
             enabled[plugin_id] = saved[plugin_id]
-    # Schema 1 persisted every registry default, so `swaync = true` did not
-    # demonstrate explicit consent to use the still-experimental integration.
-    if version in {None, 1}:
-        enabled["swaync"] = False
     if enabled["discord"] and enabled["discord-system24"]:
         raise StateError(
             "conflicting THPM integrations are enabled: discord and discord-system24"

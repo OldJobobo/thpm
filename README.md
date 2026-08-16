@@ -13,6 +13,10 @@ This is a new MIT-licensed implementation. It is not a continuation or relicensi
 
 Pre-4.0 Omarchy path layouts are intentionally unsupported. Palette interpretation follows the installed Omarchy 4 `omarchy-theme-color` resolver, including aliases and derived values that Quattro accepts. Omarchy's canonical `background`, `dark_background`, `foreground`, and related long names are authoritative; THPM normalizes them to its private short-key TUI schema after resolution. If a custom theme emits conflicting canonical and short values, a non-empty canonical value wins; an empty canonical value is treated as absent so resolver output from short-only compatibility themes remains usable.
 
+## Integration support status
+
+An integration appearing in THPM does not by itself establish end-to-end application support. The current [integration support register](docs/integration-support.md) records the reference Omarchy environment, each active adapter's default and lifecycle disposition, a repeatable certification protocol, adapter-specific real-application evidence, retired cleanup, and the maintainer signoff template. At this audit point, SwayNC is explicitly Experimental; every other active adapter has an unresolved lifecycle disposition and incomplete certification evidence. Automated coverage varies from shared rendering/ownership machinery to integration-specific lifecycle tests, but no row yet records all required application versions, observed loader effects, and maintainer signoff. Treat these adapters as available built-ins rather than stable compatibility guarantees until their rows are dispositioned through reviewed evidence.
+
 ## Install
 
 ### Omarchy / AUR

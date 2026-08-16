@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Publish an integration support register that records the reference Omarchy baseline, active defaults, honest certification gaps, SwayNC's experimental status, retired cleanup, and the evidence required for maintainer signoff.
 - Add phased release verification for committed version surfaces, exact tagged archives and checksums, stable and VCS PKGBUILDs, and generated `.SRCINFO` metadata.
 - Pin every transitive source-runtime dependency to a SHA-256-verified universal wheel, and validate the shared lock across all supported Python versions in CI.
 - Report incomplete disable and uninstall cleanup with committed state, residuals, retained recovery paths, and retry commands; preserve the source runtime when cleanup must be retried.

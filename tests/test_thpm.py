@@ -462,6 +462,32 @@ class StateTests(Sandbox):
         missing = [name for plugin in PLUGINS for name in plugin.templates if not (templates / name).is_file()]
         self.assertEqual(missing, [])
 
+    def test_support_register_matches_active_integrations_and_defaults(self):
+        support = (Path(__file__).parents[1] / "docs/integration-support.md").read_text()
+        rows = re.findall(
+            r"^\| `([^`]+)` \| (Incomplete|Complete) "
+            r"\| (Experimental|Supported|Unresolved release blocker) "
+            r"\| (enabled|disabled) \|",
+            support,
+            flags=re.MULTILINE,
+        )
+        self.assertEqual([plugin_id for plugin_id, _, _, _ in rows], [p.id for p in PLUGINS])
+        documented = {
+            plugin_id: (audit, disposition, default)
+            for plugin_id, audit, disposition, default in rows
+        }
+        for plugin in PLUGINS:
+            self.assertEqual(
+                documented[plugin.id][2],
+                "enabled" if plugin.default_enabled else "disabled",
+            )
+        self.assertEqual(
+            [plugin_id for plugin_id, _, status, _ in rows if status == "Experimental"],
+            ["swaync"],
+        )
+        self.assertTrue(all(audit == "Incomplete" for _, audit, _, _ in rows))
+        self.assertFalse(any(status == "Supported" for _, _, status, _ in rows))
+
     def test_templates_use_canonical_palette_keys_and_render_completely(self):
         templates = Path(__file__).parents[1] / "assets/templates"
         legacy = set(CANONICAL_NAMES)

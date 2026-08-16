@@ -8,8 +8,10 @@ import json
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -5822,6 +5824,114 @@ class UpdateTests(Sandbox):
             bundle.addfile(info, io.BytesIO(payload))
         with self.assertRaisesRegex(ValueError, "unsafe path"):
             updater._safe_extract(archive, self.paths.home / "extract")
+
+    def test_release_metadata_verifier_accepts_current_tree(self):
+        root = Path(__file__).parents[1]
+        completed = subprocess.run(
+            [sys.executable, str(root / "scripts/verify-release.py"), "metadata"],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn((root / "VERSION").read_text().strip(), completed.stdout)
+
+    def test_release_artifact_verifier_checks_tree_and_checksum(self):
+        root = Path(__file__).parents[1]
+        version = (root / "VERSION").read_text().strip()
+        archive = self.paths.home / f"thpm-{version}.tar.gz"
+        checksum = archive.with_name(f"{archive.name}.sha256")
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "archive",
+                "--format=tar.gz",
+                f"--prefix=thpm-{version}/",
+                f"--output={archive}",
+                "HEAD",
+            ],
+            check=True,
+        )
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        checksum.write_text(f"{digest}  {archive.name}\n")
+        command = [
+            sys.executable,
+            str(root / "scripts/verify-release.py"),
+            "artifact",
+            str(archive),
+            str(checksum),
+            "--ref",
+            "HEAD",
+        ]
+        completed = subprocess.run(command, cwd=root, text=True, capture_output=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        checksum.write_text(f"{'0' * 64}  {archive.name}\n")
+        failed = subprocess.run(command, cwd=root, text=True, capture_output=True)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("archive SHA-256", failed.stderr)
+
+        original = archive.with_name("original.tar.gz")
+        archive.replace(original)
+        with tarfile.open(original, "r:gz") as source, tarfile.open(
+            archive, "w:gz"
+        ) as changed:
+            for member in source.getmembers():
+                if member.name.endswith("/scripts/release-assets.sh"):
+                    member.mode = 0o644
+                stream = source.extractfile(member) if member.isfile() else None
+                changed.addfile(member, stream)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        checksum.write_text(f"{digest}  {archive.name}\n")
+        wrong_mode = subprocess.run(command, cwd=root, text=True, capture_output=True)
+        self.assertNotEqual(wrong_mode.returncode, 0)
+        self.assertIn("archive mode differs", wrong_mode.stderr)
+
+        with tarfile.open(original, "r:gz") as source, tarfile.open(
+            archive, "w:gz"
+        ) as changed:
+            for member in source.getmembers():
+                stream = source.extractfile(member) if member.isfile() else None
+                changed.addfile(member, stream)
+            fifo = tarfile.TarInfo(f"thpm-{version}/unexpected-fifo")
+            fifo.type = tarfile.FIFOTYPE
+            changed.addfile(fifo)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        checksum.write_text(f"{digest}  {archive.name}\n")
+        special = subprocess.run(command, cwd=root, text=True, capture_output=True)
+        self.assertNotEqual(special.returncode, 0)
+        self.assertIn("unsupported entry type", special.stderr)
+
+    def test_release_metadata_rejects_substituted_vcs_source(self):
+        root = Path(__file__).parents[1]
+        clone = self.paths.home / "release-repo"
+        subprocess.run(
+            ["git", "clone", "--quiet", "--no-hardlinks", str(root), str(clone)],
+            check=True,
+        )
+        shutil.copy2(root / "scripts/verify-release.py", clone / "scripts/verify-release.py")
+        package = clone / "packaging/aur/thpm-git/PKGBUILD"
+        package.write_text(
+            package.read_text()
+            + "\nsource+=('git+https://example.invalid/attacker/thpm.git')\n"
+            + "sha256sums+=('SKIP')\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, str(clone / "scripts/verify-release.py"), "metadata"],
+            cwd=clone,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("source must have one assignment", completed.stderr)
+
+    def test_release_asset_builder_runs_metadata_and_artifact_gates(self):
+        script = (Path(__file__).parents[1] / "scripts/release-assets.sh").read_text()
+        self.assertIn("verify-release.py\" metadata --require-clean --require-tag", script)
+        self.assertIn("verify-release.py\" artifact", script)
+        self.assertIn("--ref HEAD", script)
 
     def test_install_script_validates_before_migration_or_launcher_replacement(self):
         script = (Path(__file__).parents[1] / "install.sh").read_text()

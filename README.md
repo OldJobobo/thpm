@@ -157,9 +157,9 @@ Run `scripts/local-arch-package.sh` to package the exact current working tree wi
 
 Start with the [visual architecture map](docs/architecture-map.md), then see [docs/architecture.md](docs/architecture.md), [docs/plugins.md](docs/plugins.md), and the [Quattro compatibility plan](docs/quattro-compatibility-plan.md) for the detailed contracts and native-ownership boundary.
 
-Source updates follow stable GitHub releases and require matching `thpm-<version>.tar.gz` and `thpm-<version>.tar.gz.sha256` assets. Build both from committed content with `scripts/release-assets.sh`. Package-managed installations hand updates back to AUR rather than overwriting pacman-owned files.
+Source updates follow stable GitHub releases and require matching `thpm-<version>.tar.gz` and `thpm-<version>.tar.gz.sha256` assets. Before merging release preparation, run `python scripts/verify-release.py metadata`; after the merged commit is tagged, `scripts/release-assets.sh` requires clean tag, version, release-note, Python, QML, template, and package metadata and then verifies every archive file against the tagged commit. Package-managed installations hand updates back to AUR rather than overwriting pacman-owned files.
 
-The stable and VCS AUR submission trees are under `packaging/aur/thpm` and `packaging/aur/thpm-git`. Update the stable package's SHA-256 to the tagged archive digest, then regenerate `.SRCINFO` with `makepkg --printsrcinfo`. Keep `SKIP` only for the VCS package.
+The stable and VCS AUR submission trees are under `packaging/aur/thpm` and `packaging/aur/thpm-git`. After publishing the tagged archive, update the stable package's SHA-256 and the VCS package's tagged `pkgver`, regenerate both `.SRCINFO` files with `makepkg --printsrcinfo`, and run `python scripts/verify-release.py packaging <archive> <archive.sha256>`. This finalization is a follow-up packaging pull request because an archive cannot contain its own digest. Keep `SKIP` only for the VCS package.
 
 ## License
 

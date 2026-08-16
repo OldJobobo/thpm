@@ -273,6 +273,50 @@ class StateTests(Sandbox):
             Service(self.paths).set_enabled("fish", False)
         self.assertEqual(self.paths.state_file.read_text(), "[plugins\n")
 
+    def test_rejects_unsupported_or_invalid_state_versions(self):
+        self.paths.thpm_state_dir.mkdir(parents=True)
+        for version in ("3", '"one"', "true"):
+            with self.subTest(version=version):
+                self.paths.state_file.write_text(
+                    f"version = {version}\n\n[plugins]\nfish = true\n"
+                )
+                with self.assertRaisesRegex(StateError, "unsupported THPM state version"):
+                    load(self.paths)
+
+    def test_accepts_unversioned_legacy_state(self):
+        self.paths.thpm_state_dir.mkdir(parents=True)
+        self.paths.state_file.write_text("[plugins]\nfish = false\n")
+        self.assertFalse(load(self.paths)["fish"])
+
+    def test_schema_one_swaync_default_requires_new_opt_in(self):
+        self.paths.thpm_state_dir.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            "version = 1\n\n[plugins]\nswaync = true\n"
+        )
+        self.assertFalse(load(self.paths)["swaync"])
+
+        state = load(self.paths)
+        state["swaync"] = True
+        save(self.paths, state)
+        self.assertIn("version = 2", self.paths.state_file.read_text())
+        self.assertTrue(load(self.paths)["swaync"])
+
+    def test_rejects_conflicting_persisted_discord_state(self):
+        self.paths.thpm_state_dir.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            "version = 1\n\n[plugins]\ndiscord = true\ndiscord-system24 = true\n"
+        )
+        with self.assertRaisesRegex(StateError, "conflicting THPM integrations"):
+            load(self.paths)
+
+    def test_save_rejects_conflicting_discord_state(self):
+        state = load(self.paths)
+        state["discord"] = True
+        state["discord-system24"] = True
+        with self.assertRaisesRegex(StateError, "conflicting THPM integrations"):
+            save(self.paths, state)
+        self.assertFalse(self.paths.state_file.exists())
+
     def test_state_round_trip_preserves_known_values(self):
         state = load(self.paths)
         state["firefox"] = True
@@ -386,6 +430,7 @@ class StateTests(Sandbox):
                     "zed-extra",
                     "pi-hot-reload",
                     "cava",
+                    "swaync",
                 )
             )
         )
@@ -5072,6 +5117,47 @@ class IntegrationTests(Sandbox):
         self.assertEqual(events[0]["total"], 2)
         self.assertEqual(events[2]["status"], "applied")
         self.assertEqual(events[4]["status"], "failed")
+
+    def test_apply_enabled_isolates_readiness_failures(self):
+        def readiness(plugin_id, _paths):
+            if plugin_id == "fish":
+                raise RuntimeError("readiness broke")
+            return True, [], []
+
+        with patch("thpm.integrations.inspect_readiness", side_effect=readiness), patch(
+            "thpm.integrations.apply",
+            return_value=ApplyResult("fzf", "unchanged"),
+        ) as apply_plugin:
+            payload = apply_enabled(self.paths, {"fish": True, "fzf": True})
+
+        self.assertEqual(
+            [result["status"] for result in payload["results"]],
+            ["failed", "unchanged"],
+        )
+        self.assertEqual(payload["errors"][0]["plugin"], "fish")
+        apply_plugin.assert_called_once()
+
+    def test_apply_enabled_fails_conflicting_discord_variants_and_continues(self):
+        with patch(
+            "thpm.integrations.inspect_readiness", return_value=(True, [], [])
+        ), patch(
+            "thpm.integrations.apply",
+            return_value=ApplyResult("qt6ct", "unchanged"),
+        ) as apply_plugin:
+            payload = apply_enabled(
+                self.paths,
+                {"discord": True, "discord-system24": True, "qt6ct": True},
+            )
+
+        self.assertEqual(
+            [result["status"] for result in payload["results"]],
+            ["failed", "failed", "unchanged"],
+        )
+        self.assertEqual(
+            [error["plugin"] for error in payload["errors"]],
+            ["discord", "discord-system24"],
+        )
+        apply_plugin.assert_called_once()
 
     def test_hermes_template_matches_desktop_theme_contract(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()

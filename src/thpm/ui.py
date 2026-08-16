@@ -33,10 +33,12 @@ def _write_menu(paths: Paths, surface: str) -> None:
     stripped = text.strip()
     if not stripped.startswith("{") or not stripped.endswith("}"):
         raise ValueError("Omarchy menu extension is not a top-level JSONC object")
-    body = stripped[:-1].rstrip()
-    if body != "{" and not body.endswith(","):
-        body += ","
-    atomic_text(menu, f"{body}\n{START}\n{ENTRIES[surface]}\n{END}\n}}\n")
+    body = stripped[1:-1].strip()
+    # Insert first so our trailing comma remains syntactic even when another
+    # managed block ends with a JSONC comment immediately before the root brace.
+    managed = f"{START}\n{ENTRIES[surface]}\n{END}"
+    suffix = f"\n{body}" if body else ""
+    atomic_text(menu, f"{{\n{managed}{suffix}\n}}\n")
 
 
 def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:

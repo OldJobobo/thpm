@@ -948,6 +948,8 @@ class ServiceTests(Sandbox):
         self.paths.hook_file.write_text("remove")
         self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
         self.paths.canonical_palette_migration_marker.write_text("done\n")
+        self.paths.config_file.parent.mkdir(parents=True)
+        self.paths.config_file.write_text("config_version = 1\n")
         zellij_config = self.paths.config_home / "zellij/config.kdl"
         zellij_config.parent.mkdir(parents=True)
         zellij_config.write_text('theme "thpm-current"\n')
@@ -964,10 +966,85 @@ class ServiceTests(Sandbox):
         self.assertFalse(owned.exists())
         self.assertFalse(self.paths.hook_file.exists())
         self.assertFalse(self.paths.canonical_palette_migration_marker.exists())
+        self.assertFalse(self.paths.thpm_config_dir.exists())
+        self.assertFalse(self.paths.thpm_state_dir.exists())
+        self.assertFalse(payload["cleanupIncomplete"])
+        self.assertIsNone(payload["recoveryCommand"])
         self.assertEqual(zellij_config.read_text(), "")
         self.assertEqual(fish_target.read_text(), "user output")
         self.assertFalse(fish_source.exists())
         self.assertNotIn("restart active Zellij sessions", str(payload["warnings"]))
+
+    def test_disable_reports_incomplete_cleanup_for_invalid_optional_asset_backup(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("managed theme")
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        apply("cliamp", self.paths)
+        backup = self.paths.managed_asset_state_dir / "cliamp.backup"
+        state_file = self.paths.managed_asset_state_dir / "cliamp.json"
+        backup.unlink()
+
+        payload = Service(self.paths).set_enabled("cliamp", False, refresh=False)
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["committed"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertEqual(payload["recoveryCommand"], "thpm disable cliamp")
+        self.assertIn(str(state_file), payload["retainedPaths"])
+        self.assertNotIn(str(backup), payload["retainedPaths"])
+        self.assertFalse(load(self.paths)["cliamp"])
+        self.assertEqual(target.read_text(), "managed theme")
+        self.assertTrue(self.paths.managed_asset_state_dir.exists())
+
+    def test_uninstall_retains_recovery_data_for_invalid_optional_asset_backup(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("managed theme")
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        apply("cliamp", self.paths)
+        backup = self.paths.managed_asset_state_dir / "cliamp.backup"
+        state_file = self.paths.managed_asset_state_dir / "cliamp.json"
+        backup.unlink()
+        self.paths.install_metadata.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.install_metadata.write_text('origin = "source"\n')
+
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            payload = Service(self.paths).uninstall()
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["committed"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertEqual(payload["recoveryCommand"], "thpm uninstall")
+        self.assertIn(str(state_file), payload["retainedPaths"])
+        self.assertNotIn(str(backup), payload["retainedPaths"])
+        self.assertTrue(payload["residuals"])
+        self.assertEqual(target.read_text(), "managed theme")
+        self.assertTrue(self.paths.managed_asset_state_dir.exists())
+        self.assertTrue(self.paths.install_metadata.exists())
+
+    def test_uninstall_preserves_user_modified_asset_as_successful_cleanup(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("managed theme")
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        target.parent.mkdir(parents=True)
+        target.write_text("user default")
+        apply("cliamp", self.paths)
+        target.write_text("user changed")
+
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            payload = Service(self.paths).uninstall()
+
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["cleanupIncomplete"])
+        self.assertEqual(target.read_text(), "user changed")
+        self.assertFalse(self.paths.thpm_state_dir.exists())
+        self.assertIn("preserved user-modified", str(payload["warnings"]))
 
     def test_uninstall_removes_legacy_system24_output_despite_shared_marker(self):
         source = self.paths.current_theme / "thpm-vencord-system24.theme.css"
@@ -3309,7 +3386,10 @@ class CavaTests(Sandbox):
         self.assertTrue(target.exists())
         self.assertEqual(parse_cava_selector(config.read_text()).value, "thpm")
         self.assertIn("restoration state is missing", str(result["warnings"]))
-        self.assertIn("preserved Cava residual", result["summary"])
+        self.assertTrue(result["cleanupIncomplete"])
+        self.assertEqual(result["recoveryCommand"], "thpm uninstall")
+        self.assertIn(str(config), result["retainedPaths"])
+        self.assertIn("cleanup is incomplete", result["summary"])
         self.assertIn("preserved", str(result["errors"]))
 
     def test_disable_reports_restart_for_running_cava(self):
@@ -3943,7 +4023,10 @@ class IntegrationTests(Sandbox):
         assets = Path(__file__).parents[1] / "assets"
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
             payload = Service(self.paths).set_enabled("zellij", False, refresh=False)
-        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertEqual(payload["recoveryCommand"], "thpm disable zellij")
+        self.assertTrue(payload["residuals"])
         self.assertEqual(config.read_text(), original)
         self.assertFalse(load(self.paths)["zellij"])
         self.assertIn("legacy THPM block is invalid", str(payload["warnings"]))
@@ -5258,11 +5341,12 @@ class SourceScriptTests(Sandbox):
         )
 
     @staticmethod
-    def executable(path: Path, marker: Path) -> None:
+    def executable(path: Path, marker: Path, *, exit_code: int = 0) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             "#!/usr/bin/env bash\n"
             f"printf '%s\\n' \"$*\" > {str(marker)!r}\n"
+            f"exit {exit_code}\n"
         )
         path.chmod(0o755)
 
@@ -5306,6 +5390,23 @@ class SourceScriptTests(Sandbox):
                 self.assertEqual(marker.read_text(), "uninstall\n")
                 self.assertFalse(launcher.exists())
                 self.assertFalse((root / "runtime").exists())
+
+    def test_uninstaller_retains_source_runtime_when_cleanup_fails(self):
+        root = self.paths.home / "failed-cleanup"
+        runtime_launcher = root / "runtime/bin/thpm"
+        launcher = root / "bin/thpm"
+        marker = root / "invoked"
+        self.executable(runtime_launcher, marker, exit_code=7)
+        launcher.parent.mkdir(parents=True)
+        launcher.symlink_to(runtime_launcher)
+
+        completed = self.run_uninstaller(root)
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(marker.read_text(), "uninstall\n")
+        self.assertTrue(launcher.exists())
+        self.assertTrue(runtime_launcher.exists())
+        self.assertIn("runtime retained", completed.stderr)
 
 
 class AuditAndReportTests(Sandbox):

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Report incomplete disable and uninstall cleanup with committed state, residuals, retained recovery paths, and retry commands; preserve the source runtime when cleanup must be retried.
 - Fail closed on unsupported or conflicting persisted state, isolate readiness inspection failures per integration, and make the experimental SwayNC adapter default-disabled while preserving existing user enablement.
 
 ## 1.0.0rc19 - 2026-08-07

@@ -102,6 +102,30 @@ def _merge_migrated_enabled(
         enabled["discord-system24"] = False
 
 
+def _cleanup_warning_is_incomplete(message: str) -> bool:
+    successful_preservation = (
+        "preserved user-modified ",
+        "preserved non-file legacy output path: ",
+        "preserved untracked Zellij theme instead of deleting it: ",
+        "Cava theme selection changed outside THPM; ",
+    )
+    return not message.startswith(successful_preservation)
+
+
+def _cleanup_warning_path(message: str) -> str | None:
+    candidate = message.rsplit(": ", 1)[-1]
+    if not candidate.startswith("/"):
+        return None
+    path = Path(candidate)
+    if path.exists() or path.is_symlink():
+        return str(path)
+    if path.suffix == ".backup":
+        state_path = path.with_suffix(".json")
+        if state_path.is_file() and not state_path.is_symlink():
+            return str(state_path)
+    return None
+
+
 def _cleanup_retired_integrations(paths: Paths) -> tuple[list[str], list[dict[str, str]]]:
     changed: list[str] = []
     warnings: list[dict[str, str]] = []
@@ -707,7 +731,28 @@ class Service:
         self._step("Checking integration")
         warnings: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
+        cleanup_errors: list[dict[str, str]] = []
+        residuals: list[dict[str, object]] = []
+        retained_paths: list[str] = []
         restart_required: list[str] = []
+
+        def record_cleanup(messages: list[str]) -> None:
+            warnings.extend(
+                {"plugin": plugin_id, "message": message} for message in messages
+            )
+            for message in messages:
+                if not _cleanup_warning_is_incomplete(message):
+                    continue
+                error = {"plugin": plugin_id, "message": message}
+                cleanup_errors.append(error)
+                errors.append(error)
+                retained_path = _cleanup_warning_path(message)
+                residual = {"plugin": plugin_id, "message": message}
+                if retained_path:
+                    retained_paths.append(retained_path)
+                    residual["retainedPaths"] = [retained_path]
+                residuals.append(residual)
+
         cava_was_running = bool(
             not value
             and plugin_id == "cava"
@@ -731,19 +776,13 @@ class Service:
             elif not value and plugin_id == "zellij":
                 cleanup_changed, cleanup_warnings = cleanup_zellij(self.paths)
                 changed.extend(cleanup_changed)
-                warnings.extend(
-                    {"plugin": "zellij", "message": message}
-                    for message in cleanup_warnings
-                )
+                record_cleanup(cleanup_warnings)
             elif not value and plugin_id == "zed-extra":
                 cleanup_changed, cleanup_warnings = cleanup_zed_assets(
                     self.paths, assume_legacy=True
                 )
                 changed.extend(cleanup_changed)
-                warnings.extend(
-                    {"plugin": plugin_id, "message": message}
-                    for message in cleanup_warnings
-                )
+                record_cleanup(cleanup_warnings)
             elif not value and plugin_id in OPTIONAL_ASSET_PLUGINS:
                 cleanup_changed, cleanup_warnings = cleanup_optional_assets(
                     self.paths, plugin_id, assume_legacy=True
@@ -752,9 +791,10 @@ class Service:
                 _actions, reload_warnings = reload_restored_integration(
                     plugin_id, cleanup_changed
                 )
+                record_cleanup(cleanup_warnings)
                 warnings.extend(
                     {"plugin": plugin_id, "message": message}
-                    for message in cleanup_warnings + reload_warnings
+                    for message in reload_warnings
                 )
             elif (
                 not value
@@ -767,23 +807,27 @@ class Service:
                         self.paths
                     )
                     changed.extend(selector_changed)
-                    warnings.extend(
-                        {"plugin": "cava", "message": message}
-                        for message in selector_warnings
-                    )
+                    record_cleanup(selector_warnings)
                     blocking_selector_warnings = [
                         message
                         for message in selector_warnings
                         if "changed outside THPM" not in message
                     ]
                     if blocking_selector_warnings:
-                        errors.append(
+                        residual_message = (
+                            "Cava selector could not be restored; preserved "
+                            "the still-selected managed theme"
+                        )
+                        error = {"plugin": "cava", "message": residual_message}
+                        cleanup_errors.append(error)
+                        errors.append(error)
+                        config_path = str(cava_config_path(self.paths))
+                        retained_paths.append(config_path)
+                        residuals.append(
                             {
                                 "plugin": "cava",
-                                "message": (
-                                    "Cava selector could not be restored; preserved "
-                                    "the still-selected managed theme"
-                                ),
+                                "message": residual_message,
+                                "retainedPaths": [config_path],
                             }
                         )
                 else:
@@ -793,10 +837,7 @@ class Service:
                         self.paths, plugin_id, assume_legacy=True
                     )
                     changed.extend(cleanup_changed)
-                    warnings.extend(
-                        {"plugin": plugin_id, "message": message}
-                        for message in cleanup_warnings
-                    )
+                    record_cleanup(cleanup_warnings)
         refreshed = False
         if value and refresh:
             self._step("Refreshing active theme")
@@ -812,18 +853,22 @@ class Service:
         if cava_was_running and not errors:
             restart_required.append("Cava")
         summary = f"{plugin_id} {'enabled' if value else 'disabled'}"
-        if errors:
-            summary += (
-                "; manual recovery is required"
-                if plugin_id == "cava" and not value
-                else "; setting was saved, but theme refresh failed"
-            )
+        if cleanup_errors:
+            summary += "; setting was saved, but cleanup is incomplete"
+        elif errors:
+            summary += "; setting was saved, but theme refresh failed"
         payload = envelope(
             operation,
             not errors,
             summary=summary,
             committed=True,
             stateChanged=was_enabled != value,
+            cleanupIncomplete=bool(cleanup_errors),
+            residuals=residuals,
+            retainedPaths=list(dict.fromkeys(retained_paths)),
+            recoveryCommand=(
+                f"thpm disable {plugin_id}" if cleanup_errors else None
+            ),
             changed=changed,
             refreshed=refreshed,
             plugins=self.views(),
@@ -1095,7 +1140,25 @@ class Service:
     def uninstall(self) -> dict[str, object]:
         warnings: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
+        residuals: list[dict[str, object]] = []
+        retained_paths: list[str] = []
         restart_required: list[str] = []
+
+        def record_cleanup(plugin_id: str, messages: list[str]) -> None:
+            warnings.extend(
+                {"plugin": plugin_id, "message": message} for message in messages
+            )
+            for message in messages:
+                if not _cleanup_warning_is_incomplete(message):
+                    continue
+                retained_path = _cleanup_warning_path(message)
+                residual = {"plugin": plugin_id, "message": message}
+                if retained_path:
+                    retained_paths.append(retained_path)
+                    residual["retainedPaths"] = [retained_path]
+                residuals.append(residual)
+                errors.append({"plugin": plugin_id, "message": message})
+
         cava_was_running = running_cava_requires_restart(self.paths)
         self._step("Disabling managed integrations")
         with migration_lock(self.paths):
@@ -1121,16 +1184,14 @@ class Service:
                     _actions, reload_warnings = reload_restored_integration(
                         plugin_id, cleanup_changed
                     )
+                    record_cleanup(plugin_id, cleanup_warnings)
                     warnings.extend(
                         {"plugin": plugin_id, "message": message}
-                        for message in cleanup_warnings + reload_warnings
+                        for message in reload_warnings
                     )
                 selector_changed, selector_warnings = restore_cava_selector(self.paths)
                 changed.extend(selector_changed)
-                warnings.extend(
-                    {"plugin": "cava", "message": message}
-                    for message in selector_warnings
-                )
+                record_cleanup("cava", selector_warnings)
                 blocking_selector_warnings = [
                     message
                     for message in selector_warnings
@@ -1141,8 +1202,18 @@ class Service:
                         "preserved the Cava theme target because its still-selected "
                         "configuration could not be restored"
                     )
+                    config_path = str(cava_config_path(self.paths))
+                    if Path(config_path).exists():
+                        retained_paths.append(config_path)
                     warnings.append({"plugin": "cava", "message": residual_message})
                     errors.append({"plugin": "cava", "message": residual_message})
+                    residuals.append(
+                        {
+                            "plugin": "cava",
+                            "message": residual_message,
+                            "retainedPaths": [config_path],
+                        }
+                    )
                 for plugin_id in sorted(
                     MANAGED_OUTPUT_PLUGINS | RETIRED_MANAGED_OUTPUT_PLUGINS
                 ):
@@ -1154,16 +1225,10 @@ class Service:
                         assume_legacy=True,
                     )
                     changed.extend(cleanup_changed)
-                    warnings.extend(
-                        {"plugin": plugin_id, "message": message}
-                        for message in cleanup_warnings
-                    )
+                    record_cleanup(plugin_id, cleanup_warnings)
                 zellij_changed, zellij_warnings = cleanup_zellij(self.paths)
                 changed.extend(zellij_changed)
-                warnings.extend(
-                    {"plugin": "zellij", "message": message}
-                    for message in zellij_warnings
-                )
+                record_cleanup("zellij", zellij_warnings)
                 self._step("Removing theme hook and migration state")
                 if self.paths.hook_file.exists():
                     self.paths.hook_file.unlink()
@@ -1171,7 +1236,7 @@ class Service:
                 if self.paths.canonical_palette_migration_marker.exists():
                     self.paths.canonical_palette_migration_marker.unlink()
                     changed.append(str(self.paths.canonical_palette_migration_marker))
-                if (
+                if not errors and (
                     self.paths.cava_opt_in_marker.exists()
                     or self.paths.cava_opt_in_marker.is_symlink()
                 ):
@@ -1184,22 +1249,54 @@ class Service:
         self._step("Removing control panel")
         ui_result = ui.remove(self.paths)
         self.paths.update_cache_file.unlink(missing_ok=True)
-        if self.paths.install_metadata.is_file():
+        if not errors:
+            for product_dir in (self.paths.thpm_config_dir, self.paths.thpm_state_dir):
+                if not product_dir.exists():
+                    continue
+                try:
+                    shutil.rmtree(product_dir)
+                    changed.append(str(product_dir))
+                except OSError as exc:
+                    message = f"could not remove THPM product state: {product_dir}: {exc}"
+                    errors.append({"message": message})
+                    residuals.append(
+                        {
+                            "message": message,
+                            "retainedPaths": [str(product_dir)],
+                        }
+                    )
+                    retained_paths.append(str(product_dir))
+        if not errors and self.paths.install_metadata.is_file():
             try:
                 if 'origin = "source"' in self.paths.install_metadata.read_text():
                     self.paths.install_metadata.unlink()
-            except OSError:
-                pass
+                    changed.append(str(self.paths.install_metadata))
+            except OSError as exc:
+                message = f"could not remove source installation metadata: {exc}"
+                errors.append({"message": message})
+                residuals.append(
+                    {
+                        "message": message,
+                        "retainedPaths": [str(self.paths.install_metadata)],
+                    }
+                )
+                retained_paths.append(str(self.paths.install_metadata))
         if cava_was_running and not blocking_selector_warnings:
             restart_required.append("Cava")
+        cleanup_incomplete = bool(errors)
         return envelope(
             "uninstall",
-            not errors,
+            not cleanup_incomplete,
             summary=(
-                "THPM integration files removed"
-                if not errors
-                else "THPM integration files removed with a preserved Cava residual"
+                "THPM integrations and product state removed"
+                if not cleanup_incomplete
+                else "THPM cleanup is incomplete; recovery data was retained"
             ),
+            committed=True,
+            cleanupIncomplete=cleanup_incomplete,
+            residuals=residuals,
+            retainedPaths=list(dict.fromkeys(retained_paths)),
+            recoveryCommand="thpm uninstall" if cleanup_incomplete else None,
             changed=changed,
             ui=ui_result,
             errors=errors,

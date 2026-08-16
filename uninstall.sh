@@ -10,7 +10,10 @@ if [[ -L "$launcher" && -x "$runtime_launcher" ]] \
     && launcher_target="$(readlink -f -- "$launcher")" \
     && runtime_target="$(readlink -f -- "$runtime_launcher")" \
     && [[ "$launcher_target" == "$runtime_target" ]]; then
-    "$runtime_launcher" uninstall || true
+    if ! "$runtime_launcher" uninstall; then
+        echo "THPM cleanup is incomplete; runtime retained for: thpm uninstall" >&2
+        exit 1
+    fi
     rm -f "$launcher"
 fi
 rm -rf "$runtime_dir"

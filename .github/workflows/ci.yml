@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Check out the repository
@@ -51,14 +51,63 @@ jobs:
           python -m pip install --force-reinstall --no-deps dist/thpm-*.whl
           python -c 'from thpm.tui import ThpmTui; import thpm; print(thpm.__version__)'
 
+  arch-package:
+    name: Arch package (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [thpm, thpm-git]
+
+    steps:
+      - name: Install clean Arch build dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm git python python-build python-installer python-rich python-setuptools python-textual python-wheel
+          useradd --create-home builder
+
+      - name: Check out the repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Validate AUR metadata
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          cp -a "packaging/aur/$PACKAGE" /tmp/pkgbuild
+          chown -R builder:builder /tmp/pkgbuild
+          runuser -u builder -- bash -c 'cd /tmp/pkgbuild && makepkg --printsrcinfo' > /tmp/generated.SRCINFO
+          diff -u "packaging/aur/$PACKAGE/.SRCINFO" /tmp/generated.SRCINFO
+
+      - name: Build package
+        run: runuser -u builder -- bash -c 'cd /tmp/pkgbuild && makepkg --cleanbuild --noconfirm'
+
+      - name: Install and smoke test packaged files
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          pacman -U --noconfirm /tmp/pkgbuild/*.pkg.tar.zst
+          /usr/bin/thpm --version
+          /usr/bin/python -c 'import thpm; from thpm.tui import ThpmTui; print(thpm.__version__)'
+          test -x /usr/bin/thpm
+          test -f /usr/share/thpm/templates/thpm-fish.fish.tpl
+          test -f /usr/share/thpm/qml/Panel.qml.in
+          test -f /usr/share/thpm/vencord/thpm-midnight.css
+          test -f /usr/share/thpm/spicetify/omarchy-user.css
+          pacman -Qkk "$PACKAGE"
+
   required:
     name: CI
     if: always()
-    needs: test
+    needs: [test, arch-package]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Confirm all test jobs passed
+      - name: Confirm all required jobs passed
         env:
           TEST_RESULT: ${{ needs.test.result }}
-        run: test "$TEST_RESULT" = success
+          ARCH_PACKAGE_RESULT: ${{ needs.arch-package.result }}
+        run: |
+          test "$TEST_RESULT" = success
+          test "$ARCH_PACKAGE_RESULT" = success

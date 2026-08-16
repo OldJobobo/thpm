@@ -15,7 +15,7 @@ Pre-4.0 Omarchy path layouts are intentionally unsupported. Palette interpretati
 
 ## Integration support status
 
-An integration appearing in THPM does not by itself establish end-to-end application support. The current [integration support register](docs/integration-support.md) records the reference Omarchy environment, each active adapter's default and lifecycle disposition, a repeatable certification protocol, adapter-specific real-application evidence, retired cleanup, and the maintainer signoff template. At this audit point, SwayNC is explicitly Experimental; every other active adapter has an unresolved lifecycle disposition and incomplete certification evidence. Automated coverage varies from shared rendering/ownership machinery to integration-specific lifecycle tests, but no row yet records all required application versions, observed loader effects, and maintainer signoff. Treat these adapters as available built-ins rather than stable compatibility guarantees until their rows are dispositioned through reviewed evidence.
+An integration appearing in THPM does not by itself establish end-to-end application support. The current [integration support register](docs/integration-support.md) records the reference Omarchy environment, each active adapter's default and lifecycle disposition, a repeatable certification protocol, adapter-specific real-application evidence, retired cleanup, and the maintainer signoff template. At this audit point, every active adapter is Experimental, visibly labeled, and default-disabled for new state. Existing schema-1 `true` values are grandfathered because older releases serialized inherited defaults and cannot distinguish them from later explicit choices; they are not evidence of certification or opt-in. Existing users should review and disable integrations they do not want. Cava remains the exception and still requires its separate consent marker. Automated coverage varies from shared rendering/ownership machinery to integration-specific lifecycle tests, but no row yet records all required application versions, observed loader effects, and maintainer signoff. Treat these adapters as Experimental built-ins rather than stable compatibility guarantees until their rows are promoted through reviewed evidence.
 
 ## Install
 
@@ -102,7 +102,7 @@ Plugin output is isolated: one failing optional integration is reported without 
 
 ### User preferences
 
-THPM stores user-editable preferences in `~/.config/thpm/config.toml`. Choose whether supported running applications restart automatically after a theme change or remain open while THPM sends one desktop notification naming the applications that still need restart:
+THPM stores user-editable preferences in `~/.config/thpm/config.toml`. Choose whether restart-capable running applications restart automatically after a theme change or remain open while THPM sends one desktop notification naming the applications that still need restart:
 
 ```bash
 thpm config

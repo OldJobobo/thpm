@@ -84,6 +84,7 @@ def build(paths: Paths, enabled: dict[str, bool]) -> list[PluginView]:
                 templates=list(plugin.templates),
                 warnings=warnings,
                 confirmationRequired=plugin.confirmation,
+                supportStatus=plugin.support_status,
             )
         )
     result.extend(
@@ -97,6 +98,7 @@ def build(paths: Paths, enabled: dict[str, bool]) -> list[PluginView]:
             enabled=True,
             available=True,
             warnings=_native_warnings(plugin.id, paths, enabled),
+            supportStatus="native",
         )
         for plugin in NATIVE
     )

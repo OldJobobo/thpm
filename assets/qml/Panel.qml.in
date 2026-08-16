@@ -55,7 +55,7 @@ Item {
         if (!needle)
             return true;
 
-        return (plugin.label + " " + plugin.id + " " + plugin.category + " " + plugin.description).toLowerCase().indexOf(needle) !== -1;
+        return (plugin.label + " " + plugin.id + " " + plugin.category + " " + plugin.description + " " + plugin.supportStatus).toLowerCase().indexOf(needle) !== -1;
     })
     readonly property var doctorItems: {
         var items = [];
@@ -234,7 +234,7 @@ Item {
                 throw new Error(payload.summary || "Unable to change restart policy");
 
             restartPolicy = payload.preferences.restartPolicy;
-            restartPolicyMessage = restartPolicy === "automatic" ? "Supported running apps restart after theme changes." : "THPM will notify you when apps need restarting.";
+            restartPolicyMessage = restartPolicy === "automatic" ? "Restart-capable running apps restart after theme changes." : "THPM will notify you when apps need restarting.";
         } catch (error) {
             restartPolicyMessage = error.message || "Unable to change restart policy";
         }
@@ -906,7 +906,7 @@ Item {
                                 required property var modelData
 
                                 width: ListView.view.width
-                                label: modelData.label
+                                label: modelData.label + (modelData.supportStatus === "experimental" ? " · Experimental" : "")
                                 description: modelData.ownership === "native" ? (((modelData.warnings || []).length > 0 ? "Native coverage gap · " : "Managed by Omarchy · ") + modelData.description) : (modelData.applicable === false ? "Not requested by active theme · " : ((modelData.warnings || []).length > 0 ? "Needs attention · " : (!modelData.available ? "Not actionable · " : "")) + modelData.description)
                                 checked: modelData.enabled
                                 enabled: modelData.ownership !== "native" && (modelData.available || modelData.enabled) && !mutate.running
@@ -1112,7 +1112,7 @@ Item {
                         Toggle {
                             Layout.fillWidth: true
                             label: "Restart apps automatically"
-                            description: "Restart supported running apps after theme changes; when off, notify instead"
+                            description: "Automatically restart capable running apps after theme changes; when off, notify instead"
                             checked: root.restartPolicy === "automatic"
                             enabled: !setRestartPolicy.running
                             onClicked: root.chooseRestartPolicy(checked ? "notify" : "automatic")

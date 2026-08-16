@@ -47,7 +47,8 @@ gates, and roadmap. Section 10 begins with an explicit current-state gap registe
 
 Where this document says an integration is active, it means the integration is
 present in the current registry. It does not mean end-to-end support certification
-has been completed. Support status is not yet encoded in registry metadata.
+has been completed. Registry and snapshot metadata now expose support status; all
+active integrations remain Experimental until promoted through recorded evidence.
 
 ## 2. Product vision
 

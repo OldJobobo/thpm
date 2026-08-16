@@ -290,12 +290,19 @@ class StateTests(Sandbox):
         self.paths.state_file.write_text("[plugins]\nfish = false\n")
         self.assertFalse(load(self.paths)["fish"])
 
-    def test_existing_swaync_enablement_survives_default_policy_change(self):
+    def test_schema_one_enablement_is_grandfathered_across_policy_change(self):
         self.paths.thpm_state_dir.mkdir(parents=True)
         self.paths.state_file.write_text(
-            "version = 1\n\n[plugins]\nswaync = true\n"
+            "version = 1\n\n[plugins]\nfish = true\ngtk-css-compat = true\n"
+            "spotify = true\nbranding = true\nswaync = true\nzed-extra = true\n"
         )
-        self.assertTrue(load(self.paths)["swaync"])
+        enabled = load(self.paths)
+        self.assertTrue(enabled["fish"])
+        self.assertTrue(enabled["gtk-css-compat"])
+        self.assertTrue(enabled["spotify"])
+        self.assertTrue(enabled["branding"])
+        self.assertTrue(enabled["swaync"])
+        self.assertTrue(enabled["zed-extra"])
 
     def test_rejects_conflicting_persisted_discord_state(self):
         self.paths.thpm_state_dir.mkdir(parents=True)
@@ -438,24 +445,10 @@ class StateTests(Sandbox):
         self.assertFalse(obsolete.exists())
         self.assertIn(str(obsolete), changed)
 
-    def test_sensitive_plugins_are_opt_in_by_default(self):
+    def test_experimental_plugins_are_opt_in_by_default(self):
         enabled = load(self.paths)
-        self.assertTrue(
-            all(
-                not enabled[plugin_id]
-                for plugin_id in (
-                    "firefox",
-                    "zen",
-                    "steam",
-                    "zed-extra",
-                    "pi-hot-reload",
-                    "cava",
-                    "swaync",
-                )
-            )
-        )
-        self.assertTrue(enabled["gtk-css-compat"])
-        self.assertTrue(enabled["vscode-local-compat"])
+        self.assertTrue(all(not enabled[plugin.id] for plugin in PLUGINS))
+        self.assertTrue(all(plugin.support_status == "experimental" for plugin in PLUGINS))
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -483,7 +476,7 @@ class StateTests(Sandbox):
             )
         self.assertEqual(
             [plugin_id for plugin_id, _, status, _ in rows if status == "Experimental"],
-            ["swaync"],
+            [plugin.id for plugin in PLUGINS],
         )
         self.assertTrue(all(audit == "Incomplete" for _, audit, _, _ in rows))
         self.assertFalse(any(status == "Supported" for _, _, status, _ in rows))
@@ -839,6 +832,8 @@ class UiTests(Sandbox):
         self.assertIn("BorderSurface {", qml)
         self.assertIn("TextField {", qml)
         self.assertIn("delegate: Toggle {", qml)
+        self.assertIn('modelData.supportStatus === "experimental"', qml)
+        self.assertIn('" · Experimental"', qml)
         self.assertNotIn("Switch {", qml)
         self.assertNotIn('text: "Refresh"', qml)
         self.assertIn("rightPadding: pluginScrollBar.visible ? pluginScrollBar.width", qml)
@@ -903,10 +898,16 @@ class UiTests(Sandbox):
 
 
 class ServiceTests(Sandbox):
-    def test_json_envelope_and_native_ownership(self):
+    def test_json_envelope_exposes_support_status_and_native_ownership(self):
         payload = Service(self.paths).state()
         self.assertEqual(payload["schemaVersion"], 1)
-        self.assertTrue(any(p["ownership"] == "native" for p in payload["plugins"]))
+        active = [p for p in payload["plugins"] if p["ownership"] != "native"]
+        native = [p for p in payload["plugins"] if p["ownership"] == "native"]
+        self.assertTrue(active)
+        self.assertTrue(native)
+        self.assertTrue(all(p["supportStatus"] == "experimental" for p in active))
+        self.assertTrue(all(not p["enabled"] for p in active))
+        self.assertTrue(all(p["supportStatus"] == "native" for p in native))
         self.assertEqual(payload["menuSurface"], "gui")
 
     def test_state_exposes_restart_policy_to_both_frontends(self):
@@ -1348,6 +1349,9 @@ class ServiceTests(Sandbox):
         self.assertNotIn("missing semantic colors", str(payload["errors"]))
 
     def test_doctor_warns_about_unresolved_generated_output(self):
+        enabled = load(self.paths)
+        enabled["fish"] = True
+        save(self.paths, enabled)
         generated = self.paths.current_theme / "thpm-fish.fish"
         generated.parent.mkdir(parents=True)
         generated.write_text('set -gx COLOR "{{ background }}"\n')
@@ -1369,6 +1373,9 @@ class ServiceTests(Sandbox):
         directory = self.paths.config_home / "Vencord/themes"
         directory.mkdir(parents=True)
         target = directory / "vencord.theme.css"
+        enabled = load(self.paths)
+        enabled["discord"] = True
+        save(self.paths, enabled)
         apply("discord", self.paths)
         assets = Path(__file__).parents[1] / "assets"
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
@@ -1379,9 +1386,13 @@ class ServiceTests(Sandbox):
         self.assertEqual(target.read_text(), "active discord theme")
 
     def test_discord_plugins_remain_mutually_exclusive(self):
+        generated = self.paths.current_theme / "thpm-vencord.theme.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("discord theme")
+        (self.paths.config_home / "Vencord/themes").mkdir(parents=True)
         assets = Path(__file__).parents[1] / "assets"
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
-            Service(self.paths).set_enabled("discord", True)
+            Service(self.paths).set_enabled("discord", True, refresh=False)
         state = load(self.paths)
         self.assertTrue(state["discord"])
         self.assertFalse(state["discord-system24"])
@@ -1395,6 +1406,9 @@ class ServiceTests(Sandbox):
         self.assertEqual(compat["vscode-local-compat"]["warnings"], [])
 
     def test_requested_gtk_compatibility_is_attention_until_synchronized(self):
+        enabled = load(self.paths)
+        enabled["gtk-css-compat"] = True
+        save(self.paths, enabled)
         source = self.paths.current_theme / "gtk.css"
         source.parent.mkdir(parents=True)
         source.write_text("@define-color accent #abcdef;\n")
@@ -1412,6 +1426,9 @@ class ServiceTests(Sandbox):
         self.assertEqual(plugin["missing"], [])
 
     def test_enabled_unavailable_plugins_are_reported_as_attention(self):
+        enabled = load(self.paths)
+        enabled["fish"] = True
+        save(self.paths, enabled)
         with patch("thpm.snapshot.shutil.which", return_value=None), patch("thpm.service.capabilities") as caps:
             caps.return_value.available = True
             caps.return_value.routes = set()
@@ -2328,8 +2345,8 @@ class FakeTuiService:
 
     def state(self):
         return {"ok": True, "menuSurface": self.menu_surface, "preferences": {"restartPolicy": self.restart_policy_value}, "counts": {"enabled": 1, "disabled": 0, "native": 1, "unavailable": 0, "attention": 0}, "plugins": [
-            {"id": "fish", "label": "Fish", "category": "Terminal", "description": "Synchronize Fish colors.", "ownership": "thpm", "enabled": True, "available": True, "warnings": []},
-            {"id": "native-foot", "label": "Foot live colors", "category": "Native", "description": "Owned by Omarchy.", "ownership": "native", "enabled": True, "available": True, "warnings": []},
+            {"id": "fish", "label": "Fish", "category": "Terminal", "description": "Synchronize Fish colors.", "ownership": "thpm", "enabled": True, "available": True, "warnings": [], "supportStatus": "experimental"},
+            {"id": "native-foot", "label": "Foot live colors", "category": "Native", "description": "Owned by Omarchy.", "ownership": "native", "enabled": True, "available": True, "warnings": [], "supportStatus": "native"},
         ]}
 
     def set_enabled(self, plugin_id, enabled, **_kwargs):
@@ -2398,6 +2415,9 @@ class TuiTests(Sandbox):
                 await pilot.pause(0.2)
                 self.assertEqual(app.theme, "thpm-omarchy")
                 self.assertEqual(len(app.query("#plugin-list PluginRow")), 2)
+                labels = [str(label.render()) for label in app.query("PluginRow .plugin-label")]
+                self.assertIn("Fish · Experimental", labels)
+                self.assertIn("Foot live colors", labels)
                 await pilot.press("2")
                 search = app.query_one("#integration-search")
                 search.value = "fish"

@@ -311,12 +311,18 @@ def _print_details(console: Console, payload: dict[str, Any], *, verbose: bool) 
         table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
         table.add_column("", width=2)
         table.add_column("Integration", style="bold")
+        table.add_column("Status")
         table.add_column("Owner", style="dim")
         for item in plugins:
             if not isinstance(item, dict):
                 continue
             enabled = bool(item.get("enabled"))
-            table.add_row(Text("●" if enabled else "○", style="green" if enabled else "grey50"), str(item.get("id", "")), str(item.get("ownership", "")))
+            table.add_row(
+                Text("●" if enabled else "○", style="green" if enabled else "grey50"),
+                str(item.get("id", "")),
+                str(item.get("supportStatus", "")),
+                str(item.get("ownership", "")),
+            )
         console.print(table)
 
     checks = payload.get("checks")

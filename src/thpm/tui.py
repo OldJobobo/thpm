@@ -155,11 +155,17 @@ class PluginRow(ListItem):
     """Focusable integration row with a terminal-native toggle."""
 
     def __init__(self, plugin: dict[str, object]) -> None:
-        super().__init__(name=str(plugin["label"]), id="plugin-" + str(plugin["id"]))
+        label = str(plugin["label"])
+        if plugin.get("supportStatus") == "experimental":
+            label += " · Experimental"
+        super().__init__(name=label, id="plugin-" + str(plugin["id"]))
         self.plugin = plugin
 
     def compose(self) -> ComposeResult:
         ownership = str(self.plugin["ownership"])
+        label = str(self.plugin["label"])
+        if self.plugin.get("supportStatus") == "experimental":
+            label += " · Experimental"
         available = bool(self.plugin["available"])
         warnings = list(self.plugin.get("warnings", []))
         applicable = bool(self.plugin.get("applicable", True))
@@ -177,7 +183,7 @@ class PluginRow(ListItem):
             prefix = ""
         with Horizontal(classes="plugin-row-inner"):
             with Vertical(classes="plugin-copy"):
-                yield Label(str(self.plugin["label"]), classes="plugin-label")
+                yield Label(label, classes="plugin-label")
                 yield Static(prefix + str(self.plugin["description"]), classes="plugin-description")
             yield Static(ownership, classes="ownership")
             yield Switch(
@@ -285,7 +291,7 @@ class ThpmTui(App[None]):
                             with Vertical(classes="toolbar-copy"):
                                 yield Label("Restart apps automatically", classes="section-label")
                                 yield Static(
-                                    "Restart supported running apps after theme changes; when off, notify instead",
+                                    "Automatically restart capable running apps after theme changes; when off, notify instead",
                                     id="restart-policy-detail",
                                 )
                             yield Switch(value=True, id="restart-policy-switch")
@@ -517,7 +523,8 @@ class ThpmTui(App[None]):
         visible = [
             plugin for plugin in self.plugins
             if not needle or needle in " ".join(
-                str(plugin.get(key, "")) for key in ("label", "id", "category", "description")
+                str(plugin.get(key, ""))
+                for key in ("label", "id", "category", "description", "supportStatus")
             ).lower()
         ]
         plugin_list = self.query_one("#plugin-list", ListView)
@@ -583,7 +590,7 @@ class ThpmTui(App[None]):
                 self.restart_policy == "automatic"
             )
             message.update(
-                "Supported running apps restart after theme changes."
+                "Restart-capable running apps restart after theme changes."
                 if self.restart_policy == "automatic"
                 else "THPM will notify you when apps need restarting."
             )

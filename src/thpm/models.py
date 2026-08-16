@@ -5,6 +5,7 @@ from typing import Literal
 
 Ownership = Literal["thpm", "native", "theme-provided", "unavailable", "conflicting"]
 ApplyStatus = Literal["applied", "unchanged", "skipped", "failed"]
+SupportStatus = Literal["experimental", "supported", "deprecated", "native"]
 
 
 @dataclass(frozen=True)
@@ -17,9 +18,10 @@ class Plugin:
     commands: tuple[str, ...] = ()
     theme_assets: tuple[str, ...] = ()
     templates: tuple[str, ...] = ()
-    default_enabled: bool = True
+    default_enabled: bool = False
     confirmation: bool = False
     native: bool = False
+    support_status: SupportStatus = "experimental"
 
 
 @dataclass
@@ -53,6 +55,7 @@ class PluginView:
     templates: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     confirmationRequired: bool = False
+    supportStatus: SupportStatus = "experimental"
 
     def json(self) -> dict[str, object]:
         return asdict(self)

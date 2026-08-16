@@ -687,6 +687,31 @@ class UiTests(Sandbox):
         self.assertIn('"foreign"', self.paths.menu_extension.read_text())
         self.assertNotIn("style.theme-hooks", self.paths.menu_extension.read_text())
 
+    def test_menu_install_preserves_comment_terminated_shibumi_block(self):
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        self.paths.menu_extension.write_text(
+            "{\n"
+            "  // shibumi-picker-routing-start\n"
+            '  "style.theme": {"label":"Theme"},\n'
+            '  "style.background": {"label":"Background"}\n'
+            "  // shibumi-picker-routing-end\n"
+            "}\n"
+        )
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.ui.shell_running", return_value=False
+        ):
+            ui.install(self.paths)
+            installed = self.paths.menu_extension.read_text()
+            uncommented = "\n".join(
+                line for line in installed.splitlines() if not line.lstrip().startswith("//")
+            )
+            parsed = json.loads(re.sub(r",\s*}$", "\n}", uncommented))
+            self.assertEqual(parsed["style.theme-hooks"]["label"], "Theme Hook Plugins")
+            self.assertEqual(parsed["style.theme"]["label"], "Theme")
+            self.assertEqual(parsed["style.background"]["label"], "Background")
+            self.assertNotIn("// shibumi-picker-routing-end,", installed)
+
     def test_qml_manifest_contract(self):
         manifest = json.loads((Path(__file__).parents[1] / "assets/qml/manifest.json").read_text())
         self.assertEqual(manifest["id"], "io.github.oldjobobo.thpm")

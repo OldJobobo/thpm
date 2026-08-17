@@ -5979,6 +5979,20 @@ class UpdateTests(Sandbox):
         self.assertIn("verify-release.py\" artifact", script)
         self.assertIn("--ref HEAD", script)
 
+    def test_arch_ci_builds_exact_checkout_during_pretag_phase(self):
+        workflow = (Path(__file__).parents[1] / ".github/workflows/ci.yml").read_text()
+        validate = workflow.index("Validate AUR metadata")
+        prepare = workflow.index("Prepare exact checkout source for pre-tag and VCS builds")
+        build = workflow.index("Build package", prepare)
+        self.assertLess(validate, prepare)
+        self.assertLess(prepare, build)
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertIn('git -c safe.directory="$GITHUB_WORKSPACE" -c tar.umask=0002 archive', workflow)
+        self.assertIn('git -c safe.directory="$GITHUB_WORKSPACE" push', workflow)
+        self.assertIn("0000000000000000000000000000000000000000000000000000000000000000", workflow)
+        self.assertIn("git init --bare /tmp/thpm-ci-source.git", workflow)
+        self.assertIn("thpm::git+file:///tmp/thpm-ci-source.git", workflow)
+
     def test_install_script_validates_before_migration_or_launcher_replacement(self):
         script = (Path(__file__).parents[1] / "install.sh").read_text()
         non_mutating_check = '"$staged/bin/thpm" install --check "$@"'
@@ -5998,7 +6012,7 @@ class UpdateTests(Sandbox):
         committed_refresh = '"$runtime_dir/bin/thpm" reconcile --refresh'
         disable_rollback = "trap - ERR INT TERM"
         self.assertGreater(script.index(committed_refresh), script.index(disable_rollback))
-        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc19")
+        self.assertEqual((Path(__file__).parents[1] / "VERSION").read_text().strip(), "1.0.0rc20")
 
     def test_source_dependency_lock_is_complete_and_hashed(self):
         lock = Path(__file__).parents[1] / "requirements-source.lock"

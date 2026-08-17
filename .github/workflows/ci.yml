@@ -76,6 +76,8 @@ jobs:
 
       - name: Check out the repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
 
       - name: Validate AUR metadata
         env:
@@ -85,6 +87,26 @@ jobs:
           chown -R builder:builder /tmp/pkgbuild
           runuser -u builder -- bash -c 'cd /tmp/pkgbuild && makepkg --printsrcinfo' > /tmp/generated.SRCINFO
           diff -u "packaging/aur/$PACKAGE/.SRCINFO" /tmp/generated.SRCINFO
+
+      - name: Prepare exact checkout source for pre-tag and VCS builds
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          if [[ "$PACKAGE" == thpm ]] && grep -q "^sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')$" /tmp/pkgbuild/PKGBUILD; then
+            version="$(<VERSION)"
+            archive="/tmp/pkgbuild/thpm-$version.tar.gz"
+            git -c safe.directory="$GITHUB_WORKSPACE" -c tar.umask=0002 archive --format=tar.gz --prefix="thpm-$version/" -o "$archive" HEAD
+            digest="$(sha256sum "$archive" | cut -d' ' -f1)"
+            sed -i "s|^source=.*|source=('thpm-$version.tar.gz')|" /tmp/pkgbuild/PKGBUILD
+            sed -i "s|^sha256sums=.*|sha256sums=('$digest')|" /tmp/pkgbuild/PKGBUILD
+          elif [[ "$PACKAGE" == thpm-git ]]; then
+            git init --bare /tmp/thpm-ci-source.git
+            git -c safe.directory="$GITHUB_WORKSPACE" push /tmp/thpm-ci-source.git HEAD:refs/heads/ci --tags
+            git --git-dir=/tmp/thpm-ci-source.git symbolic-ref HEAD refs/heads/ci
+            sed -i "s|^source=.*|source=('thpm::git+file:///tmp/thpm-ci-source.git')|" /tmp/pkgbuild/PKGBUILD
+            chown -R builder:builder /tmp/thpm-ci-source.git
+          fi
+          chown -R builder:builder /tmp/pkgbuild
 
       - name: Build package
         run: runuser -u builder -- bash -c 'cd /tmp/pkgbuild && makepkg --cleanbuild --noconfirm'

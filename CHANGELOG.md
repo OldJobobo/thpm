@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let the verified release-source installer replace the archive's unavoidable pre-tag PKGBUILD checksum placeholder (including legacy `SKIP`) in its temporary build tree, while rejecting any non-placeholder checksum that disagrees with the verified release asset.
+
 ## 1.0.0rc20 - 2026-08-16
 
 - Classify every uncertified active integration as Experimental, expose lifecycle status through JSON, CLI, QML, and TUI surfaces, and make fresh state fully opt-in. Existing schema-1 enablement is visibly grandfathered because inherited defaults cannot be distinguished from explicit choices.

@@ -478,6 +478,7 @@ Doctor shall inspect:
 - state validity and schema compatibility;
 - integration readiness;
 - conditional compatibility synchronization;
+- unmanaged GTK overrides and detectable native GNOME or portal appearance drift;
 - managed target and restoration-state health;
 - pending migrations;
 - retired integration residual output;

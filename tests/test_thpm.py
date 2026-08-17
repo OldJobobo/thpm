@@ -6696,10 +6696,13 @@ class UpdateTests(Sandbox):
         backups = updater._backup_integrations(self.paths, backup_root)
         existing.write_text("new")
         (self.paths.themed_dir / "thpm-added.tpl").write_text("added")
+        self.paths.post_update_hook_file.parent.mkdir(parents=True)
+        self.paths.post_update_hook_file.write_text("new runtime hook")
         updater._restore_integrations(backups)
         self.assertEqual(existing.read_text(), "old")
         self.assertEqual(foreign.read_text(), "keep")
         self.assertFalse((self.paths.themed_dir / "thpm-added.tpl").exists())
+        self.assertFalse(self.paths.post_update_hook_file.exists())
 
     def test_update_refresh_failure_is_reported_as_committed_partial_failure(self):
         result = {

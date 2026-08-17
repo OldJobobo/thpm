@@ -103,7 +103,7 @@ jobs:
             git init --bare /tmp/thpm-ci-source.git
             git -c safe.directory="$GITHUB_WORKSPACE" push /tmp/thpm-ci-source.git HEAD:refs/heads/ci --tags
             git --git-dir=/tmp/thpm-ci-source.git symbolic-ref HEAD refs/heads/ci
-            sed -i "s|^source=.*|source=('git+file:///tmp/thpm-ci-source.git')|" /tmp/pkgbuild/PKGBUILD
+            sed -i "s|^source=.*|source=('thpm::git+file:///tmp/thpm-ci-source.git')|" /tmp/pkgbuild/PKGBUILD
             chown -R builder:builder /tmp/thpm-ci-source.git
           fi
           chown -R builder:builder /tmp/pkgbuild

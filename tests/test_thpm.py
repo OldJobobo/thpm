@@ -5991,7 +5991,7 @@ class UpdateTests(Sandbox):
         self.assertIn('git -c safe.directory="$GITHUB_WORKSPACE" push', workflow)
         self.assertIn("0000000000000000000000000000000000000000000000000000000000000000", workflow)
         self.assertIn("git init --bare /tmp/thpm-ci-source.git", workflow)
-        self.assertIn("git+file:///tmp/thpm-ci-source.git", workflow)
+        self.assertIn("thpm::git+file:///tmp/thpm-ci-source.git", workflow)
 
     def test_install_script_validates_before_migration_or_launcher_replacement(self):
         script = (Path(__file__).parents[1] / "install.sh").read_text()

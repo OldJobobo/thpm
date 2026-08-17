@@ -5979,6 +5979,89 @@ class UpdateTests(Sandbox):
         self.assertIn("verify-release.py\" artifact", script)
         self.assertIn("--ref HEAD", script)
 
+    def test_release_installer_hands_verified_digest_to_pretag_pkgbuild(self):
+        root = Path(__file__).parents[1]
+        version = (root / "VERSION").read_text().strip()
+        fake_bin = self.paths.home / "bin"
+        fake_bin.mkdir()
+        fake_curl = fake_bin / "curl"
+        fake_curl.write_text(
+            "#!/usr/bin/python3\n"
+            "import os, shutil, sys\n"
+            "output = sys.argv[sys.argv.index('--output') + 1]\n"
+            "source = os.environ['CHECKSUM'] if sys.argv[-1].endswith('.sha256') else os.environ['ARCHIVE']\n"
+            "shutil.copy2(source, output)\n"
+        )
+        fake_makepkg = fake_bin / "makepkg"
+        fake_makepkg.write_text(
+            "#!/usr/bin/env bash\n"
+            "grep -Fx \"sha256sums=('$EXPECTED_HASH')\" PKGBUILD >/dev/null || exit 91\n"
+            "touch \"$MAKEPKG_MARKER\"\n"
+            "exit 37\n"
+        )
+        fake_sudo = fake_bin / "sudo"
+        fake_sudo.write_text("#!/usr/bin/env bash\nexit 99\n")
+        for executable in (fake_curl, fake_makepkg, fake_sudo):
+            executable.chmod(0o755)
+
+        cases = (
+            ("zero-placeholder", "0" * 64, 37, None),
+            ("legacy-skip", "SKIP", 37, None),
+            (
+                "mismatched-digest",
+                "1" * 64,
+                1,
+                "Release PKGBUILD checksum does not match the verified archive",
+            ),
+            (
+                "malformed",
+                "not-a-digest",
+                1,
+                "Release PKGBUILD checksum is not canonical",
+            ),
+        )
+        for label, package_hash, expected_code, expected_error in cases:
+            with self.subTest(label=label):
+                fixture = self.paths.home / label
+                package_dir = fixture / f"thpm-{version}/packaging/aur/thpm"
+                package_dir.mkdir(parents=True)
+                (package_dir / "PKGBUILD").write_text(
+                    f"pkgname=thpm\npkgver={version}\n"
+                    f"source=(\"$pkgname-$pkgver.tar.gz\")\n"
+                    f"sha256sums=('{package_hash}')\n"
+                )
+                (package_dir / "thpm.install").write_text("post_install() { :; }\n")
+                archive = self.paths.home / f"{label}.tar.gz"
+                with tarfile.open(archive, "w:gz") as bundle:
+                    bundle.add(fixture / f"thpm-{version}", arcname=f"thpm-{version}")
+                digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+                checksum = self.paths.home / f"{label}.sha256"
+                checksum.write_text(f"{digest}  thpm-{version}.tar.gz\n")
+                marker = self.paths.home / f"makepkg-{label}"
+                env = {
+                    **os.environ,
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                    "ARCHIVE": str(archive),
+                    "CHECKSUM": str(checksum),
+                    "EXPECTED_HASH": digest,
+                    "MAKEPKG_MARKER": str(marker),
+                }
+                completed = subprocess.run(
+                    ["bash", str(root / "scripts/install-arch-release.sh"), version],
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, expected_code, completed.stderr)
+                self.assertEqual(marker.exists(), expected_error is None)
+                if expected_error:
+                    self.assertIn(expected_error, completed.stderr)
+                else:
+                    self.assertIn(
+                        f"Verified release source SHA-256: {digest}", completed.stdout
+                    )
+
     def test_arch_ci_builds_exact_checkout_during_pretag_phase(self):
         workflow = (Path(__file__).parents[1] / ".github/workflows/ci.yml").read_text()
         validate = workflow.index("Validate AUR metadata")

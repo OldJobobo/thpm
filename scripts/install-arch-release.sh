@@ -81,6 +81,19 @@ package_dir="$source_root/packaging/aur/thpm"
     printf 'Release archive does not contain the stable Arch packaging files\n' >&2
     exit 1
 }
+checksum_assignment="$(grep -E "^sha256sums=\\('([0-9a-f]{64}|SKIP)'\\)$" "$package_dir/PKGBUILD" || true)"
+if [[ ! "$checksum_assignment" =~ ^sha256sums=\(\'([0-9a-f]{64}|SKIP)\'\)$ ]]; then
+    printf 'Release PKGBUILD checksum is not canonical\n' >&2
+    exit 1
+fi
+package_hash="${BASH_REMATCH[1]}"
+placeholder_hash="$(printf '0%.0s' {1..64})"
+if [[ "$package_hash" == "$placeholder_hash" || "$package_hash" == "SKIP" ]]; then
+    sed -i "s|^sha256sums=.*$|sha256sums=('$expected_hash')|" "$package_dir/PKGBUILD"
+elif [[ "$package_hash" != "$expected_hash" ]]; then
+    printf 'Release PKGBUILD checksum does not match the verified archive\n' >&2
+    exit 1
+fi
 cp -- "$work_dir/$archive_name" "$package_dir/$archive_name"
 
 printf 'Building the verified release source with makepkg...\n'

@@ -95,13 +95,13 @@ jobs:
           if [[ "$PACKAGE" == thpm ]] && grep -q "^sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')$" /tmp/pkgbuild/PKGBUILD; then
             version="$(<VERSION)"
             archive="/tmp/pkgbuild/thpm-$version.tar.gz"
-            git -c tar.umask=0002 archive --format=tar.gz --prefix="thpm-$version/" -o "$archive" HEAD
+            git -c safe.directory="$GITHUB_WORKSPACE" -c tar.umask=0002 archive --format=tar.gz --prefix="thpm-$version/" -o "$archive" HEAD
             digest="$(sha256sum "$archive" | cut -d' ' -f1)"
             sed -i "s|^source=.*|source=('thpm-$version.tar.gz')|" /tmp/pkgbuild/PKGBUILD
             sed -i "s|^sha256sums=.*|sha256sums=('$digest')|" /tmp/pkgbuild/PKGBUILD
           elif [[ "$PACKAGE" == thpm-git ]]; then
             git init --bare /tmp/thpm-ci-source.git
-            git push /tmp/thpm-ci-source.git HEAD:refs/heads/ci --tags
+            git -c safe.directory="$GITHUB_WORKSPACE" push /tmp/thpm-ci-source.git HEAD:refs/heads/ci --tags
             git --git-dir=/tmp/thpm-ci-source.git symbolic-ref HEAD refs/heads/ci
             sed -i "s|^source=.*|source=('git+file:///tmp/thpm-ci-source.git')|" /tmp/pkgbuild/PKGBUILD
             chown -R builder:builder /tmp/thpm-ci-source.git

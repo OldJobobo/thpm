@@ -288,7 +288,13 @@ def _stage_runtime(source: Path, runtime: Path) -> None:
 def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | None]:
     # Snapshot complete managed surfaces so rollback also removes files that did
     # not exist before the update (for example templates added by a new release).
-    targets = [paths.hook_file, paths.shell_plugin_dir, paths.menu_extension, paths.themed_dir]
+    targets = [
+        paths.hook_file,
+        paths.post_update_hook_file,
+        paths.shell_plugin_dir,
+        paths.menu_extension,
+        paths.themed_dir,
+    ]
     backups: dict[Path, Path | None] = {}
     for index, target in enumerate(targets):
         if not target.exists():

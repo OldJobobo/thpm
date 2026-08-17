@@ -94,6 +94,13 @@ Item {
         closingFromHost = false;
     }
 
+    // Called by `thpm ui open` through the shell IPC bridge. Summon acceptance
+    // precedes asynchronous QML loading, so this is the launcher's readiness
+    // acknowledgement rather than trusting the IPC process exit status alone.
+    function health(payloadJson) {
+        return opened && surface.visible ? "open" : "loaded";
+    }
+
     function requestClose() {
         if (shell && typeof shell.hide === "function")
             shell.hide("io.github.oldjobobo.thpm");

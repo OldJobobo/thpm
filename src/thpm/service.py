@@ -1074,7 +1074,14 @@ class Service:
                 changed.extend(retired_changed)
                 self._step("Installing theme hook")
                 atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
-                changed.append(str(self.paths.hook_file))
+                atomic_copy(
+                    asset("hooks", "90-thpm-ui"),
+                    self.paths.post_update_hook_file,
+                    0o755,
+                )
+                changed.extend(
+                    (str(self.paths.hook_file), str(self.paths.post_update_hook_file))
+                )
             self._step("Refreshing active theme" if refresh else "Checking refresh migration")
             migration, errors = _refresh_templates(
                 self.paths, requested=refresh, deferred=deferred
@@ -1130,7 +1137,14 @@ class Service:
                 )
                 changed.extend(retired_changed)
                 atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)
-                changed.append(str(self.paths.hook_file))
+                atomic_copy(
+                    asset("hooks", "90-thpm-ui"),
+                    self.paths.post_update_hook_file,
+                    0o755,
+                )
+                changed.extend(
+                    (str(self.paths.hook_file), str(self.paths.post_update_hook_file))
+                )
                 legacy_archive = archive_legacy(self.paths, legacy_files, legacy_artifacts(self.paths))
                 if compat_required:
                     atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
@@ -1255,9 +1269,13 @@ class Service:
                 changed.extend(zellij_changed)
                 record_cleanup("zellij", zellij_warnings)
                 self._step("Removing theme hook and migration state")
-                if self.paths.hook_file.exists():
-                    self.paths.hook_file.unlink()
-                    changed.append(str(self.paths.hook_file))
+                for hook_file in (
+                    self.paths.hook_file,
+                    self.paths.post_update_hook_file,
+                ):
+                    if hook_file.exists():
+                        hook_file.unlink()
+                        changed.append(str(hook_file))
                 if self.paths.canonical_palette_migration_marker.exists():
                     self.paths.canonical_palette_migration_marker.unlink()
                     changed.append(str(self.paths.canonical_palette_migration_marker))

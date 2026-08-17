@@ -6,7 +6,7 @@ THPM has five deliberately narrow layers:
 
 1. `thpm` owns registry state, capability checks, locking, migration, and JSON responses.
 2. Omarchy owns palette parsing and template rendering. THPM places opted-in `.tpl` files in `~/.config/omarchy/themed`; Omarchy emits their generated files into the active theme.
-3. One hook at `~/.config/omarchy/hooks/theme-set.d/90-thpm` invokes the integration adapters after a theme switch.
+3. A theme hook at `~/.config/omarchy/hooks/theme-set.d/90-thpm` invokes integration adapters after a theme switch; a separate `post-update.d/90-thpm-ui` hook preserves the graphical manager's self-healing launch route.
 4. The QML control panel is a normal compositor-managed `FloatingWindow` and a client of `thpm --json`; it does not duplicate registry or persistence logic or implement its own window-management gestures.
 5. The Textual TUI runs through `thpm tui` and calls the same Python `Service` in background workers, keeping the interface responsive without creating a second state or mutation path.
 
@@ -26,4 +26,6 @@ Source runtimes are private virtual environments containing THPM and an exact tr
 
 The TUI reads the active semantic `colors.toml` when it starts and on manual refresh. Palette errors select a bundled fallback theme and are reported as degraded presentation, not as a fatal application error.
 
-Omarchy Menu owns one THPM entry. Its target is selected by `thpm ui surface` or the Menu launcher control in either frontend and persisted in `$XDG_STATE_HOME/thpm/ui.toml`; the CLI, GUI, and TUI all use the same service operation. `thpm install` and `thpm ui install` deploy the packaged QML files and re-render the entry from that preference. Source self-updates redeploy the QML manager automatically; AUR package upgrades install new files under `/usr/share/thpm/qml`, after which the user runs `thpm ui install` to copy them into the live per-user Shell plugin.
+Omarchy Menu owns one THPM entry. Its target is selected by `thpm ui surface` or the Menu launcher control in either frontend and persisted in `$XDG_STATE_HOME/thpm/ui.toml`; the CLI, GUI, and TUI all use the same service operation. The GUI action invokes `thpm ui open`, not Shell summon IPC directly. Under a serialized launch lock it compares the packaged and deployed frontend generation, stages and switches a complete tree when necessary, rescans and verifies discovery, repairs and verifies enablement, summons the panel, and calls the panel's `health` method until asynchronous QML loading acknowledges a visible window. Exit code zero with any IPC response other than the documented success value is a failure. If graphical readiness cannot be established, an interactive launch opens `thpm tui` in a floating terminal as a functional degraded surface; JSON callers receive the failure without spawning UI.
+
+`thpm install` installs `post-update.d/90-thpm-ui`, whose idempotent `thpm ui sync` preserves the stable launcher only when the graphical manager is already installed. Omarchy runs this user hook before its AUR phase, so package assets installed later in that update are synchronized by the stable launcher's click-time repair. Source self-updates continue to synchronize the panel during their transactional update path.

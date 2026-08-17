@@ -25,7 +25,7 @@ The CLI, QML panel, and Textual TUI share one plugin-operation model:
 - The TUI calls the same `Service` in background workers in [`src/thpm/tui.py`](../src/thpm/tui.py).
 - [`Service`](../src/thpm/service.py) owns plugin-state and integration orchestration, validation, progress stages, and response envelopes. UI installation and removal remain narrow CLI-dispatched deployment operations.
 
-The installed theme hook is also a narrow service client. [`assets/hooks/90-thpm`](../assets/hooks/90-thpm) converts Omarchy's `theme-set` event into `thpm hook-run theme-set`.
+The installed hooks are narrow service clients. [`assets/hooks/90-thpm`](../assets/hooks/90-thpm) converts Omarchy's `theme-set` event into `thpm hook-run theme-set`; [`assets/hooks/90-thpm-ui`](../assets/hooks/90-thpm-ui) idempotently synchronizes an already-installed graphical manager during Omarchy's pre-AUR post-update phase.
 
 A service response always begins with the envelope fields `schemaVersion`, `ok`, `operation`, `busy`, and `summary`. Operations then add structured fields such as `plugins`, `changed`, `warnings`, `errors`, or `migration`.
 
@@ -106,7 +106,7 @@ A failed refresh leaves its migration pending so a later `thpm reconcile` can re
 
 ### 1. Packaged assets
 
-THPM ships versioned templates in [`assets/templates/`](../assets/templates/) and one hook at [`assets/hooks/90-thpm`](../assets/hooks/90-thpm).
+THPM ships versioned templates in [`assets/templates/`](../assets/templates/), the theme dispatcher at [`assets/hooks/90-thpm`](../assets/hooks/90-thpm), and the graphical-manager update reconciler at [`assets/hooks/90-thpm-ui`](../assets/hooks/90-thpm-ui).
 
 ### 2. Reconcile
 
@@ -226,6 +226,7 @@ All user paths are centralized in [`src/thpm/paths.py`](../src/thpm/paths.py). W
 | Managed restoration state | `~/.local/state/thpm/managed-assets/` |
 | THPM themed inputs | `~/.config/omarchy/themed/thpm-*.tpl` |
 | Theme hook | `~/.config/omarchy/hooks/theme-set.d/90-thpm` |
+| UI update hook | `~/.config/omarchy/hooks/post-update.d/90-thpm-ui` |
 | QML shell plugin | `~/.config/omarchy/plugins/io.github.oldjobobo.thpm/` |
 | Omarchy Menu extension | `~/.config/omarchy/extensions/omarchy-menu.jsonc` |
 

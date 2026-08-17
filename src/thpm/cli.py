@@ -119,7 +119,7 @@ def parser() -> argparse.ArgumentParser:
 
     ui_cmd = commands.add_parser("ui")
     ui_sub = ui_cmd.add_subparsers(dest="ui_command", required=True)
-    for name in ("state", "install", "remove", "status", "open"):
+    for name in ("state", "install", "sync", "remove", "status", "open"):
         sub = ui_sub.add_parser(name)
         _output_options(sub)
     surface = ui_sub.add_parser("surface")
@@ -342,23 +342,28 @@ def _execute(
     if command == "ui":
         if args.ui_command == "state": return service.state()
         if args.ui_command == "install": return envelope("ui-install", summary="QML manager installed", result=ui.install(paths), errors=[])
+        if args.ui_command == "sync":
+            result = ui.sync(paths)
+            return envelope(
+                "ui-sync",
+                summary="QML manager synchronized" if not result.get("skipped") else "QML manager is not installed",
+                result=result,
+                errors=[],
+            )
         if args.ui_command == "remove": return envelope("ui-remove", summary="QML manager removed", result=ui.remove(paths), errors=[])
         if args.ui_command == "status": return envelope("ui-status", summary="QML manager status", result=ui.status(paths), errors=[])
         if args.ui_command == "surface": return service.ui_surface(args.surface)
-        from .omarchy import run
-        completed = run("shell", "shell", "summon", "io.github.oldjobobo.thpm", "{}", check=False)
-        detail = completed.stderr.strip() or completed.stdout.strip()
+        result = ui.open_manager(paths, fallback=not json_mode)
+        degraded = result.get("surface") == "recovery-tui"
         return envelope(
             "ui-open",
-            completed.returncode == 0,
             summary=(
-                "QML manager opened"
-                if completed.returncode == 0
-                else "unable to open QML manager"
+                "Recovery interface opened because the graphical manager was unavailable"
+                if degraded
+                else "QML manager opened"
             ),
-            errors=[]
-            if completed.returncode == 0
-            else [{"message": detail or "Omarchy Shell rejected the request"}],
+            result=result,
+            errors=[],
         )
     raise ValueError(command)
 

@@ -20,7 +20,7 @@ import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 from rich.console import Console
 from textual.widgets import Button, Link
@@ -765,7 +765,7 @@ class UiTests(Sandbox):
             self.assertIn('"foreign"', installed)
             self.assertEqual(installed.count('"style.theme-hooks"'), 1)
             self.assertNotIn("style.theme-hooks-terminal", installed)
-            self.assertIn("omarchy shell shell summon", installed)
+            self.assertIn('"action":"thpm ui open"', installed)
             self.assertEqual(
                 (self.paths.shell_plugin_dir / "Panel.qml").read_bytes(),
                 (assets / "qml/Panel.qml.in").read_bytes(),
@@ -782,10 +782,147 @@ class UiTests(Sandbox):
             self.assertIn("'thpm tui'", self.paths.menu_extension.read_text())
             toggled = ui.surface(self.paths, "toggle")
             self.assertEqual(toggled["surface"], "gui")
-            self.assertIn("omarchy shell shell summon", self.paths.menu_extension.read_text())
+            self.assertIn('"action":"thpm ui open"', self.paths.menu_extension.read_text())
             ui.remove(self.paths)
         self.assertIn('"foreign"', self.paths.menu_extension.read_text())
         self.assertNotIn("style.theme-hooks", self.paths.menu_extension.read_text())
+
+    def test_open_repairs_disabled_plugin_and_confirms_active_panel(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.ui.shell_running", return_value=False
+        ):
+            ui.install(self.paths)
+
+        self.paths.menu_extension.write_text(
+            self.paths.menu_extension.read_text().replace(
+                "thpm ui open", f"omarchy shell shell summon {ui.PLUGIN_ID} '{{}}'"
+            )
+        )
+        disabled = {"id": ui.PLUGIN_ID, "enabled": False, "active": False}
+        enabled = {"id": ui.PLUGIN_ID, "enabled": True, "active": False}
+        states = iter((disabled, enabled))
+
+        def command(*args, **kwargs):
+            if args == ("plugin", "list", "--json"):
+                return subprocess.CompletedProcess(args, 0, json.dumps([next(states)]), "")
+            if args[:2] == ("plugin", "enable"):
+                return subprocess.CompletedProcess(args, 0, "Enabled\n", "")
+            if args == ("menu", "refresh"):
+                return subprocess.CompletedProcess(args, 0, "ok\n", "")
+            if args[:3] == ("shell", "shell", "summon"):
+                return subprocess.CompletedProcess(args, 0, "ok\n", "")
+            if args[:3] == ("shell", "shell", "call"):
+                return subprocess.CompletedProcess(args, 0, "open\n", "")
+            self.fail(f"unexpected Omarchy command: {args}")
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.ui.shell_running", return_value=True
+        ), patch("thpm.ui.run", side_effect=command) as run:
+            result = ui.open_manager(self.paths, fallback=False)
+
+        self.assertTrue(result["opened"])
+        self.assertTrue(result["enabled"])
+        self.assertTrue(result["menuSynchronized"])
+        self.assertIn('"action":"thpm ui open"', self.paths.menu_extension.read_text())
+        self.assertFalse(result["synchronized"])
+        self.assertIn(call("plugin", "enable", ui.PLUGIN_ID, check=False, timeout=5), run.call_args_list)
+
+    def test_open_synchronizes_stale_qml_before_summoning(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.ui.shell_running", return_value=False
+        ):
+            ui.install(self.paths)
+        (self.paths.shell_plugin_dir / "Panel.qml").write_text("stale")
+
+        enabled = {"id": ui.PLUGIN_ID, "enabled": True, "active": False}
+        states = iter((enabled, enabled))
+
+        def command(*args, **kwargs):
+            if args == ("shell", "shell", "rescanPlugins"):
+                return subprocess.CompletedProcess(args, 0, "", "")
+            if args == ("plugin", "list", "--json"):
+                return subprocess.CompletedProcess(args, 0, json.dumps([next(states)]), "")
+            if args[:3] == ("shell", "shell", "summon"):
+                return subprocess.CompletedProcess(args, 0, "ok\n", "")
+            if args[:3] == ("shell", "shell", "call"):
+                return subprocess.CompletedProcess(args, 0, "open\n", "")
+            self.fail(f"unexpected Omarchy command: {args}")
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.ui.shell_running", return_value=True
+        ), patch("thpm.ui.run", side_effect=command):
+            result = ui.open_manager(self.paths, fallback=False)
+
+        self.assertTrue(result["synchronized"])
+        self.assertEqual(
+            (self.paths.shell_plugin_dir / "Panel.qml").read_bytes(),
+            (assets / "qml/Panel.qml.in").read_bytes(),
+        )
+
+    def test_open_treats_unknown_stdout_as_failure_and_launches_recovery(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.ui.shell_running", return_value=False
+        ):
+            ui.install(self.paths)
+        enabled = {"id": ui.PLUGIN_ID, "enabled": True, "active": False}
+
+        def command(*args, **kwargs):
+            if args == ("plugin", "list", "--json"):
+                return subprocess.CompletedProcess(args, 0, json.dumps([enabled]), "")
+            if args[:3] == ("shell", "shell", "summon"):
+                return subprocess.CompletedProcess(args, 0, "unknown\n", "")
+            self.fail(f"unexpected Omarchy command: {args}")
+
+        process = Mock()
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.ui.shell_running", return_value=True
+        ), patch("thpm.ui.run", side_effect=command), patch(
+            "thpm.ui.shutil.which", return_value="/usr/bin/omarchy-launch-floating-terminal-with-presentation"
+        ), patch("thpm.ui.subprocess.Popen", return_value=process) as popen:
+            result = ui.open_manager(self.paths)
+
+        self.assertEqual(result["surface"], "recovery-tui")
+        self.assertTrue(result["degraded"])
+        self.assertIn("unknown", result["graphicalError"])
+        popen.assert_called_once()
+
+    def test_install_uses_supported_shell_rescan_and_verifies_enablement(self):
+        assets = Path(__file__).parents[1] / "assets"
+        discovered = {"id": ui.PLUGIN_ID, "enabled": False, "active": False}
+        enabled = {"id": ui.PLUGIN_ID, "enabled": True, "active": False}
+        states = iter((discovered, discovered, enabled))
+
+        def command(*args, **kwargs):
+            if args == ("shell", "shell", "rescanPlugins"):
+                return subprocess.CompletedProcess(args, 0, "", "")
+            if args == ("plugin", "list", "--json"):
+                return subprocess.CompletedProcess(args, 0, json.dumps([next(states)]), "")
+            if args[:2] == ("plugin", "enable"):
+                return subprocess.CompletedProcess(args, 0, "Enabled\n", "")
+            if args == ("menu", "refresh"):
+                return subprocess.CompletedProcess(args, 0, "ok\n", "")
+            self.fail(f"unexpected Omarchy command: {args}")
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.ui.shell_running", return_value=True
+        ), patch("thpm.ui.run", side_effect=command) as run:
+            result = ui.install(self.paths)
+
+        self.assertTrue(result["rescanned"])
+        self.assertTrue(result["enabled"])
+        self.assertNotIn(call("plugin", "rescan", check=False), run.call_args_list)
+
+    def test_sync_preserves_explicit_no_ui_install_and_repairs_existing_ui(self):
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            self.assertTrue(ui.sync(self.paths)["skipped"])
+            self.paths.shell_plugin_dir.mkdir(parents=True)
+            with patch("thpm.ui.install", return_value={"installed": True}) as install:
+                self.assertTrue(ui.sync(self.paths)["installed"])
+        install.assert_called_once_with(self.paths)
 
     def test_menu_install_preserves_comment_terminated_shibumi_block(self):
         self.paths.menu_extension.parent.mkdir(parents=True)
@@ -812,6 +949,11 @@ class UiTests(Sandbox):
             self.assertEqual(parsed["style.background"]["label"], "Background")
             self.assertNotIn("// shibumi-picker-routing-end,", installed)
 
+    def test_post_update_hook_uses_idempotent_ui_sync(self):
+        hook = (Path(__file__).parents[1] / "assets/hooks/90-thpm-ui").read_text()
+        self.assertIn("exec thpm --json ui sync", hook)
+        self.assertNotIn("ui install", hook)
+
     def test_qml_manifest_contract(self):
         manifest = json.loads((Path(__file__).parents[1] / "assets/qml/manifest.json").read_text())
         self.assertEqual(manifest["id"], "io.github.oldjobobo.thpm")
@@ -826,6 +968,8 @@ class UiTests(Sandbox):
         self.assertNotIn("id: card", qml)
         self.assertNotIn("PanelWindow {", qml)
         self.assertNotIn("WlrLayershell.", qml)
+        self.assertIn("function health(payloadJson)", qml)
+        self.assertIn('return opened && surface.visible ? "open" : "loaded"', qml)
 
     def test_qml_design_stays_single_panel_and_uses_omarchy_controls(self):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
@@ -985,6 +1129,8 @@ class ServiceTests(Sandbox):
         owned.write_text("remove")
         self.paths.hook_file.parent.mkdir(parents=True)
         self.paths.hook_file.write_text("remove")
+        self.paths.post_update_hook_file.parent.mkdir(parents=True)
+        self.paths.post_update_hook_file.write_text("remove")
         self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
         self.paths.canonical_palette_migration_marker.write_text("done\n")
         self.paths.config_file.parent.mkdir(parents=True)
@@ -1004,6 +1150,7 @@ class ServiceTests(Sandbox):
         self.assertTrue(foreign.exists())
         self.assertFalse(owned.exists())
         self.assertFalse(self.paths.hook_file.exists())
+        self.assertFalse(self.paths.post_update_hook_file.exists())
         self.assertFalse(self.paths.canonical_palette_migration_marker.exists())
         self.assertFalse(self.paths.thpm_config_dir.exists())
         self.assertFalse(self.paths.thpm_state_dir.exists())
@@ -1263,6 +1410,10 @@ class ServiceTests(Sandbox):
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["migration"]["refreshed"])
         self.assertTrue(self.paths.canonical_palette_migration_marker.is_file())
+        self.assertEqual(
+            self.paths.post_update_hook_file.read_bytes(),
+            (assets / "hooks/90-thpm-ui").read_bytes(),
+        )
         install_ui.assert_called_once_with(self.paths)
         run.assert_called_once_with("theme", "refresh", check=False, timeout=180)
 
@@ -2537,6 +2688,19 @@ class CliTests(unittest.TestCase):
             exit_code = main(["tui"])
         self.assertEqual(exit_code, 0)
         run_tui.assert_called_once()
+
+    def test_json_ui_open_uses_verified_launcher_without_visual_fallback(self):
+        result = {"opened": True, "surface": "gui", "synchronized": False}
+        with patch("thpm.cli.ui.open_manager", return_value=result) as open_manager, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            exit_code = main(["--json", "ui", "open"])
+        self.assertEqual(exit_code, 0)
+        open_manager.assert_called_once()
+        self.assertFalse(open_manager.call_args.kwargs["fallback"])
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"], result)
 
     def test_ui_surface_command_sets_menu_target(self):
         response = {"ok": True, "summary": "Omarchy menu opens the TUI", "result": {"surface": "tui", "changed": True}}

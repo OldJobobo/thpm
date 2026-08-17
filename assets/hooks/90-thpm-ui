@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+# Omarchy currently invokes post-update hooks before its AUR phase. Keeping the
+# menu on the stable THPM launcher here is still useful: if the package changes
+# afterward, the next click synchronizes the newly packaged frontend itself.
+exec thpm --json ui sync >/dev/null

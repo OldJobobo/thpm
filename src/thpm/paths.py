@@ -127,6 +127,10 @@ class Paths:
         return self.hook_dir / "90-thpm"
 
     @property
+    def post_update_hook_file(self) -> Path:
+        return self.config_home / "omarchy/hooks/post-update.d/90-thpm-ui"
+
+    @property
     def themed_dir(self) -> Path:
         return self.config_home / "omarchy/themed"
 

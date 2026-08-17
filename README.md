@@ -47,14 +47,15 @@ To build locally instead, choose either the stable package or the development pa
 thpm install
 ```
 
-After a direct package-manager upgrade, synchronize both theme output and the graphical manager:
+After a direct package-manager upgrade, reconcile generated theme output when the release requests it:
 
 ```bash
 thpm reconcile --refresh
-thpm ui install
 ```
 
-`thpm update` synchronizes package state, integrations, the active theme, and the graphical control panel from the CLI, TUI, or GUI. Direct `pacman` or AUR-helper upgrades cannot safely perform per-user setup; after those, run both commands above.
+Once the self-healing menu launcher has been installed, the graphical manager needs no separate redeployment step after upgrades. Its menu action compares packaged and deployed frontend assets, repairs plugin discovery and enablement, verifies that the asynchronous QML panel actually opened, and falls back to the terminal interface in a floating window if graphical recovery fails. An idempotent user `post-update` hook keeps that stable launcher in place before Omarchy's AUR phase; the next click synchronizes any newer QML installed later in the update.
+
+`thpm update` synchronizes package state, integrations, the active theme, and the graphical control panel from the CLI, TUI, or GUI. Direct `pacman` or AUR-helper upgrades cannot safely rewrite user configuration from the package transaction, so the stable launcher performs that synchronization in the desktop user's context.
 
 ### Source checkout
 
@@ -81,6 +82,7 @@ thpm zed status
 thpm zed setup
 thpm ui status
 thpm ui install
+thpm ui sync
 thpm ui open
 thpm ui remove
 thpm tui
@@ -151,7 +153,7 @@ From inside the task worktree, run the project checks:
 ```bash
 python -m unittest discover -s tests -v
 python -m compileall -q src
-bash -n install.sh uninstall.sh assets/hooks/90-thpm scripts/install-arch-release.sh
+bash -n install.sh uninstall.sh assets/hooks/90-thpm assets/hooks/90-thpm-ui scripts/install-arch-release.sh
 qmllint assets/qml/Panel.qml.in  # when Qt tooling is installed
 ```
 

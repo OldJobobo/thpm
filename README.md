@@ -54,7 +54,7 @@ thpm reconcile --refresh
 thpm ui install
 ```
 
-`thpm update` handles package reconciliation, but run `thpm ui install` afterward whenever a release includes graphical-manager changes.
+`thpm update` synchronizes package state, integrations, the active theme, and the graphical control panel from the CLI, TUI, or GUI. Direct `pacman` or AUR-helper upgrades cannot safely perform per-user setup; after those, run both commands above.
 
 ### Source checkout
 

@@ -712,7 +712,9 @@ class ThpmTui(App[None]):
         self.set_busy(True)
         self.query_one("#update-message", Static).update("Downloading and verifying update…")
         try:
-            payload = await asyncio.to_thread(self.service.update_apply)
+            payload = await asyncio.to_thread(
+                self.service.update_apply, update_mode="handoff"
+            )
             result = dict(payload.get("result", {}))
             self.update_info = result
             if not payload.get("ok"):
@@ -722,11 +724,15 @@ class ThpmTui(App[None]):
                 message = f"Updated to {result.get('availableVersion')}. Restart the shell and relaunch this TUI."
                 if result.get("refreshRequired"):
                     message += " Then run thpm reconcile --refresh to regenerate active theme outputs."
+                if result.get("uiRefreshRequired"):
+                    message += " Run thpm ui install to synchronize the control panel."
                 self.query_one("#restart-shell", Button).display = True
             elif status == "started":
-                message = "Package update opened in a terminal."
-                if result.get("refreshRequired"):
-                    message += " It will reconcile the per-user templates after a successful upgrade."
+                message = (
+                    "Package update opened in a terminal. It will synchronize "
+                    "integrations and the control panel after a successful upgrade; "
+                    "restart the shell when it finishes."
+                )
             else:
                 message = "THPM is current."
             self.query_one("#update-message", Static).update(message)

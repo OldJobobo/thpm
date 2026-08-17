@@ -63,7 +63,7 @@ from thpm.cava import (
 from thpm.cava import (
     set_selector as set_cava_selector,
 )
-from thpm.cli import _confirm, main
+from thpm.cli import _confirm, _write_update_handoff_result, main
 from thpm.compat import gtk_file_doctor_warnings, gtk_session_doctor_warnings
 from thpm.config import ConfigError, Preferences
 from thpm.config import load as load_config
@@ -850,9 +850,17 @@ class UiTests(Sandbox):
         qml = (Path(__file__).parents[1] / "assets/qml/Panel.qml.in").read_text()
         self.assertIn('["thpm", "--json", "update", "status"]', qml)
         self.assertIn('id: updateConfirm', qml)
-        self.assertIn('command: ["thpm", "--json", "update", "apply"]', qml)
+        self.assertIn(
+            'command: ["thpm", "--json", "update", "apply", "--terminal"]',
+            qml,
+        )
         self.assertIn("updateInfo.refreshRequired", qml)
+        self.assertIn("updateInfo.uiRefreshRequired", qml)
+        self.assertIn("updateError = payload.ok === false", qml)
+        self.assertIn('updateInfo.status === "updated" && updateError', qml)
+        self.assertIn("color: root.updateError ? Color.urgent", qml)
         self.assertIn("thpm reconcile --refresh", qml)
+        self.assertIn("thpm ui install", qml)
         self.assertIn('text: "Restart shell"', qml)
 
     def test_qml_is_a_multi_section_control_panel(self):
@@ -2334,9 +2342,68 @@ class CliTests(unittest.TestCase):
             service_type.return_value.update_apply.return_value = response
             exit_code = main(["update", "--json"])
         self.assertEqual(exit_code, 0)
-        service_type.return_value.update_apply.assert_called_once_with(interactive=False)
+        service_type.return_value.update_apply.assert_called_once_with(
+            update_mode="deny"
+        )
         service_type.return_value.update_check.assert_not_called()
         self.assertEqual(json.loads(stdout.getvalue()), response)
+
+    def test_json_gui_update_can_request_terminal_handoff(self):
+        response = {"ok": True, "summary": "package update terminal opened"}
+        with patch("thpm.cli.Service") as service_type, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            service_type.return_value.update_apply.return_value = response
+            exit_code = main(["update", "apply", "--terminal", "--json"])
+        self.assertEqual(exit_code, 0)
+        service_type.return_value.update_apply.assert_called_once_with(
+            update_mode="handoff"
+        )
+        self.assertEqual(json.loads(stdout.getvalue()), response)
+
+    def test_json_inline_flag_cannot_bypass_noninteractive_update_policy(self):
+        response = {"ok": False, "summary": "terminal required"}
+        with patch("thpm.cli.Service") as service_type, patch(
+            "sys.stdout", new_callable=io.StringIO
+        ):
+            service_type.return_value.update_apply.return_value = response
+            exit_code = main(["update", "apply", "--inline", "--json"])
+        self.assertEqual(exit_code, 1)
+        service_type.return_value.update_apply.assert_called_once_with(
+            update_mode="deny"
+        )
+
+    def test_human_cli_without_tty_uses_terminal_handoff(self):
+        response = {"ok": True, "summary": "THPM updated", "errors": []}
+        with patch("thpm.cli.Service") as service_type, patch(
+            "thpm.cli.sys.stdin.isatty", return_value=False
+        ), patch("thpm.cli.render"):
+            service_type.return_value.update_apply.return_value = response
+            exit_code = main(["update"])
+        self.assertEqual(exit_code, 0)
+        service_type.return_value.update_apply.assert_called_once_with(
+            update_mode="handoff"
+        )
+
+    def test_terminal_worker_writes_private_machine_readable_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = Paths(
+                root,
+                root / "config",
+                root / "data",
+                root / "state",
+                root / "run",
+            )
+            paths.runtime_dir.mkdir(parents=True)
+            result_file = paths.runtime_dir / "thpm-update-result-test.json"
+            payload = {"ok": True, "result": {"status": "updated"}}
+            with patch.dict(
+                os.environ, {"THPM_UPDATE_RESULT_FILE": str(result_file)}
+            ):
+                _write_update_handoff_result(paths, payload)
+            self.assertEqual(json.loads(result_file.read_text()), payload)
+            self.assertEqual(result_file.stat().st_mode & 0o777, 0o600)
 
     def test_explicit_update_check_remains_available(self):
         response = {"ok": True, "summary": "THPM is current"}
@@ -2488,6 +2555,7 @@ class FakeTuiService:
         self.doctor_calls = 0
         self.update_available = False
         self.update_apply_calls = 0
+        self.update_apply_modes: list[str] = []
         self.menu_surface = "gui"
         self.surface_calls: list[str] = []
         self.restart_policy_value = "automatic"
@@ -2512,8 +2580,9 @@ class FakeTuiService:
     def update_check(self, force=False):
         return {"ok": True, "result": {"status": "available" if self.update_available else "current", "currentVersion": "1.0.0rc1", "availableVersion": "1.1.0" if self.update_available else None}}
 
-    def update_apply(self):
+    def update_apply(self, *, update_mode="inline"):
         self.update_apply_calls += 1
+        self.update_apply_modes.append(update_mode)
         return {"ok": True, "result": {"status": "updated", "currentVersion": "1.0.0rc1", "availableVersion": "1.1.0"}}
 
     def ui_surface(self, requested=None):
@@ -2613,6 +2682,7 @@ class TuiTests(Sandbox):
                 await pilot.click("#confirm-update")
                 await pilot.pause(0.2)
                 self.assertEqual(service.update_apply_calls, 1)
+                self.assertEqual(service.update_apply_modes, ["handoff"])
                 self.assertTrue(app.query_one("#restart-shell").display)
         asyncio.run(exercise())
 
@@ -6386,6 +6456,8 @@ class UpdateTests(Sandbox):
         self.assertEqual(result["status"], "updated")
         self.assertFalse(result["refreshRequired"])
         self.assertIsNone(result["refreshCommand"])
+        self.assertFalse(result["uiRefreshRequired"])
+        self.assertIsNone(result["uiRefreshCommand"])
         self.assertEqual(
             run.call_args_list[0].args[0],
             [str(runtime / "bin/thpm"), "reconcile", "--defer-upgrade-refresh"],
@@ -6436,8 +6508,25 @@ class UpdateTests(Sandbox):
             payload = Service(self.paths).update_apply()
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["committed"])
-        self.assertIn("package updated", payload["summary"])
+        self.assertIn("update committed", payload["summary"])
         self.assertIn("refresh failed", payload["errors"][0]["message"])
+
+    def test_update_control_panel_failure_is_reported_as_committed_partial_failure(self):
+        result = {
+            "status": "updated",
+            "origin": "thpm",
+            "refreshRequired": False,
+            "uiRefreshRequired": True,
+            "uiRefreshCommand": "thpm ui install",
+            "uiRefreshError": "control panel failed",
+        }
+        with patch("thpm.service.apply_update", return_value=result):
+            payload = Service(self.paths).update_apply()
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["committed"])
+        self.assertIn("control panel refresh failed", payload["summary"])
+        self.assertIn("run thpm ui install", payload["summary"])
+        self.assertEqual(payload["errors"], [{"message": "control panel failed"}])
 
     def test_json_style_aur_apply_requires_a_terminal_without_launching_processes(self):
         result = {
@@ -6448,12 +6537,11 @@ class UpdateTests(Sandbox):
         }
         with patch("thpm.update.check", return_value=result), patch(
             "thpm.update.subprocess.run"
-        ) as run, patch("thpm.update.subprocess.Popen") as launch:
-            applied = updater.apply(self.paths, interactive=False)
+        ) as run:
+            applied = updater.apply(self.paths, mode="deny")
         self.assertEqual(applied["status"], "requires-interactive")
         self.assertEqual(applied["command"], "thpm update")
         run.assert_not_called()
-        launch.assert_not_called()
 
     def test_aur_apply_runs_noninteractive_upgrade_in_current_terminal(self):
         result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
@@ -6488,7 +6576,7 @@ class UpdateTests(Sandbox):
             "thpm.update.shutil.which", side_effect=commands.get
         ), patch("thpm.update.sys.stdin.isatty", return_value=True), patch(
             "thpm.update.subprocess.run", side_effect=run_command
-        ) as run, patch("thpm.update.subprocess.Popen") as launch:
+        ) as run:
             applied = updater.apply(self.paths, progress=progress)
         self.assertEqual(applied["status"], "updated")
         self.assertEqual(
@@ -6504,12 +6592,25 @@ class UpdateTests(Sandbox):
                     check=True,
                     timeout=updater.RECONCILE_TIMEOUT_SECONDS,
                 ),
+                call(
+                    ["/usr/bin/thpm", "ui", "install"],
+                    check=True,
+                    timeout=updater.COMMAND_TIMEOUT_SECONDS,
+                ),
             ],
         )
-        launch.assert_not_called()
         self.assertFalse(applied["refreshRequired"])
-        self.assertEqual(progress.events, [("Upgrading AUR package", "thpm")])
-        self.assertEqual(progress.totals, [2])
+        self.assertFalse(applied["uiRefreshRequired"])
+        self.assertTrue(applied["restartShell"])
+        self.assertEqual(
+            progress.events,
+            [
+                ("Upgrading AUR package", "thpm"),
+                ("Synchronizing integrations", None),
+                ("Refreshing control panel", None),
+            ],
+        )
+        self.assertEqual(progress.totals, [3])
 
     def test_aur_reconcile_failure_reports_committed_package_and_handoff(self):
         result = {
@@ -6523,35 +6624,96 @@ class UpdateTests(Sandbox):
             "thpm.update.shutil.which", side_effect=commands.get
         ), patch("thpm.update.sys.stdin.isatty", return_value=True), patch(
             "thpm.update.subprocess.run",
-            side_effect=[None, subprocess.CalledProcessError(1, "reconcile")],
-        ):
+            side_effect=[
+                None,
+                subprocess.CalledProcessError(1, "reconcile"),
+                None,
+            ],
+        ) as run:
             applied = updater.apply(self.paths)
         self.assertEqual(applied["status"], "updated")
         self.assertTrue(applied["packageCommitted"])
         self.assertTrue(applied["refreshRequired"])
         self.assertEqual(applied["refreshCommand"], "thpm reconcile --refresh")
         self.assertIn("reconcile", applied["refreshError"])
+        self.assertFalse(applied["uiRefreshRequired"])
+        self.assertEqual(
+            run.call_args_list[-1].args[0], ["/usr/bin/thpm", "ui", "install"]
+        )
 
-    def test_aur_apply_uses_terminal_fallback_without_a_tty(self):
-        result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
-        commands = {
-            "yay": "/usr/bin/yay",
-            "omarchy-launch-floating-terminal-with-presentation": "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
+    def test_aur_control_panel_failure_reports_committed_package_and_handoff(self):
+        result = {
+            "status": "available",
+            "origin": "thpm",
+            "currentVersion": "1.0.0rc1",
+            "availableVersion": "1.0.1-1",
         }
+        commands = {"yay": "/usr/bin/yay", "thpm": "/usr/bin/thpm"}
         with patch("thpm.update.check", return_value=result), patch(
             "thpm.update.shutil.which", side_effect=commands.get
-        ), patch("thpm.update.sys.stdin.isatty", return_value=False), patch(
-            "thpm.update.subprocess.Popen"
-        ) as launch:
-            applied = updater.apply(self.paths)
-        self.assertEqual(applied["status"], "started")
-        launch.assert_called_once_with(
-            [
-                "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
-                "yay -S --noconfirm --needed thpm && thpm reconcile --refresh",
+        ), patch("thpm.update.sys.stdin.isatty", return_value=True), patch(
+            "thpm.update.subprocess.run",
+            side_effect=[
+                None,
+                None,
+                subprocess.CalledProcessError(1, "ui install"),
             ],
-            start_new_session=True,
+        ):
+            applied = updater.apply(self.paths)
+        self.assertEqual(applied["status"], "updated")
+        self.assertTrue(applied["packageCommitted"])
+        self.assertFalse(applied["refreshRequired"])
+        self.assertTrue(applied["uiRefreshRequired"])
+        self.assertEqual(applied["uiRefreshCommand"], "thpm ui install")
+        self.assertIn("ui install", applied["uiRefreshError"])
+
+    def test_aur_apply_hands_tui_and_gui_to_a_separate_terminal(self):
+        result = {"status": "available", "origin": "thpm", "currentVersion": "1.0.0rc1", "availableVersion": "1.0.1-1"}
+        commands = {
+            "thpm": "/usr/bin/thpm",
+            "omarchy-launch-floating-terminal-with-presentation": "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
+        }
+
+        def finish_handoff(command, **_kwargs):
+            shell_words = __import__("shlex").split(command[1])
+            assignment = next(
+                word for word in shell_words if word.startswith("THPM_UPDATE_RESULT_FILE=")
+            )
+            result_file = Path(assignment.split("=", 1)[1])
+            self.assertTrue(result_file.is_file())
+            self.assertEqual(result_file.stat().st_mode & 0o777, 0o600)
+            result_file.write_text(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "summary": "THPM updated",
+                        "result": {
+                            **result,
+                            "status": "updated",
+                            "uiRefreshRequired": False,
+                            "refreshRequired": False,
+                        },
+                    }
+                )
+            )
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch("thpm.update.check", return_value=result), patch(
+            "thpm.update.shutil.which", side_effect=commands.get
+        ), patch("thpm.update.sys.stdin.isatty", return_value=True), patch(
+            "thpm.update.subprocess.run", side_effect=finish_handoff
+        ) as launch:
+            applied = updater.apply(self.paths, mode="handoff")
+        self.assertEqual(applied["status"], "updated")
+        self.assertTrue(applied["terminalHandoff"])
+        self.assertFalse(applied["uiRefreshRequired"])
+        launched = launch.call_args.args[0]
+        self.assertEqual(
+            launched[0],
+            "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
         )
+        self.assertIn("THPM_UPDATE_RESULT_FILE=", launched[1])
+        self.assertIn("/usr/bin/thpm update apply --inline", launched[1])
 
 
 if __name__ == "__main__":

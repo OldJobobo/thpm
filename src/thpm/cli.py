@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__, ui
+from .files import atomic_text
 from .paths import Paths
 from .presentation import Activity, operation_name, render, reporter
 from .service import Service, envelope
@@ -161,8 +162,15 @@ def parser() -> argparse.ArgumentParser:
     check = update_sub.add_parser("check")
     check.add_argument("--force", action="store_true")
     _output_options(check, nested=True)
-    for name in ("status", "apply"):
-        _output_options(update_sub.add_parser(name), nested=True)
+    _output_options(update_sub.add_parser("status"), nested=True)
+    update_apply = update_sub.add_parser("apply")
+    update_apply.add_argument(
+        "--terminal",
+        action="store_true",
+        help="open a terminal when package-manager authorization is required",
+    )
+    update_apply.add_argument("--inline", action="store_true", help=argparse.SUPPRESS)
+    _output_options(update_apply, nested=True)
     return root
 
 
@@ -320,7 +328,16 @@ def _execute(
     if command == "zed":
         return service.zed_status() if args.zed_command == "status" else _zed_setup(service, args, json_mode, activity)
     if command == "update":
-        if args.update_command in {None, "apply"}: return service.update_apply(interactive=not json_mode)
+        if args.update_command in {None, "apply"}:
+            if bool(getattr(args, "terminal", False)):
+                update_mode = "handoff"
+            elif bool(getattr(args, "inline", False)) and not json_mode:
+                update_mode = "inline"
+            elif not json_mode:
+                update_mode = "inline" if sys.stdin.isatty() else "handoff"
+            else:
+                update_mode = "deny"
+            return service.update_apply(update_mode=update_mode)
         return service.update_check(args.update_command == "check" and args.force)
     if command == "ui":
         if args.ui_command == "state": return service.state()
@@ -344,6 +361,27 @@ def _execute(
             else [{"message": detail or "Omarchy Shell rejected the request"}],
         )
     raise ValueError(command)
+
+
+def _write_update_handoff_result(
+    paths: Paths, payload: dict[str, object]
+) -> None:
+    requested = os.environ.get("THPM_UPDATE_RESULT_FILE")
+    if not requested:
+        return
+    target = Path(requested)
+    try:
+        parent = target.parent.resolve()
+        runtime_dir = paths.runtime_dir.resolve()
+    except OSError:
+        return
+    if (
+        parent != runtime_dir
+        or not target.name.startswith("thpm-update-result-")
+        or target.suffix != ".json"
+    ):
+        return
+    atomic_text(target, json.dumps(payload, separators=(",", ":")) + "\n", 0o600)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -386,6 +424,8 @@ def main(argv: list[str] | None = None) -> int:
     payload.setdefault(
         "durationMs", max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
     )
+    if command == "update":
+        _write_update_handoff_result(paths, payload)
     if json_mode:
         print(json.dumps(payload, separators=(",", ":")))
     else:

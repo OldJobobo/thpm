@@ -390,6 +390,11 @@ class Service:
         )
 
     def zed_setup(self, *, confirmed: bool = False) -> dict[str, object]:
+        return self._configure_zed(confirmed=confirmed, enable_sync=False)
+
+    def _configure_zed(
+        self, *, confirmed: bool, enable_sync: bool
+    ) -> dict[str, object]:
         view = next(item for item in self.views() if item["id"] == "zed-extra")
         if not view["available"] or not view["themeAssets"]:
             return envelope(
@@ -440,7 +445,7 @@ class Service:
                 settings_changed = configure_zed_settings(self.paths)
                 self._step("Installing and selecting Zed theme")
                 enabled = load(self.paths)
-                enabled["zed-extra"] = True
+                enabled["zed-extra"] = was_enabled or enable_sync
                 save(self.paths, enabled)
                 changed = reconcile_templates(self.paths, enabled)
                 result = apply_integration("zed-extra", self.paths)
@@ -720,7 +725,7 @@ class Service:
             )
             return result
         if value and plugin_id == "zed-extra":
-            result = self.zed_setup(confirmed=True)
+            result = self._configure_zed(confirmed=True, enable_sync=True)
             result.update(
                 operation=operation,
                 summary=(

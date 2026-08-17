@@ -6704,6 +6704,35 @@ class UpdateTests(Sandbox):
         self.assertFalse((self.paths.themed_dir / "thpm-added.tpl").exists())
         self.assertFalse(self.paths.post_update_hook_file.exists())
 
+    def test_update_rollback_restores_managed_directory_symlinks(self):
+        target = self.paths.themed_dir
+        target.parent.mkdir(parents=True)
+        external = self.paths.home / "managed-templates"
+        external.mkdir()
+        (external / "before.tpl").write_text("keep")
+        link_targets = {
+            "absolute": str(external),
+            "relative": os.path.relpath(external, target.parent),
+            "dangling": "missing-managed-templates",
+        }
+
+        for kind, link_target in link_targets.items():
+            with self.subTest(kind=kind):
+                target.unlink(missing_ok=True)
+                target.symlink_to(link_target)
+                backups = updater._backup_integrations(
+                    self.paths, self.paths.home / f"backup-{kind}"
+                )
+                target.unlink()
+                target.mkdir()
+                (target / "new.tpl").write_text("new runtime")
+
+                updater._restore_integrations(backups)
+
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(os.readlink(target), link_target)
+                self.assertEqual((external / "before.tpl").read_text(), "keep")
+
     def test_update_refresh_failure_is_reported_as_committed_partial_failure(self):
         result = {
             "status": "updated",

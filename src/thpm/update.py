@@ -297,25 +297,36 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
     ]
     backups: dict[Path, Path | None] = {}
     for index, target in enumerate(targets):
-        if not target.exists():
+        if not target.exists() and not target.is_symlink():
             backups[target] = None
             continue
         backup = destination / str(index)
         backup.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_dir(): shutil.copytree(target, backup)
-        else: shutil.copy2(target, backup)
+        if target.is_symlink():
+            backup.symlink_to(os.readlink(target))
+        elif target.is_dir():
+            shutil.copytree(target, backup)
+        else:
+            shutil.copy2(target, backup)
         backups[target] = backup
     return backups
 
 
 def _restore_integrations(backups: dict[Path, Path | None]) -> None:
     for target, backup in backups.items():
-        if target.is_dir(): shutil.rmtree(target, ignore_errors=True)
-        else: target.unlink(missing_ok=True)
-        if backup is None: continue
+        if target.is_symlink() or not target.is_dir():
+            target.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(target)
+        if backup is None:
+            continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        if backup.is_dir(): shutil.copytree(backup, target)
-        else: shutil.copy2(backup, target)
+        if backup.is_symlink():
+            target.symlink_to(os.readlink(backup))
+        elif backup.is_dir():
+            shutil.copytree(backup, target)
+        else:
+            shutil.copy2(backup, target)
 
 
 def _source_runtime() -> Path:

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import contextmanager
@@ -2684,6 +2685,46 @@ class TuiTests(Sandbox):
                 self.assertEqual(service.update_apply_calls, 1)
                 self.assertEqual(service.update_apply_modes, ["handoff"])
                 self.assertTrue(app.query_one("#restart-shell").display)
+        asyncio.run(exercise())
+
+    def test_committed_partial_update_shows_tui_recovery_actions(self):
+        async def exercise():
+            service = FakeTuiService()
+            service.update_available = True
+
+            def partial_update(*, update_mode="inline"):
+                service.update_apply_calls += 1
+                service.update_apply_modes.append(update_mode)
+                return {
+                    "ok": False,
+                    "summary": "THPM update committed; run thpm ui install",
+                    "result": {
+                        "status": "updated",
+                        "currentVersion": "1.0.0rc1",
+                        "availableVersion": "1.1.0",
+                        "refreshRequired": False,
+                        "uiRefreshRequired": True,
+                    },
+                }
+
+            service.update_apply = partial_update
+            app = ThpmTui(service, self.paths)
+            async with app.run_test(size=(120, 52)) as pilot:
+                for _attempt in range(20):
+                    await pilot.pause(0.05)
+                    if app.update_info.get("status") == "available":
+                        break
+                await pilot.press("4")
+                await pilot.click("#update-action")
+                await pilot.click("#confirm-update")
+                await pilot.pause(0.2)
+                self.assertEqual(service.update_apply_modes, ["handoff"])
+                self.assertTrue(app.query_one("#restart-shell").display)
+                self.assertIn(
+                    "thpm ui install",
+                    str(app.query_one("#update-message").render()),
+                )
+
         asyncio.run(exercise())
 
     def test_system_menu_launcher_toggles_gui_and_tui(self):
@@ -6674,6 +6715,8 @@ class UpdateTests(Sandbox):
             "omarchy-launch-floating-terminal-with-presentation": "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
         }
 
+        writers = []
+
         def finish_handoff(command, **_kwargs):
             shell_words = __import__("shlex").split(command[1])
             assignment = next(
@@ -6682,20 +6725,27 @@ class UpdateTests(Sandbox):
             result_file = Path(assignment.split("=", 1)[1])
             self.assertTrue(result_file.is_file())
             self.assertEqual(result_file.stat().st_mode & 0o777, 0o600)
-            result_file.write_text(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "summary": "THPM updated",
-                        "result": {
-                            **result,
-                            "status": "updated",
-                            "uiRefreshRequired": False,
-                            "refreshRequired": False,
-                        },
-                    }
+
+            def write_result():
+                time.sleep(0.05)
+                result_file.write_text(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "summary": "THPM updated",
+                            "result": {
+                                **result,
+                                "status": "updated",
+                                "uiRefreshRequired": False,
+                                "refreshRequired": False,
+                            },
+                        }
+                    )
                 )
-            )
+
+            writer = threading.Thread(target=write_result)
+            writer.start()
+            writers.append(writer)
             return subprocess.CompletedProcess(command, 0)
 
         with patch("thpm.update.check", return_value=result), patch(
@@ -6714,6 +6764,34 @@ class UpdateTests(Sandbox):
         )
         self.assertIn("THPM_UPDATE_RESULT_FILE=", launched[1])
         self.assertIn("/usr/bin/thpm update apply --inline", launched[1])
+        for writer in writers:
+            writer.join()
+
+    def test_terminal_handoff_times_out_when_worker_never_returns_result(self):
+        result = {
+            "status": "available",
+            "origin": "thpm",
+            "currentVersion": "1.0.0rc1",
+            "availableVersion": "1.0.1-1",
+        }
+        commands = {
+            "thpm": "/usr/bin/thpm",
+            "omarchy-launch-floating-terminal-with-presentation": "/usr/bin/terminal",
+        }
+        with patch("thpm.update.check", return_value=result), patch(
+            "thpm.update.shutil.which", side_effect=commands.get
+        ), patch(
+            "thpm.update.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0),
+        ), patch(
+            "thpm.update.time.monotonic", side_effect=[0, 10_000]
+        ):
+            applied = updater.apply(self.paths, mode="handoff")
+        self.assertEqual(applied["status"], "error")
+        self.assertIn("timed out", applied["error"])
+        reserved = list(self.paths.runtime_dir.glob("thpm-update-result-*"))
+        self.assertEqual(len(reserved), 1)
+        self.assertEqual(reserved[0].stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

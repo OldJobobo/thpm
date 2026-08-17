@@ -717,16 +717,19 @@ class ThpmTui(App[None]):
             )
             result = dict(payload.get("result", {}))
             self.update_info = result
-            if not payload.get("ok"):
-                raise RuntimeError(str(payload.get("summary", "Update not applied")))
             status = str(result.get("status", ""))
             if status == "updated":
-                message = f"Updated to {result.get('availableVersion')}. Restart the shell and relaunch this TUI."
-                if result.get("refreshRequired"):
+                if payload.get("ok"):
+                    message = f"Updated to {result.get('availableVersion')}. Restart the shell and relaunch this TUI."
+                else:
+                    message = str(payload.get("summary", "Update committed with errors"))
+                if result.get("refreshRequired") and "thpm reconcile --refresh" not in message:
                     message += " Then run thpm reconcile --refresh to regenerate active theme outputs."
-                if result.get("uiRefreshRequired"):
+                if result.get("uiRefreshRequired") and "thpm ui install" not in message:
                     message += " Run thpm ui install to synchronize the control panel."
                 self.query_one("#restart-shell", Button).display = True
+            elif not payload.get("ok"):
+                raise RuntimeError(str(payload.get("summary", "Update not applied")))
             elif status == "started":
                 message = (
                     "Package update opened in a terminal. It will synchronize "
@@ -736,7 +739,7 @@ class ThpmTui(App[None]):
             else:
                 message = "THPM is current."
             self.query_one("#update-message", Static).update(message)
-            self.notify(message)
+            self.notify(message, severity="information" if payload.get("ok") else "error")
             self.render_update()
         except Exception as exc:
             self.query_one("#update-message", Static).update(str(exc))

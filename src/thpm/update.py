@@ -36,6 +36,14 @@ DOWNLOAD_DEADLINE_SECONDS = 300
 COMMAND_TIMEOUT_SECONDS = 30
 RECONCILE_TIMEOUT_SECONDS = 240
 PACKAGE_UPDATE_TIMEOUT_SECONDS = 3_600
+UPDATE_CHECK_TIMEOUT_SECONDS = 15 + (3 * COMMAND_TIMEOUT_SECONDS)
+HANDOFF_UPDATE_TIMEOUT_SECONDS = (
+    UPDATE_CHECK_TIMEOUT_SECONDS
+    + PACKAGE_UPDATE_TIMEOUT_SECONDS
+    + RECONCILE_TIMEOUT_SECONDS
+    + COMMAND_TIMEOUT_SECONDS
+    + COMMAND_TIMEOUT_SECONDS
+)
 RUNTIME_STAGE_TIMEOUT_SECONDS = 600
 
 
@@ -337,23 +345,49 @@ def _handoff_package_update(paths: Paths) -> dict[str, object]:
             "--inline",
         ]
     )
+    deadline = time.monotonic() + HANDOFF_UPDATE_TIMEOUT_SECONDS
+    keep_result_file = False
     try:
-        subprocess.run(
-            [launcher, command],
-            check=False,
-            timeout=(
-                PACKAGE_UPDATE_TIMEOUT_SECONDS
-                + RECONCILE_TIMEOUT_SECONDS
-                + COMMAND_TIMEOUT_SECONDS
-            ),
-        )
         try:
-            payload = json.loads(result_file.read_text())
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            return {
-                "status": "error",
-                "error": f"terminal update did not return a valid result: {exc}",
-            }
+            launched = subprocess.run(
+                [launcher, command],
+                check=False,
+                timeout=HANDOFF_UPDATE_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            launched = None
+        while True:
+            try:
+                serialized = result_file.read_text()
+            except (OSError, UnicodeError) as exc:
+                return {
+                    "status": "error",
+                    "error": f"terminal update result could not be read: {exc}",
+                }
+            if serialized:
+                try:
+                    payload = json.loads(serialized)
+                except json.JSONDecodeError as exc:
+                    return {
+                        "status": "error",
+                        "error": f"terminal update did not return a valid result: {exc}",
+                    }
+                break
+            if launched is not None and launched.returncode != 0:
+                return {
+                    "status": "error",
+                    "error": "terminal update could not be launched",
+                }
+            if time.monotonic() >= deadline:
+                # The launcher does not expose the detached worker process, so
+                # keep its reserved inode: a late worker may still atomically
+                # replace it with the final result.
+                keep_result_file = True
+                return {
+                    "status": "error",
+                    "error": "terminal update timed out before returning a result",
+                }
+            time.sleep(0.1)
         if not isinstance(payload, dict):
             return {
                 "status": "error",
@@ -367,7 +401,8 @@ def _handoff_package_update(paths: Paths) -> dict[str, object]:
             "error": str(payload.get("summary") or "terminal update failed"),
         }
     finally:
-        result_file.unlink(missing_ok=True)
+        if not keep_result_file:
+            result_file.unlink(missing_ok=True)
 
 
 def apply(

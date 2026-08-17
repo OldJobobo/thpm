@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc21 - 2026-08-17
+
+- Synchronize package state, integrations, active-theme output, and the graphical control panel across CLI, TUI, and QML update flows. Package authorization remains visible in a separate terminal for callers without an attached TTY, while a private result channel returns the completed transaction and actionable partial-failure recovery.
+- Expand Doctor's read-only GTK diagnostics to detect unmanaged or stale Aether CSS, legacy GTK dark-theme overrides, GNOME appearance drift, desktop-portal color-scheme drift, and failed native probes while preserving `gtk-css-compat` and `native-gnome` ownership boundaries.
 - Let the verified release-source installer replace the archive's unavoidable pre-tag PKGBUILD checksum placeholder (including legacy `SKIP`) in its temporary build tree, while rejecting any non-placeholder checksum that disagrees with the verified release asset.
 
 ## 1.0.0rc20 - 2026-08-16

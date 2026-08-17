@@ -41,7 +41,12 @@ from .cava import (
 from .cava import (
     theme_source as cava_theme_source,
 )
-from .compat import cleanup_gtk, vscode_doctor_warnings
+from .compat import (
+    cleanup_gtk,
+    gtk_file_doctor_warnings,
+    gtk_session_doctor_warnings,
+    vscode_doctor_warnings,
+)
 from .config import ConfigError, Preferences
 from .config import load as load_config
 from .config import save as save_config
@@ -906,7 +911,8 @@ class Service:
         warnings: list[dict[str, str]] = []
         caps = capabilities()
         if not caps.available: errors.append({"message": "Omarchy 4 capabilities missing: " + ", ".join(caps.missing)})
-        try: load_palette(self.paths.current_theme / "colors.toml")
+        active_palette: dict[str, str] = {}
+        try: active_palette = load_palette(self.paths.current_theme / "colors.toml")
         except (OSError, ValueError) as exc: errors.append({"message": str(exc)})
         try:
             plugins = self.views()
@@ -917,6 +923,25 @@ class Service:
         if plugin_id and not plugins: errors.append({"message": f"unknown plugin: {plugin_id}"})
         for plugin in plugins:
             for warning in plugin["warnings"]: warnings.append({"plugin": str(plugin["id"]), "message": str(warning)})
+        known = {(item.get("plugin"), item["message"]) for item in warnings}
+        if any(plugin["id"] == "gtk-css-compat" for plugin in plugins):
+            for message in gtk_file_doctor_warnings(self.paths):
+                entry = ("gtk-css-compat", message)
+                if entry not in known:
+                    warnings.append({"plugin": entry[0], "message": entry[1]})
+                    known.add(entry)
+        if (
+            active_palette
+            and self.paths == Paths.discover()
+            and any(plugin["id"] == "native-gnome" for plugin in plugins)
+        ):
+            for message in gtk_session_doctor_warnings(
+                self.paths, str(active_palette.get("mode", "dark"))
+            ):
+                entry = ("native-gnome", message)
+                if entry not in known:
+                    warnings.append({"plugin": entry[0], "message": entry[1]})
+                    known.add(entry)
         local_compat = next((plugin for plugin in plugins if plugin["id"] == "vscode-local-compat"), None)
         if local_compat and local_compat["enabled"] and local_compat.get("applicable", True):
             known = {(item.get("plugin"), item["message"]) for item in warnings}

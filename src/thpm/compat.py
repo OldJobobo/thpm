@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import configparser
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -164,6 +166,168 @@ def apply_gtk_without_source(paths: Paths) -> ApplyResult:
         changed=changed,
         message="THPM-managed GTK CSS removed",
     )
+
+
+def _setting_value(value: str) -> str:
+    return value.strip().strip("'\"")
+
+
+def _command_value(
+    command: list[str], *, timeout: int = 2
+) -> tuple[str | None, str | None]:
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {timeout} seconds"
+    except OSError as exc:
+        return None, str(exc)
+    if completed.returncode != 0:
+        detail = (completed.stderr.strip() or completed.stdout.strip())[:200]
+        return None, detail or f"exited {completed.returncode}"
+    return completed.stdout.strip(), None
+
+
+def _aether_stylesheet(content: str) -> bool:
+    lowered = content.lower()
+    return "aether theme" in lowered or "palette from aether" in lowered
+
+
+def _substantive_css(content: str) -> bool:
+    position = 0
+    while position < len(content):
+        if position == 0 and content[position] == "\ufeff":
+            position += 1
+            continue
+        if content[position].isspace():
+            position += 1
+            continue
+        if content.startswith("/*", position):
+            end = content.find("*/", position + 2)
+            if end == -1:
+                return True
+            position = end + 2
+            continue
+        return True
+    return False
+
+
+def gtk_file_doctor_warnings(paths: Paths) -> list[str]:
+    warnings: list[str] = []
+    for main, _owned in _gtk_targets(paths):
+        try:
+            user_file = _gtk_user_file(main)
+        except ValueError as exc:
+            warnings.append(str(exc))
+            continue
+        if user_file.is_file():
+            try:
+                content = user_file.read_text()
+            except (OSError, UnicodeError) as exc:
+                warnings.append(f"cannot inspect GTK stylesheet {user_file}: {exc}")
+            else:
+                try:
+                    unmanaged = _remove_gtk_import(content)
+                except ValueError:
+                    unmanaged = content
+                if _substantive_css(unmanaged):
+                    owner = "Aether-generated " if _aether_stylesheet(unmanaged) else "unmanaged "
+                    warnings.append(
+                        f"{owner}GTK stylesheet can override Omarchy: {user_file}; "
+                        "move or remove it, then reapply the active theme"
+                    )
+
+        settings = main.with_name("settings.ini")
+        if not settings.is_file():
+            continue
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            parser.read_string(settings.read_text())
+        except (OSError, UnicodeError, configparser.Error) as exc:
+            warnings.append(f"cannot inspect GTK settings {settings}: {exc}")
+            continue
+        parser.defaults().clear()
+        value = parser.get(
+            "Settings", "gtk-application-prefer-dark-theme", fallback=""
+        )
+        if value.strip().lower() in {"1", "true", "yes", "on"}:
+            warnings.append(
+                "legacy gtk-application-prefer-dark-theme override is unsupported "
+                f"by libadwaita: {settings}; remove that setting and reapply the theme"
+            )
+    return warnings
+
+
+def gtk_session_doctor_warnings(paths: Paths, mode: str) -> list[str]:
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return []
+    warnings: list[str] = []
+    expected_dark = mode != "light"
+    expected = {
+        "color-scheme": "prefer-dark" if expected_dark else "prefer-light",
+        "gtk-theme": "Adwaita-dark" if expected_dark else "Adwaita",
+    }
+    icons_file = paths.current_theme / "icons.theme"
+    try:
+        expected["icon-theme"] = (
+            icons_file.read_text().strip() if icons_file.is_file() else "Yaru-blue"
+        )
+    except (OSError, UnicodeError):
+        expected["icon-theme"] = "Yaru-blue"
+
+    gsettings = shutil.which("gsettings")
+    if gsettings is None:
+        warnings.append("cannot inspect native GNOME appearance: gsettings is missing")
+    else:
+        for key, wanted in expected.items():
+            actual, failure = _command_value(
+                [gsettings, "get", "org.gnome.desktop.interface", key]
+            )
+            if failure is not None:
+                warnings.append(f"cannot inspect GNOME {key}: {failure}")
+            elif actual is not None and _setting_value(actual) != wanted:
+                warnings.append(
+                    f"GNOME {key} is {_setting_value(actual)!r}, expected {wanted!r} "
+                    "for the active Omarchy theme; run omarchy-theme-set-gnome"
+                )
+
+    gdbus = shutil.which("gdbus")
+    if gdbus is None:
+        warnings.append("cannot inspect desktop portal color scheme: gdbus is missing")
+    else:
+        actual, failure = _command_value(
+            [
+                gdbus,
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.portal.Desktop",
+                "--object-path",
+                "/org/freedesktop/portal/desktop",
+                "--method",
+                "org.freedesktop.portal.Settings.Read",
+                "org.freedesktop.appearance",
+                "color-scheme",
+            ]
+        )
+        if failure is not None:
+            warnings.append(f"cannot inspect desktop portal color scheme: {failure}")
+        else:
+            match = re.search(r"uint32\s+(\d+)", actual or "")
+            wanted = 1 if expected_dark else 2
+            if match is None:
+                warnings.append("cannot inspect desktop portal color scheme: unexpected response")
+            elif int(match.group(1)) != wanted:
+                warnings.append(
+                    f"desktop portal color scheme is {match.group(1)}, expected {wanted} "
+                    "for the active Omarchy theme; restart the GTK and desktop portals"
+                )
+    return warnings
 
 
 def _descriptor(paths: Paths) -> dict[str, object]:

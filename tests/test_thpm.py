@@ -64,6 +64,7 @@ from thpm.cava import (
     set_selector as set_cava_selector,
 )
 from thpm.cli import _confirm, main
+from thpm.compat import gtk_file_doctor_warnings, gtk_session_doctor_warnings
 from thpm.config import ConfigError, Preferences
 from thpm.config import load as load_config
 from thpm.config import save as save_config
@@ -1365,6 +1366,155 @@ class ServiceTests(Sandbox):
         warnings = [item for item in payload["warnings"] if item.get("plugin") == "fish"]
         self.assertTrue(warnings)
         self.assertIn("unresolved placeholder", warnings[0]["message"])
+
+    def test_doctor_warns_about_aether_gtk_override_without_theme_css(self):
+        gtk = self.paths.config_home / "gtk-4.0/gtk.css"
+        gtk.parent.mkdir(parents=True)
+        gtk.write_text("/** Aether Theme with Sharp Corners */\nwindow { color: red; }\n")
+        with patch("thpm.service.capabilities") as caps, patch(
+            "thpm.service.load_palette", return_value=COLORS
+        ):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            payload = Service(self.paths).doctor("gtk-css-compat")
+        warnings = [
+            item
+            for item in payload["warnings"]
+            if item.get("plugin") == "gtk-css-compat"
+        ]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Aether-generated", warnings[0]["message"])
+        self.assertIn(str(gtk), warnings[0]["message"])
+
+    def test_gtk_doctor_warns_about_legacy_libadwaita_setting(self):
+        settings = self.paths.config_home / "gtk-4.0/settings.ini"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            "[Settings]\ngtk-application-prefer-dark-theme=true\n"
+        )
+
+        warnings = gtk_file_doctor_warnings(self.paths)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("unsupported by libadwaita", warnings[0])
+        self.assertIn(str(settings), warnings[0])
+
+    def test_gtk_doctor_reports_native_and_portal_drift(self):
+        self.paths.current_theme.mkdir(parents=True)
+        (self.paths.current_theme / "icons.theme").write_text("Yaru-olive\n")
+
+        def command_value(command, **_kwargs):
+            if "org.freedesktop.portal.Settings.Read" in command:
+                return "(<<uint32 0>>,)", None
+            return {
+                "color-scheme": "'default'",
+                "gtk-theme": "'Adwaita'",
+                "icon-theme": "'Yaru-blue'",
+            }[command[-1]], None
+
+        with patch.dict(
+            os.environ, {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/test-bus"}
+        ), patch("thpm.compat.shutil.which", return_value="/usr/bin/tool"), patch(
+            "thpm.compat._command_value", side_effect=command_value
+        ):
+            warnings = gtk_session_doctor_warnings(self.paths, "dark")
+
+        self.assertEqual(len(warnings), 4)
+        self.assertIn("GNOME color-scheme", warnings[0])
+        self.assertIn("GNOME gtk-theme", warnings[1])
+        self.assertIn("GNOME icon-theme", warnings[2])
+        self.assertIn("portal color scheme is 0", warnings[3])
+
+    def test_gtk_doctor_accepts_matching_native_and_portal_state(self):
+        self.paths.current_theme.mkdir(parents=True)
+        (self.paths.current_theme / "icons.theme").write_text("Yaru-olive\n")
+
+        def command_value(command, **_kwargs):
+            if "org.freedesktop.portal.Settings.Read" in command:
+                return "(<<uint32 1>>,)", None
+            return {
+                "color-scheme": "'prefer-dark'",
+                "gtk-theme": "'Adwaita-dark'",
+                "icon-theme": "'Yaru-olive'",
+            }[command[-1]], None
+
+        with patch.dict(
+            os.environ, {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/test-bus"}
+        ), patch("thpm.compat.shutil.which", return_value="/usr/bin/tool"), patch(
+            "thpm.compat._command_value", side_effect=command_value
+        ):
+            warnings = gtk_session_doctor_warnings(self.paths, "dark")
+
+        self.assertEqual(warnings, [])
+
+    def test_gtk_doctor_ignores_comments_and_unrelated_ini_sections(self):
+        gtk = self.paths.config_home / "gtk-4.0/gtk.css"
+        settings = gtk.with_name("settings.ini")
+        gtk.parent.mkdir(parents=True)
+        gtk.write_text("\ufeff/* Personal GTK notes only. */\n")
+        settings.write_text(
+            "[DEFAULT]\ngtk-application-prefer-dark-theme=true\n"
+            "[Settings]\ngtk-font-name=Sans 10\n"
+            "[Unrelated]\ngtk-application-prefer-dark-theme=true\n"
+        )
+
+        self.assertEqual(gtk_file_doctor_warnings(self.paths), [])
+
+    def test_gtk_doctor_reports_probe_failures_and_malformed_portal_output(self):
+        self.paths.current_theme.mkdir(parents=True)
+
+        def command_value(command, **_kwargs):
+            if "org.freedesktop.portal.Settings.Read" in command:
+                return "unexpected", None
+            return None, "timed out after 2 seconds"
+
+        with patch.dict(
+            os.environ, {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/test-bus"}
+        ), patch("thpm.compat.shutil.which", return_value="/usr/bin/tool"), patch(
+            "thpm.compat._command_value", side_effect=command_value
+        ):
+            warnings = gtk_session_doctor_warnings(self.paths, "dark")
+
+        self.assertEqual(len(warnings), 4)
+        self.assertTrue(all("cannot inspect" in warning for warning in warnings))
+        self.assertIn("unexpected response", warnings[-1])
+
+    def test_doctor_attributes_and_filters_gtk_diagnostics_by_owner(self):
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text("complete\n")
+        with patch("thpm.service.capabilities") as caps, patch(
+            "thpm.service.load_palette", return_value=COLORS
+        ), patch(
+            "thpm.service.Paths.discover", return_value=self.paths
+        ), patch(
+            "thpm.service.gtk_file_doctor_warnings", return_value=["file drift"]
+        ), patch(
+            "thpm.service.gtk_session_doctor_warnings", return_value=["native drift"]
+        ):
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            full = Service(self.paths).doctor()
+            gtk_only = Service(self.paths).doctor("gtk-css-compat")
+            native_only = Service(self.paths).doctor("native-gnome")
+
+        self.assertIn(
+            {"plugin": "gtk-css-compat", "message": "file drift"},
+            full["warnings"],
+        )
+        self.assertIn(
+            {"plugin": "native-gnome", "message": "native drift"},
+            full["warnings"],
+        )
+        self.assertEqual(
+            gtk_only["warnings"],
+            [{"plugin": "gtk-css-compat", "message": "file drift"}],
+        )
+        self.assertEqual(
+            native_only["warnings"],
+            [{"plugin": "native-gnome", "message": "native drift"}],
+        )
 
     def test_disabling_inactive_discord_variant_keeps_active_shared_theme(self):
         source = self.paths.current_theme / "thpm-vencord.theme.css"

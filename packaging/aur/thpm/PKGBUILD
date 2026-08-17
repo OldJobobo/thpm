@@ -14,8 +14,7 @@ replaces=('theme-hook-plugin-manager')
 makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 install=thpm.install
 source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
-# Pre-tag placeholder; replace with the published rc21 archive digest.
-sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums=('782c50b925af8e49432b0bd412205099cd278e9f429c96948daf1ee234e4a3f1')
 
 build() {
     cd "$pkgname-$pkgver"

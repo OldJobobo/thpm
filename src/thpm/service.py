@@ -1514,25 +1514,42 @@ class Service:
         errors = [{"message": str(result["error"])}] if result.get("error") else []
         return envelope("update-check", ok, summary=summary, result=result, errors=errors)
 
-    def update_apply(self, *, interactive: bool = True) -> dict[str, object]:
+    def update_apply(self, *, update_mode: str = "inline") -> dict[str, object]:
         self._step("Checking for an available release")
         result = apply_update(
-            self.paths, progress=self.progress, interactive=interactive
+            self.paths, progress=self.progress, mode=update_mode
         )
         status = str(result.get("status"))
         refresh_error = str(result.get("refreshError") or "")
-        ok = status in {"updated", "started", "current"} and not refresh_error
+        ui_refresh_error = str(result.get("uiRefreshError") or "")
+        ok = (
+            status in {"updated", "started", "current"}
+            and not refresh_error
+            and not ui_refresh_error
+        )
         summary = {
             "updated": "THPM updated",
             "started": "package update terminal opened; completion is pending",
             "current": "THPM is current",
             "requires-interactive": "AUR updates require an interactive terminal",
         }.get(status, "THPM update not applied")
+        if status == "updated" and not refresh_error and not ui_refresh_error:
+            summary += "; integrations and control panel synchronized"
         if refresh_error:
-            summary += "; package updated, but active theme refresh failed"
-        if result.get("refreshRequired"):
+            summary += "; update committed, but active theme refresh failed"
+        if ui_refresh_error:
+            summary += "; update committed, but control panel refresh failed"
+        if status != "started" and result.get("refreshRequired"):
             summary += "; run thpm reconcile --refresh"
-        error = refresh_error or str(result.get("error", status))
+        if status != "started" and result.get("uiRefreshRequired"):
+            summary += "; run thpm ui install"
+        errors = []
+        if refresh_error:
+            errors.append({"message": refresh_error})
+        if ui_refresh_error:
+            errors.append({"message": ui_refresh_error})
+        if not ok and not errors:
+            errors.append({"message": str(result.get("error", status))})
         return envelope(
             "update-apply",
             ok,
@@ -1540,5 +1557,5 @@ class Service:
             committed=status == "updated",
             pending=status == "started",
             result=result,
-            errors=[] if ok else [{"message": error}],
+            errors=errors,
         )

@@ -6,6 +6,7 @@ import json
 import os
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from typing import Literal
 
 from . import __version__
 from .files import atomic_text
@@ -34,6 +36,14 @@ DOWNLOAD_DEADLINE_SECONDS = 300
 COMMAND_TIMEOUT_SECONDS = 30
 RECONCILE_TIMEOUT_SECONDS = 240
 PACKAGE_UPDATE_TIMEOUT_SECONDS = 3_600
+UPDATE_CHECK_TIMEOUT_SECONDS = 15 + (3 * COMMAND_TIMEOUT_SECONDS)
+HANDOFF_UPDATE_TIMEOUT_SECONDS = (
+    UPDATE_CHECK_TIMEOUT_SECONDS
+    + PACKAGE_UPDATE_TIMEOUT_SECONDS
+    + RECONCILE_TIMEOUT_SECONDS
+    + COMMAND_TIMEOUT_SECONDS
+    + COMMAND_TIMEOUT_SECONDS
+)
 RUNTIME_STAGE_TIMEOUT_SECONDS = 600
 
 
@@ -310,11 +320,96 @@ def _source_runtime() -> Path:
     return runtime
 
 
+def _handoff_package_update(paths: Paths) -> dict[str, object]:
+    launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
+    if launcher is None:
+        return {
+            "status": "requires-interactive",
+            "command": "thpm update",
+            "error": "a terminal is required to authorize the package update",
+        }
+    thpm = shutil.which("thpm") or "thpm"
+    paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+    fd, result_name = tempfile.mkstemp(
+        prefix="thpm-update-result-", suffix=".json", dir=paths.runtime_dir
+    )
+    os.close(fd)
+    result_file = Path(result_name)
+    command = " ".join(
+        [
+            "env",
+            f"THPM_UPDATE_RESULT_FILE={shlex.quote(str(result_file))}",
+            shlex.quote(thpm),
+            "update",
+            "apply",
+            "--inline",
+        ]
+    )
+    deadline = time.monotonic() + HANDOFF_UPDATE_TIMEOUT_SECONDS
+    keep_result_file = False
+    try:
+        try:
+            launched = subprocess.run(
+                [launcher, command],
+                check=False,
+                timeout=HANDOFF_UPDATE_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            launched = None
+        while True:
+            try:
+                serialized = result_file.read_text()
+            except (OSError, UnicodeError) as exc:
+                return {
+                    "status": "error",
+                    "error": f"terminal update result could not be read: {exc}",
+                }
+            if serialized:
+                try:
+                    payload = json.loads(serialized)
+                except json.JSONDecodeError as exc:
+                    return {
+                        "status": "error",
+                        "error": f"terminal update did not return a valid result: {exc}",
+                    }
+                break
+            if launched is not None and launched.returncode != 0:
+                return {
+                    "status": "error",
+                    "error": "terminal update could not be launched",
+                }
+            if time.monotonic() >= deadline:
+                # The launcher does not expose the detached worker process, so
+                # keep its reserved inode: a late worker may still atomically
+                # replace it with the final result.
+                keep_result_file = True
+                return {
+                    "status": "error",
+                    "error": "terminal update timed out before returning a result",
+                }
+            time.sleep(0.1)
+        if not isinstance(payload, dict):
+            return {
+                "status": "error",
+                "error": "terminal update returned an invalid result",
+            }
+        result = payload.get("result")
+        if isinstance(result, dict):
+            return {**result, "terminalHandoff": True}
+        return {
+            "status": "error",
+            "error": str(payload.get("summary") or "terminal update failed"),
+        }
+    finally:
+        if not keep_result_file:
+            result_file.unlink(missing_ok=True)
+
+
 def apply(
     paths: Paths,
     progress: Callable[[str, str | None], None] | None = None,
     *,
-    interactive: bool = True,
+    mode: Literal["deny", "inline", "handoff"] = "inline",
 ) -> dict[str, object]:
     def step(message: str, detail: str | None = None) -> None:
         if progress is not None:
@@ -325,59 +420,73 @@ def apply(
         return update
     set_total = getattr(progress, "set_total", None)
     if callable(set_total):
-        set_total(2 if update["origin"] in {"thpm", "thpm-git"} else 9)
+        set_total(3 if update["origin"] in {"thpm", "thpm-git"} else 9)
     if update["origin"] in {"thpm", "thpm-git"}:
         package = str(update["origin"])
-        if not interactive:
+        if mode == "deny":
             return {
                 **update,
                 "status": "requires-interactive",
                 "command": "thpm update",
                 "error": "rerun thpm update in a terminal",
             }
-        yay = shutil.which("yay")
-        if not yay: raise RuntimeError("yay is required to update an AUR installation")
-        command = f"yay -S --noconfirm --needed {package} && thpm reconcile --refresh"
-        if sys.stdin.isatty():
-            step("Upgrading AUR package", package)
-            suspend = getattr(progress, "suspend", None)
-            terminal = suspend() if callable(suspend) else nullcontext()
-            with _lock(paths), terminal:
-                subprocess.run(
-                    [yay, "-S", "--noconfirm", "--needed", package],
-                    check=True,
-                    timeout=PACKAGE_UPDATE_TIMEOUT_SECONDS,
-                )
-                refresh_error = ""
-                try:
-                    subprocess.run(
-                        [shutil.which("thpm") or "thpm", "reconcile", "--refresh"],
-                        check=True,
-                        timeout=RECONCILE_TIMEOUT_SECONDS,
-                    )
-                except (OSError, subprocess.SubprocessError) as exc:
-                    refresh_error = str(exc)
-            refresh_required = bool(refresh_error)
+        if mode == "handoff":
+            return {**update, **_handoff_package_update(paths)}
+        if mode != "inline":
+            raise ValueError(f"unsupported update mode: {mode}")
+        if not sys.stdin.isatty():
             return {
                 **update,
-                "status": "updated",
-                "command": None,
-                "packageCommitted": True,
-                "refreshRequired": refresh_required,
-                "refreshCommand": "thpm reconcile --refresh" if refresh_required else None,
-                "refreshError": refresh_error or None,
+                "status": "requires-interactive",
+                "command": "thpm update",
+                "error": "inline package updates require a terminal",
             }
-        step("Opening AUR package upgrade", package)
-        launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
-        if not launcher: raise RuntimeError("A terminal is required to authorize the AUR package update")
-        with _lock(paths):
-            subprocess.Popen([launcher, command], start_new_session=True)
+        yay = shutil.which("yay")
+        if not yay: raise RuntimeError("yay is required to update an AUR installation")
+        step("Upgrading AUR package", package)
+        suspend = getattr(progress, "suspend", None)
+        terminal = suspend() if callable(suspend) else nullcontext()
+        with _lock(paths), terminal:
+            subprocess.run(
+                [yay, "-S", "--noconfirm", "--needed", package],
+                check=True,
+                timeout=PACKAGE_UPDATE_TIMEOUT_SECONDS,
+            )
+            thpm = shutil.which("thpm") or "thpm"
+            refresh_error = ""
+            step("Synchronizing integrations")
+            try:
+                subprocess.run(
+                    [thpm, "reconcile", "--refresh"],
+                    check=True,
+                    timeout=RECONCILE_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                refresh_error = str(exc)
+            ui_refresh_error = ""
+            step("Refreshing control panel")
+            try:
+                subprocess.run(
+                    [thpm, "ui", "install"],
+                    check=True,
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                ui_refresh_error = str(exc)
+        refresh_required = bool(refresh_error)
+        ui_refresh_required = bool(ui_refresh_error)
         return {
             **update,
-            "status": "started",
-            "command": command,
-            "refreshRequired": True,
-            "refreshCommand": "thpm reconcile --refresh",
+            "status": "updated",
+            "command": None,
+            "packageCommitted": True,
+            "restartShell": True,
+            "refreshRequired": refresh_required,
+            "refreshCommand": "thpm reconcile --refresh" if refresh_required else None,
+            "refreshError": refresh_error or None,
+            "uiRefreshRequired": ui_refresh_required,
+            "uiRefreshCommand": "thpm ui install" if ui_refresh_required else None,
+            "uiRefreshError": ui_refresh_error or None,
         }
     with _lock(paths), tempfile.TemporaryDirectory(prefix="thpm-update-") as temporary:
         temp = Path(temporary); archive = temp / "release.tar.gz"; checksum = temp / "release.sha256"
@@ -446,4 +555,7 @@ def apply(
             "refreshRequired": refresh_required,
             "refreshCommand": "thpm reconcile --refresh" if refresh_required else None,
             "refreshError": refresh_error or None,
+            "uiRefreshRequired": False,
+            "uiRefreshCommand": None,
+            "uiRefreshError": None,
         }

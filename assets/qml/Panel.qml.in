@@ -44,6 +44,7 @@ Item {
         "availableVersion": null
     })
     property string updateMessage: ""
+    property bool updateError: false
     property bool manualUpdateCheck: false
     property bool updateActionActive: false
     property bool closingFromHost: false
@@ -248,18 +249,22 @@ Item {
             updateInfo = payload.result || ({
                 "status": "error"
             });
-            if (updateInfo.status === "updated")
-                updateMessage = "Updated to " + updateInfo.availableVersion + ". Restart the shell to load the new panel." + (updateInfo.refreshRequired ? " Then run thpm reconcile --refresh to regenerate active theme outputs." : "");
+            updateError = payload.ok === false;
+            if (updateInfo.status === "updated" && updateError)
+                updateMessage = payload.summary || "Package updated, but per-user synchronization is incomplete.";
+            else if (updateInfo.status === "updated")
+                updateMessage = "Updated to " + updateInfo.availableVersion + ". Restart the shell to load the new panel." + (updateInfo.refreshRequired ? " Then run thpm reconcile --refresh to regenerate active theme outputs." : "") + (updateInfo.uiRefreshRequired ? " Run thpm ui install to synchronize the control panel." : "");
             else if (updateInfo.status === "started")
-                updateMessage = "Package update opened in a terminal." + (updateInfo.refreshRequired ? " Per-user templates will reconcile after a successful upgrade." : "");
-            else if (updateInfo.status === "error" && reportErrors)
-                updateMessage = payload.errors && payload.errors.length ? payload.errors[0].message : "Update check failed";
+                updateMessage = "Package update opened in a terminal. It will synchronize integrations and the control panel after a successful upgrade; restart the shell when it finishes.";
+            else if (updateError && reportErrors)
+                updateMessage = payload.errors && payload.errors.length ? payload.errors[0].message : (payload.summary || "Update failed");
             else
                 updateMessage = "";
         } catch (error) {
             updateInfo = ({
                 "status": "error"
             });
+            updateError = true;
             updateMessage = "Unable to read update status";
         }
         manualUpdateCheck = false;
@@ -356,7 +361,7 @@ Item {
     Process {
         id: updateApply
 
-        command: ["thpm", "--json", "update", "apply"]
+        command: ["thpm", "--json", "update", "apply", "--terminal"]
 
         stdout: StdioCollector {
             id: updateApplyOutput
@@ -873,7 +878,7 @@ Item {
                             Layout.fillWidth: true
                             text: root.updateMessage
                             wrapMode: Text.WordWrap
-                            color: root.updateInfo.status === "error" ? Color.urgent : Color.foreground
+                            color: root.updateError ? Color.urgent : Color.foreground
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption
                         }

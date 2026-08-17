@@ -424,7 +424,9 @@ refactor unless a release-critical safety gap requires it sooner.
 ### FR-10: Confirmation and risk
 
 1. Confirmation shall be registry or operation metadata enforced by the service.
-2. JSON mode shall never prompt or launch an interactive terminal.
+2. JSON mode shall never prompt or launch an interactive terminal unless an
+   explicit terminal-handoff flag accompanies a user-confirmed package update;
+   ordinary JSON automation remains non-interactive.
 3. Human CLI may prompt only with interactive stdin and stdout.
 4. TUI and QML shall present the same risk description before resubmitting a
    confirmed operation.
@@ -832,8 +834,10 @@ or preserves its legacy target according to ownership evidence.
 
 ### AC-9: Package ownership
 
-Given `/usr/bin/thpm` is pacman-owned, when update is requested, then THPM uses the
-AUR update path and never activates a source runtime over package-owned files.
+Given `/usr/bin/thpm` is pacman-owned, when update is requested from the CLI, TUI,
+or GUI, then THPM uses the AUR update path, never activates a source runtime over
+package-owned files, and synchronizes both per-user integrations and the graphical
+control panel after the package transaction.
 
 ### AC-10: Source update rollback
 

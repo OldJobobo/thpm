@@ -24,6 +24,7 @@ from typing import Literal
 from . import __version__
 from .files import atomic_text
 from .paths import Paths
+from .templates import owned_names as owned_template_names
 
 REPOSITORY = "oldjobobo/thpm"
 API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
@@ -285,7 +286,45 @@ def _stage_runtime(source: Path, runtime: Path) -> None:
     )
 
 
-def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | None]:
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or not path.is_dir():
+        path.unlink(missing_ok=True)
+    else:
+        shutil.rmtree(path)
+
+
+def _copy_managed_templates(
+    source: Path, destination: Path, owned: set[str]
+) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        if item.name not in owned:
+            continue
+        target = destination / item.name
+        if item.is_symlink():
+            target.symlink_to(os.readlink(item))
+        elif item.is_dir():
+            shutil.copytree(item, target, symlinks=True)
+        else:
+            shutil.copy2(item, target)
+
+
+def _restore_managed_templates(
+    source: Path, destination: Path, owned: set[str]
+) -> None:
+    if destination.is_symlink() or not destination.is_dir():
+        _remove_path(destination)
+        destination.mkdir(parents=True)
+    for name in owned:
+        _remove_path(destination / name)
+    _copy_managed_templates(source, destination, owned)
+
+
+def _backup_integrations(
+    paths: Paths,
+    destination: Path,
+    additional_owned_templates: set[str] | None = None,
+) -> dict[Path, Path | None]:
     # Snapshot complete managed surfaces so rollback also removes files that did
     # not exist before the update (for example templates added by a new release).
     targets = [
@@ -296,26 +335,94 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
         paths.themed_dir,
     ]
     backups: dict[Path, Path | None] = {}
+    template_ownership = owned_template_names() | (additional_owned_templates or set())
     for index, target in enumerate(targets):
-        if not target.exists():
+        if not target.exists() and not target.is_symlink():
             backups[target] = None
             continue
         backup = destination / str(index)
         backup.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_dir(): shutil.copytree(target, backup)
-        else: shutil.copy2(target, backup)
+        if target.is_symlink():
+            link_target = os.readlink(target)
+            backup.symlink_to(link_target)
+            try:
+                referent = (
+                    target.resolve(strict=True)
+                    if target == paths.themed_dir
+                    else None
+                )
+            except (FileNotFoundError, RuntimeError):
+                referent = None
+            if referent is not None and referent.is_dir():
+                referent_backup = backup.with_name(f"{backup.name}.referent")
+                backup.with_name(f"{backup.name}.referent-path").write_text(
+                    str(referent)
+                )
+                backup.with_name(f"{backup.name}.templates-owned").write_text(
+                    json.dumps(sorted(template_ownership))
+                )
+                referent_backup.mkdir()
+                _copy_managed_templates(
+                    referent, referent_backup, template_ownership
+                )
+        elif target.is_dir():
+            if target == paths.themed_dir:
+                backup.mkdir()
+                backup.with_name(f"{backup.name}.templates-only").touch()
+                backup.with_name(f"{backup.name}.templates-owned").write_text(
+                    json.dumps(sorted(template_ownership))
+                )
+                _copy_managed_templates(target, backup, template_ownership)
+            else:
+                shutil.copytree(target, backup)
+        else:
+            shutil.copy2(target, backup)
         backups[target] = backup
     return backups
 
 
 def _restore_integrations(backups: dict[Path, Path | None]) -> None:
     for target, backup in backups.items():
-        if target.is_dir(): shutil.rmtree(target, ignore_errors=True)
-        else: target.unlink(missing_ok=True)
-        if backup is None: continue
+        if backup is not None and backup.with_name(
+            f"{backup.name}.templates-only"
+        ).exists():
+            owned = set(
+                json.loads(
+                    backup.with_name(f"{backup.name}.templates-owned").read_text()
+                )
+            )
+            _restore_managed_templates(backup, target, owned)
+            continue
+        _remove_path(target)
+        if backup is None:
+            continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        if backup.is_dir(): shutil.copytree(backup, target)
-        else: shutil.copy2(backup, target)
+        if backup.is_symlink():
+            link_target = os.readlink(backup)
+            referent_backup = backup.with_name(f"{backup.name}.referent")
+            referent_path_backup = backup.with_name(
+                f"{backup.name}.referent-path"
+            )
+            if referent_backup.exists() and referent_path_backup.exists():
+                referent = Path(referent_path_backup.read_text())
+                owned = set(
+                    json.loads(
+                        backup.with_name(
+                            f"{backup.name}.templates-owned"
+                        ).read_text()
+                    )
+                )
+                referent.parent.mkdir(parents=True, exist_ok=True)
+                _restore_managed_templates(referent_backup, referent, owned)
+            if not (
+                target.is_symlink() and os.readlink(target) == link_target
+            ):
+                _remove_path(target)
+                target.symlink_to(link_target)
+        elif backup.is_dir():
+            shutil.copytree(backup, target)
+        else:
+            shutil.copy2(backup, target)
 
 
 def _source_runtime() -> Path:
@@ -510,7 +617,17 @@ def apply(
         runtime = _source_runtime()
         staged = runtime.with_name(f"runtime.next-{os.getpid()}"); previous = runtime.with_name("runtime.previous")
         shutil.rmtree(staged, ignore_errors=True); _stage_runtime(source, staged); shutil.rmtree(previous, ignore_errors=True)
-        integration_backups = _backup_integrations(paths, temp / "integration-backup")
+        next_template_dir = source / "assets/templates"
+        next_templates = (
+            {item.name for item in next_template_dir.iterdir() if item.is_file()}
+            if next_template_dir.is_dir()
+            else set()
+        )
+        integration_backups = _backup_integrations(
+            paths,
+            temp / "integration-backup",
+            additional_owned_templates=next_templates,
+        )
         step("Activating new runtime")
         runtime.rename(previous)
         try:

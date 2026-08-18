@@ -290,7 +290,7 @@ def _repair_shell() -> dict[str, object]:
 
 @contextmanager
 def _ui_lock(paths: Paths) -> Iterator[None]:
-    lock_dir = paths.thpm_state_dir / "locks"
+    lock_dir = paths.ui_lock_dir
     lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     if (
         lock_dir.is_symlink()

@@ -881,10 +881,13 @@ class UiTests(Sandbox):
     def test_ui_lock_is_user_scoped_and_guards_all_menu_writers(self):
         with ui._ui_lock(self.paths):
             pass
-        lock_dir = self.paths.thpm_state_dir / "locks"
+        lock_dir = self.paths.ui_lock_dir
         self.assertTrue((lock_dir / "ui.lock").exists())
         self.assertEqual(lock_dir.stat().st_uid, os.getuid())
         self.assertEqual(lock_dir.stat().st_mode & 0o777, 0o700)
+        self.paths.thpm_state_dir.mkdir(parents=True)
+        shutil.rmtree(self.paths.thpm_state_dir)
+        self.assertTrue((lock_dir / "ui.lock").exists())
 
         with patch("thpm.ui._ui_lock", wraps=ui._ui_lock) as lock, patch(
             "thpm.ui._install_locked", return_value={"installed": True}
@@ -901,7 +904,7 @@ class UiTests(Sandbox):
     def test_ui_lock_rejects_a_symlinked_private_directory(self):
         external = self.paths.home / "attacker-locks"
         external.mkdir()
-        lock_dir = self.paths.thpm_state_dir / "locks"
+        lock_dir = self.paths.ui_lock_dir
         lock_dir.parent.mkdir(parents=True)
         lock_dir.symlink_to(external)
 

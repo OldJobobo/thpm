@@ -6715,12 +6715,16 @@ class UpdateTests(Sandbox):
 
     def test_update_rollback_removes_new_managed_templates(self):
         self.paths.themed_dir.mkdir(parents=True)
-        existing = self.paths.themed_dir / "thpm-existing.tpl"
+        existing = self.paths.themed_dir / "thpm-fish.fish.tpl"
         foreign = self.paths.themed_dir / "foreign.tpl"
         existing.write_text("old")
         foreign.write_text("keep")
         backup_root = self.paths.home / "backup"
-        backups = updater._backup_integrations(self.paths, backup_root)
+        backups = updater._backup_integrations(
+            self.paths,
+            backup_root,
+            additional_owned_templates={"thpm-added.tpl"},
+        )
         existing.write_text("new")
         (self.paths.themed_dir / "thpm-added.tpl").write_text("added")
         self.paths.post_update_hook_file.parent.mkdir(parents=True)
@@ -6736,7 +6740,7 @@ class UpdateTests(Sandbox):
         target.parent.mkdir(parents=True)
         external = self.paths.home / "managed-templates"
         external.mkdir()
-        (external / "thpm-before.tpl").write_text("keep")
+        (external / "thpm-fish.fish.tpl").write_text("keep")
         chained = target.parent / "current-templates"
         chained.symlink_to(external)
         link_targets = {
@@ -6751,14 +6755,16 @@ class UpdateTests(Sandbox):
                 target.unlink(missing_ok=True)
                 target.symlink_to(link_target)
                 backups = updater._backup_integrations(
-                    self.paths, self.paths.home / f"backup-{kind}"
+                    self.paths,
+                    self.paths.home / f"backup-{kind}",
+                    additional_owned_templates={"thpm-new.tpl"},
                 )
                 if kind == "dangling":
                     target.unlink()
                     target.mkdir()
                     (target / "thpm-new.tpl").write_text("new runtime")
                 else:
-                    (target / "thpm-before.tpl").unlink()
+                    (target / "thpm-fish.fish.tpl").unlink()
                     (target / "thpm-new.tpl").write_text("new runtime")
 
                 with patch(
@@ -6770,7 +6776,7 @@ class UpdateTests(Sandbox):
                 self.assertTrue(target.is_symlink())
                 self.assertEqual(os.readlink(target), link_target)
                 self.assertEqual(
-                    (external / "thpm-before.tpl").read_text(), "keep"
+                    (external / "thpm-fish.fish.tpl").read_text(), "keep"
                 )
                 self.assertFalse((external / "thpm-new.tpl").exists())
 
@@ -6779,11 +6785,15 @@ class UpdateTests(Sandbox):
         target.parent.mkdir(parents=True)
         target.symlink_to(".")
         backups = updater._backup_integrations(
-            self.paths, self.paths.home / "backup-parent-link"
+            self.paths,
+            self.paths.home / "backup-parent-link",
+            additional_owned_templates={"thpm-new.tpl"},
         )
         (target / "thpm-new.tpl").write_text("new runtime")
         unrelated = target / "concurrent-user-file"
         unrelated.write_text("preserve")
+        prefixed_but_unowned = target / "thpm-user-file.tpl"
+        prefixed_but_unowned.write_text("also preserve")
 
         updater._restore_integrations(backups)
 
@@ -6791,6 +6801,7 @@ class UpdateTests(Sandbox):
         self.assertEqual(os.readlink(target), ".")
         self.assertFalse((target.parent / "thpm-new.tpl").exists())
         self.assertEqual(unrelated.read_text(), "preserve")
+        self.assertEqual(prefixed_but_unowned.read_text(), "also preserve")
 
     def test_update_rollback_does_not_rewrite_file_template_referents(self):
         external = self.paths.home / "not-a-template-directory"

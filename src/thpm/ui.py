@@ -289,8 +289,8 @@ def _repair_shell() -> dict[str, object]:
 
 
 @contextmanager
-def _launch_lock(paths: Paths) -> Iterator[None]:
-    lock_path = paths.runtime_dir / "thpm-ui-open.lock"
+def _ui_lock(paths: Paths) -> Iterator[None]:
+    lock_path = paths.runtime_dir / f"thpm-ui-{os.getuid()}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -314,7 +314,7 @@ def _launch_fallback() -> bool:
 
 
 def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:
-    with _launch_lock(paths):
+    with _ui_lock(paths):
         return _surface_locked(paths, requested)
 
 
@@ -363,6 +363,11 @@ def _surface_locked(
 
 
 def install(paths: Paths) -> dict[str, object]:
+    with _ui_lock(paths):
+        return _install_locked(paths)
+
+
+def _install_locked(paths: Paths) -> dict[str, object]:
     deployed = _deploy(paths)
     selected = _surface(paths)
     menu_changed = not _menu_current(paths)
@@ -391,7 +396,7 @@ def install(paths: Paths) -> dict[str, object]:
 
 def open_manager(paths: Paths, *, fallback: bool = True) -> dict[str, object]:
     try:
-        with _launch_lock(paths):
+        with _ui_lock(paths):
             if not shell_running():
                 raise RuntimeError("Omarchy Shell is not running")
             menu_synchronized = not _menu_current(paths)
@@ -441,6 +446,11 @@ def sync(paths: Paths) -> dict[str, object]:
 
 
 def remove(paths: Paths) -> dict[str, object]:
+    with _ui_lock(paths):
+        return _remove_locked(paths)
+
+
+def _remove_locked(paths: Paths) -> dict[str, object]:
     if shell_running():
         run("plugin", "disable", PLUGIN_ID, check=False)
     shutil.rmtree(paths.shell_plugin_dir, ignore_errors=True)

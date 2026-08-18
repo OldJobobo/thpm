@@ -873,9 +873,29 @@ class UiTests(Sandbox):
         self.assertEqual(self.paths.menu_extension.stat().st_ino, previous_inode)
 
     def test_surface_serializes_the_complete_transaction(self):
-        with patch("thpm.ui._launch_lock", wraps=ui._launch_lock) as lock:
+        with patch("thpm.ui._ui_lock", wraps=ui._ui_lock) as lock:
             ui.surface(self.paths, "tui")
 
+        lock.assert_called_once_with(self.paths)
+
+    def test_ui_lock_is_user_scoped_and_guards_all_menu_writers(self):
+        with patch("thpm.ui.os.getuid", return_value=1234):
+            with ui._ui_lock(self.paths):
+                pass
+        self.assertTrue(
+            (self.paths.runtime_dir / "thpm-ui-1234.lock").exists()
+        )
+
+        with patch("thpm.ui._ui_lock", wraps=ui._ui_lock) as lock, patch(
+            "thpm.ui._install_locked", return_value={"installed": True}
+        ):
+            ui.install(self.paths)
+        lock.assert_called_once_with(self.paths)
+
+        with patch("thpm.ui._ui_lock", wraps=ui._ui_lock) as lock, patch(
+            "thpm.ui._remove_locked", return_value={"installed": False}
+        ):
+            ui.remove(self.paths)
         lock.assert_called_once_with(self.paths)
 
     def test_surface_restores_menu_symlink_when_state_write_fails(self):

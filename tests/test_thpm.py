@@ -828,6 +828,9 @@ class UiTests(Sandbox):
         previous_menu = '{\n  "foreign": {"label":"Mine"}\n}\n'
         self.paths.menu_extension.write_text(previous_menu)
         self.paths.menu_extension.chmod(0o600)
+        hard_link = self.paths.menu_extension.with_name("menu-hard-link.jsonc")
+        os.link(self.paths.menu_extension, hard_link)
+        previous_inode = self.paths.menu_extension.stat().st_ino
         atomic_text = ui.atomic_text
 
         def fail_state(path, text, mode=0o644):
@@ -842,6 +845,9 @@ class UiTests(Sandbox):
 
         self.assertEqual(self.paths.menu_extension.read_text(), previous_menu)
         self.assertEqual(self.paths.menu_extension.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.paths.menu_extension.stat().st_ino, previous_inode)
+        self.assertEqual(hard_link.stat().st_ino, previous_inode)
+        self.assertEqual(hard_link.read_text(), previous_menu)
         self.assertEqual(
             self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
         )

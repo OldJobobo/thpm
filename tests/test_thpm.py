@@ -6710,9 +6710,12 @@ class UpdateTests(Sandbox):
         external = self.paths.home / "managed-templates"
         external.mkdir()
         (external / "before.tpl").write_text("keep")
+        chained = target.parent / "current-templates"
+        chained.symlink_to(external)
         link_targets = {
             "absolute": str(external),
             "relative": os.path.relpath(external, target.parent),
+            "chain": chained.name,
             "dangling": "missing-managed-templates",
         }
 
@@ -6731,8 +6734,12 @@ class UpdateTests(Sandbox):
                     (target / "before.tpl").unlink()
                     (target / "new.tpl").write_text("new runtime")
 
-                updater._restore_integrations(backups)
+                with patch(
+                    "thpm.update.shutil.rmtree", wraps=shutil.rmtree
+                ) as remove_tree:
+                    updater._restore_integrations(backups)
 
+                self.assertNotIn(call(external), remove_tree.call_args_list)
                 self.assertTrue(target.is_symlink())
                 self.assertEqual(os.readlink(target), link_target)
                 self.assertEqual((external / "before.tpl").read_text(), "keep")

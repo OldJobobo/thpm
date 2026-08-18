@@ -285,6 +285,23 @@ def _stage_runtime(source: Path, runtime: Path) -> None:
     )
 
 
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or not path.is_dir():
+        path.unlink(missing_ok=True)
+    else:
+        shutil.rmtree(path)
+
+
+def _restore_directory_contents(source: Path, destination: Path) -> None:
+    if destination.is_symlink() or not destination.is_dir():
+        _remove_path(destination)
+        destination.mkdir(parents=True)
+    else:
+        for child in destination.iterdir():
+            _remove_path(child)
+    shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
+
+
 def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | None]:
     # Snapshot complete managed surfaces so rollback also removes files that did
     # not exist before the update (for example templates added by a new release).
@@ -305,11 +322,15 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
         if target.is_symlink():
             link_target = os.readlink(target)
             backup.symlink_to(link_target)
-            referent = Path(link_target)
-            if not referent.is_absolute():
-                referent = target.parent / referent
-            referent_backup = backup.with_name(f"{backup.name}.referent")
-            if referent.exists() and not referent.is_symlink():
+            try:
+                referent = target.resolve(strict=True)
+            except (FileNotFoundError, RuntimeError):
+                referent = None
+            if referent is not None:
+                referent_backup = backup.with_name(f"{backup.name}.referent")
+                backup.with_name(f"{backup.name}.referent-path").write_text(
+                    str(referent)
+                )
                 if referent.is_dir():
                     shutil.copytree(referent, referent_backup, symlinks=True)
                 else:
@@ -324,28 +345,23 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
 
 def _restore_integrations(backups: dict[Path, Path | None]) -> None:
     for target, backup in backups.items():
-        if target.is_symlink() or not target.is_dir():
-            target.unlink(missing_ok=True)
-        else:
-            shutil.rmtree(target)
+        _remove_path(target)
         if backup is None:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         if backup.is_symlink():
             link_target = os.readlink(backup)
-            referent = Path(link_target)
-            if not referent.is_absolute():
-                referent = target.parent / referent
             referent_backup = backup.with_name(f"{backup.name}.referent")
-            if referent_backup.exists():
-                if referent.is_symlink() or not referent.is_dir():
-                    referent.unlink(missing_ok=True)
-                else:
-                    shutil.rmtree(referent)
+            referent_path_backup = backup.with_name(
+                f"{backup.name}.referent-path"
+            )
+            if referent_backup.exists() and referent_path_backup.exists():
+                referent = Path(referent_path_backup.read_text())
                 referent.parent.mkdir(parents=True, exist_ok=True)
                 if referent_backup.is_dir():
-                    shutil.copytree(referent_backup, referent, symlinks=True)
+                    _restore_directory_contents(referent_backup, referent)
                 else:
+                    _remove_path(referent)
                     shutil.copy2(referent_backup, referent)
             target.symlink_to(link_target)
         elif backup.is_dir():

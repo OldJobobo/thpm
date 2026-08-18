@@ -332,7 +332,7 @@ def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:
         os.close(descriptor)
         rollback_file = Path(rollback_name)
         rollback_file.unlink()
-        os.link(menu, rollback_file, follow_symlinks=False)
+        os.replace(menu, rollback_file)
     try:
         atomic_text(menu, next_menu)
         atomic_text(paths.ui_state_file, f'menu_surface = "{selected}"\n')

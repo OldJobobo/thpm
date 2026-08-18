@@ -8,10 +8,14 @@ from .resources import asset
 OBSOLETE_TEMPLATES = {"thpm-vicinae.toml.tpl", "thpm-zellij.kdl.tpl"}
 
 
+def owned_names() -> set[str]:
+    return {name for plugin in PLUGINS for name in plugin.templates} | OBSOLETE_TEMPLATES
+
+
 def reconcile(paths: Paths, enabled: dict[str, bool]) -> list[str]:
     changed: list[str] = []
     paths.themed_dir.mkdir(parents=True, exist_ok=True)
-    owned = {name for plugin in PLUGINS for name in plugin.templates} | OBSOLETE_TEMPLATES
+    owned = owned_names()
     wanted = {name for plugin in PLUGINS if enabled.get(plugin.id) for name in plugin.templates}
     for name in sorted(owned):
         target = paths.themed_dir / name

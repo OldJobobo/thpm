@@ -6715,12 +6715,16 @@ class UpdateTests(Sandbox):
 
     def test_update_rollback_removes_new_managed_templates(self):
         self.paths.themed_dir.mkdir(parents=True)
-        existing = self.paths.themed_dir / "thpm-existing.tpl"
+        existing = self.paths.themed_dir / "thpm-fish.fish.tpl"
         foreign = self.paths.themed_dir / "foreign.tpl"
         existing.write_text("old")
         foreign.write_text("keep")
         backup_root = self.paths.home / "backup"
-        backups = updater._backup_integrations(self.paths, backup_root)
+        backups = updater._backup_integrations(
+            self.paths,
+            backup_root,
+            additional_owned_templates={"thpm-added.tpl"},
+        )
         existing.write_text("new")
         (self.paths.themed_dir / "thpm-added.tpl").write_text("added")
         self.paths.post_update_hook_file.parent.mkdir(parents=True)
@@ -6730,6 +6734,116 @@ class UpdateTests(Sandbox):
         self.assertEqual(foreign.read_text(), "keep")
         self.assertFalse((self.paths.themed_dir / "thpm-added.tpl").exists())
         self.assertFalse(self.paths.post_update_hook_file.exists())
+
+    def test_update_rollback_restores_managed_directory_symlinks(self):
+        target = self.paths.themed_dir
+        target.parent.mkdir(parents=True)
+        external = self.paths.home / "managed-templates"
+        external.mkdir()
+        (external / "thpm-fish.fish.tpl").write_text("keep")
+        chained = target.parent / "current-templates"
+        chained.symlink_to(external)
+        link_targets = {
+            "absolute": str(external),
+            "relative": os.path.relpath(external, target.parent),
+            "chain": chained.name,
+            "dangling": "missing-managed-templates",
+        }
+
+        for kind, link_target in link_targets.items():
+            with self.subTest(kind=kind):
+                target.unlink(missing_ok=True)
+                target.symlink_to(link_target)
+                backups = updater._backup_integrations(
+                    self.paths,
+                    self.paths.home / f"backup-{kind}",
+                    additional_owned_templates={"thpm-new.tpl"},
+                )
+                if kind == "dangling":
+                    target.unlink()
+                    target.mkdir()
+                    (target / "thpm-new.tpl").write_text("new runtime")
+                else:
+                    (target / "thpm-fish.fish.tpl").unlink()
+                    (target / "thpm-new.tpl").write_text("new runtime")
+
+                with patch(
+                    "thpm.update.shutil.rmtree", wraps=shutil.rmtree
+                ) as remove_tree:
+                    updater._restore_integrations(backups)
+
+                self.assertNotIn(call(external), remove_tree.call_args_list)
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(os.readlink(target), link_target)
+                self.assertEqual(
+                    (external / "thpm-fish.fish.tpl").read_text(), "keep"
+                )
+                self.assertFalse((external / "thpm-new.tpl").exists())
+
+    def test_update_rollback_accepts_symlink_to_its_own_parent(self):
+        target = self.paths.themed_dir
+        target.parent.mkdir(parents=True)
+        target.symlink_to(".")
+        backups = updater._backup_integrations(
+            self.paths,
+            self.paths.home / "backup-parent-link",
+            additional_owned_templates={"thpm-new.tpl"},
+        )
+        (target / "thpm-new.tpl").write_text("new runtime")
+        unrelated = target / "concurrent-user-file"
+        unrelated.write_text("preserve")
+        prefixed_but_unowned = target / "thpm-user-file.tpl"
+        prefixed_but_unowned.write_text("also preserve")
+
+        updater._restore_integrations(backups)
+
+        self.assertTrue(target.is_symlink())
+        self.assertEqual(os.readlink(target), ".")
+        self.assertFalse((target.parent / "thpm-new.tpl").exists())
+        self.assertEqual(unrelated.read_text(), "preserve")
+        self.assertEqual(prefixed_but_unowned.read_text(), "also preserve")
+
+    def test_update_rollback_does_not_rewrite_file_template_referents(self):
+        external = self.paths.home / "not-a-template-directory"
+        external.write_text("old content")
+        hard_link = self.paths.home / "hard-linked-template-file"
+        os.link(external, hard_link)
+        self.paths.themed_dir.parent.mkdir(parents=True)
+        link_target = os.path.relpath(external, self.paths.themed_dir.parent)
+        self.paths.themed_dir.symlink_to(link_target)
+        backups = updater._backup_integrations(
+            self.paths, self.paths.home / "backup-file-template"
+        )
+        external.write_text("concurrent user change")
+        inode = external.stat().st_ino
+
+        updater._restore_integrations(backups)
+
+        self.assertTrue(self.paths.themed_dir.is_symlink())
+        self.assertEqual(os.readlink(self.paths.themed_dir), link_target)
+        self.assertEqual(external.read_text(), "concurrent user change")
+        self.assertEqual(hard_link.read_text(), "concurrent user change")
+        self.assertEqual(external.stat().st_ino, inode)
+
+    def test_update_rollback_does_not_rewrite_untouched_symlink_referents(self):
+        external = self.paths.home / "dotfiles/90-thpm"
+        external.parent.mkdir(parents=True)
+        external.write_text("old hook")
+        self.paths.hook_file.parent.mkdir(parents=True)
+        link_target = os.path.relpath(external, self.paths.hook_file.parent)
+        self.paths.hook_file.symlink_to(link_target)
+        backups = updater._backup_integrations(
+            self.paths, self.paths.home / "backup-hook"
+        )
+        self.paths.hook_file.unlink()
+        self.paths.hook_file.write_text("new runtime hook")
+        external.write_text("concurrent user change")
+
+        updater._restore_integrations(backups)
+
+        self.assertTrue(self.paths.hook_file.is_symlink())
+        self.assertEqual(os.readlink(self.paths.hook_file), link_target)
+        self.assertEqual(external.read_text(), "concurrent user change")
 
     def test_update_refresh_failure_is_reported_as_committed_partial_failure(self):
         result = {

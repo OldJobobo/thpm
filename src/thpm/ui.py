@@ -67,6 +67,7 @@ def _parse_jsonc(text: str) -> object:
             end = text.find("*/", index + 2)
             if end < 0:
                 raise ValueError("unterminated comment in Omarchy menu extension")
+            uncommented.append(" ")
             index = end + 2
         else:
             uncommented.append(text[index])

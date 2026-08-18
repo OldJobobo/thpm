@@ -792,7 +792,12 @@ class UiTests(Sandbox):
         self.paths.ui_state_file.write_text('menu_surface = "gui"\n')
         self.paths.menu_extension.parent.mkdir(parents=True)
 
-        for invalid in ("[]\n", '{"broken"\n', '{"broken"}\n'):
+        for invalid in (
+            "[]\n",
+            '{"broken"\n',
+            '{"broken"}\n',
+            '{"foreign": t/*comment*/rue}\n',
+        ):
             with self.subTest(menu=invalid):
                 self.paths.menu_extension.write_text(invalid)
 

@@ -810,6 +810,17 @@ class UiTests(Sandbox):
                 )
                 self.assertEqual(self.paths.menu_extension.read_text(), invalid)
 
+    def test_surface_accepts_jsonc_with_cr_only_line_endings(self):
+        text = '{\r"foreign": true, // keep this entry\r}\r'
+        self.assertEqual(ui._parse_jsonc(text), {"foreign": True})
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        self.paths.menu_extension.write_bytes(text.encode())
+
+        result = ui.surface(self.paths, "tui")
+
+        self.assertEqual(result["surface"], "tui")
+        self.assertIn('"foreign": true', self.paths.menu_extension.read_text())
+
     def test_surface_restores_menu_when_state_write_fails(self):
         self.paths.ui_state_file.parent.mkdir(parents=True)
         self.paths.ui_state_file.write_text('menu_surface = "gui"\n')

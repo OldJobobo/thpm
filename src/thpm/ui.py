@@ -61,8 +61,12 @@ def _parse_jsonc(text: str) -> object:
             uncommented.append(text[index:end])
             index = end
         elif text.startswith("//", index):
-            newline = text.find("\n", index + 2)
-            index = len(text) if newline < 0 else newline
+            line_endings = (
+                position
+                for marker in ("\r", "\n")
+                if (position := text.find(marker, index + 2)) >= 0
+            )
+            index = min(line_endings, default=len(text))
         elif text.startswith("/*", index):
             end = text.find("*/", index + 2)
             if end < 0:

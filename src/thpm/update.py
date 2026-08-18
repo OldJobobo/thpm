@@ -360,7 +360,11 @@ def _restore_integrations(backups: dict[Path, Path | None]) -> None:
                 referent = Path(referent_path_backup.read_text())
                 referent.parent.mkdir(parents=True, exist_ok=True)
                 _restore_directory_contents(referent_backup, referent)
-            target.symlink_to(link_target)
+            if not (
+                target.is_symlink() and os.readlink(target) == link_target
+            ):
+                _remove_path(target)
+                target.symlink_to(link_target)
         elif backup.is_dir():
             shutil.copytree(backup, target)
         else:

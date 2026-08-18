@@ -6772,6 +6772,21 @@ class UpdateTests(Sandbox):
                 self.assertEqual((external / "before.tpl").read_text(), "keep")
                 self.assertFalse((external / "new.tpl").exists())
 
+    def test_update_rollback_accepts_symlink_to_its_own_parent(self):
+        target = self.paths.themed_dir
+        target.parent.mkdir(parents=True)
+        target.symlink_to(".")
+        backups = updater._backup_integrations(
+            self.paths, self.paths.home / "backup-parent-link"
+        )
+        (target / "new.tpl").write_text("new runtime")
+
+        updater._restore_integrations(backups)
+
+        self.assertTrue(target.is_symlink())
+        self.assertEqual(os.readlink(target), ".")
+        self.assertFalse((target.parent / "new.tpl").exists())
+
     def test_update_rollback_does_not_rewrite_file_template_referents(self):
         external = self.paths.home / "not-a-template-directory"
         external.write_text("old content")

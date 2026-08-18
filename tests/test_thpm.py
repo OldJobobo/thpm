@@ -3158,10 +3158,37 @@ class ZedTests(Sandbox):
         self.assertIn('"project_panel": {"dock": "left"}', settings.read_text())
         self.assertIn('"theme": "THPM Current"', settings.read_text())
         self.assertEqual(self.paths.zed_settings_backup_file.read_text(), original)
-        self.assertTrue(load(self.paths)["zed-extra"])
+        self.assertFalse(load(self.paths)["zed-extra"])
         backup = self.paths.zed_settings_backup_file.read_text()
         configure_settings(self.paths)
         self.assertEqual(self.paths.zed_settings_backup_file.read_text(), backup)
+
+    def test_setup_preserves_an_existing_enabled_state(self):
+        self.write_zed()
+        enabled = load(self.paths)
+        enabled["zed-extra"] = True
+        save(self.paths, enabled)
+
+        result = Service(self.paths).zed_setup(confirmed=True)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(load(self.paths)["zed-extra"])
+
+    def test_setup_preserves_state_changed_before_mutation_lock(self):
+        self.write_zed()
+
+        @contextmanager
+        def changed_before_acquire(_paths):
+            enabled = load(self.paths)
+            enabled["zed-extra"] = True
+            save(self.paths, enabled)
+            yield
+
+        with patch("thpm.service.mutation_lock", changed_before_acquire):
+            result = Service(self.paths).zed_setup(confirmed=True)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(load(self.paths)["zed-extra"])
 
     def test_setup_adds_missing_theme_key_without_dropping_comments(self):
         self.write_zed()

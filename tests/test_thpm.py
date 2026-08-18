@@ -6745,6 +6745,28 @@ class UpdateTests(Sandbox):
                 self.assertEqual((external / "before.tpl").read_text(), "keep")
                 self.assertFalse((external / "new.tpl").exists())
 
+    def test_update_rollback_does_not_rewrite_file_template_referents(self):
+        external = self.paths.home / "not-a-template-directory"
+        external.write_text("old content")
+        hard_link = self.paths.home / "hard-linked-template-file"
+        os.link(external, hard_link)
+        self.paths.themed_dir.parent.mkdir(parents=True)
+        link_target = os.path.relpath(external, self.paths.themed_dir.parent)
+        self.paths.themed_dir.symlink_to(link_target)
+        backups = updater._backup_integrations(
+            self.paths, self.paths.home / "backup-file-template"
+        )
+        external.write_text("concurrent user change")
+        inode = external.stat().st_ino
+
+        updater._restore_integrations(backups)
+
+        self.assertTrue(self.paths.themed_dir.is_symlink())
+        self.assertEqual(os.readlink(self.paths.themed_dir), link_target)
+        self.assertEqual(external.read_text(), "concurrent user change")
+        self.assertEqual(hard_link.read_text(), "concurrent user change")
+        self.assertEqual(external.stat().st_ino, inode)
+
     def test_update_rollback_does_not_rewrite_untouched_symlink_referents(self):
         external = self.paths.home / "dotfiles/90-thpm"
         external.parent.mkdir(parents=True)

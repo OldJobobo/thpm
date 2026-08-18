@@ -330,15 +330,12 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
                 )
             except (FileNotFoundError, RuntimeError):
                 referent = None
-            if referent is not None:
+            if referent is not None and referent.is_dir():
                 referent_backup = backup.with_name(f"{backup.name}.referent")
                 backup.with_name(f"{backup.name}.referent-path").write_text(
                     str(referent)
                 )
-                if referent.is_dir():
-                    shutil.copytree(referent, referent_backup, symlinks=True)
-                else:
-                    shutil.copy2(referent, referent_backup)
+                shutil.copytree(referent, referent_backup, symlinks=True)
         elif target.is_dir():
             shutil.copytree(target, backup)
         else:
@@ -362,11 +359,7 @@ def _restore_integrations(backups: dict[Path, Path | None]) -> None:
             if referent_backup.exists() and referent_path_backup.exists():
                 referent = Path(referent_path_backup.read_text())
                 referent.parent.mkdir(parents=True, exist_ok=True)
-                if referent_backup.is_dir():
-                    _restore_directory_contents(referent_backup, referent)
-                else:
-                    _remove_path(referent)
-                    shutil.copy2(referent_backup, referent)
+                _restore_directory_contents(referent_backup, referent)
             target.symlink_to(link_target)
         elif backup.is_dir():
             shutil.copytree(backup, target)

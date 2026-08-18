@@ -641,12 +641,16 @@ def apply(
         runtime = _source_runtime()
         staged = runtime.with_name(f"runtime.next-{os.getpid()}"); previous = runtime.with_name("runtime.previous")
         shutil.rmtree(staged, ignore_errors=True); _stage_runtime(source, staged); shutil.rmtree(previous, ignore_errors=True)
-        next_templates = _runtime_owned_templates(staged)
-        integration_backups = _backup_integrations(
-            paths,
-            temp / "integration-backup",
-            additional_owned_templates=next_templates,
-        )
+        try:
+            next_templates = _runtime_owned_templates(staged)
+            integration_backups = _backup_integrations(
+                paths,
+                temp / "integration-backup",
+                additional_owned_templates=next_templates,
+            )
+        except Exception:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
         step("Activating new runtime")
         runtime.rename(previous)
         try:

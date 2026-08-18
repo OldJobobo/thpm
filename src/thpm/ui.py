@@ -314,6 +314,13 @@ def _launch_fallback() -> bool:
 
 
 def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:
+    with _launch_lock(paths):
+        return _surface_locked(paths, requested)
+
+
+def _surface_locked(
+    paths: Paths, requested: str | None = None
+) -> dict[str, object]:
     current = _surface(paths)
     if requested is None:
         return {"surface": current, "changed": False}
@@ -336,14 +343,14 @@ def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:
     try:
         atomic_text(menu, next_menu)
         atomic_text(paths.ui_state_file, f'menu_surface = "{selected}"\n')
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         try:
             menu.unlink(missing_ok=True)
             if previous_link is not None:
                 menu.symlink_to(previous_link)
             elif rollback_file is not None:
                 os.replace(rollback_file, menu)
-        except OSError as rollback_exc:
+        except (OSError, UnicodeError) as rollback_exc:
             raise RuntimeError(
                 f"menu surface state failed: {exc}; menu rollback failed: {rollback_exc}"
             ) from exc

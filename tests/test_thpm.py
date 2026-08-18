@@ -852,6 +852,32 @@ class UiTests(Sandbox):
             self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
         )
 
+    def test_surface_restores_menu_after_encoding_failure(self):
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        previous_menu = '{\n  "foreign": {"label":"Mine"}\n}\n'
+        self.paths.menu_extension.write_text(previous_menu)
+        previous_inode = self.paths.menu_extension.stat().st_ino
+        atomic_text = ui.atomic_text
+
+        def fail_menu(path, text, mode=0o644):
+            if path == self.paths.menu_extension:
+                raise UnicodeEncodeError("ascii", "󰆍", 0, 1, "unsupported")
+            return atomic_text(path, text, mode)
+
+        with patch("thpm.ui.atomic_text", side_effect=fail_menu), self.assertRaises(
+            UnicodeEncodeError
+        ):
+            ui.surface(self.paths, "tui")
+
+        self.assertEqual(self.paths.menu_extension.read_text(), previous_menu)
+        self.assertEqual(self.paths.menu_extension.stat().st_ino, previous_inode)
+
+    def test_surface_serializes_the_complete_transaction(self):
+        with patch("thpm.ui._launch_lock", wraps=ui._launch_lock) as lock:
+            ui.surface(self.paths, "tui")
+
+        lock.assert_called_once_with(self.paths)
+
     def test_surface_restores_menu_symlink_when_state_write_fails(self):
         self.paths.ui_state_file.parent.mkdir(parents=True)
         self.paths.ui_state_file.write_text('menu_surface = "gui"\n')

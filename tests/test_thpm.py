@@ -6587,6 +6587,22 @@ class UpdateTests(Sandbox):
         self.assertIn('"refreshRequired"', update_source)
         self.assertIn('"thpm reconcile --refresh"', update_source)
 
+    def test_staged_runtime_reports_complete_template_ownership(self):
+        runtime = self.paths.home / "runtime.next"
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps(["thpm-current.tpl", "thpm-obsolete-only.tpl"]),
+            "",
+        )
+        with patch("thpm.update.subprocess.run", return_value=completed) as run:
+            owned = updater._runtime_owned_templates(runtime)
+
+        self.assertEqual(
+            owned, {"thpm-current.tpl", "thpm-obsolete-only.tpl"}
+        )
+        self.assertIn("from thpm.templates import owned_names", run.call_args.args[0][2])
+
     def test_staged_runtime_refuses_missing_or_symlinked_dependency_lock(self):
         source = self.paths.home / "source"
         source.mkdir()
@@ -6645,6 +6661,7 @@ class UpdateTests(Sandbox):
             raise RuntimeError("install failed")
         with patch("thpm.update.check", return_value=result), patch("thpm.update._download", side_effect=download), \
              patch("thpm.update._safe_extract", return_value=source), patch("thpm.update._stage_runtime", side_effect=stage), \
+             patch("thpm.update._runtime_owned_templates", return_value=set()), \
              patch("thpm.update.sys.executable", str(fake_python)), patch("thpm.update.subprocess.run", side_effect=fail_install):
             with self.assertRaisesRegex(RuntimeError, "install failed"):
                 updater.apply(self.paths)
@@ -6681,6 +6698,8 @@ class UpdateTests(Sandbox):
             "thpm.update._download", side_effect=download
         ), patch("thpm.update._safe_extract", return_value=source), patch(
             "thpm.update._stage_runtime", side_effect=stage
+        ), patch(
+            "thpm.update._runtime_owned_templates", return_value=set()
         ), patch("thpm.update.sys.executable", str(fake_python)), patch(
             "thpm.update.subprocess.run", return_value=completed
         ) as run:

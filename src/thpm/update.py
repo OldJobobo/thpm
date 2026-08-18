@@ -286,6 +286,30 @@ def _stage_runtime(source: Path, runtime: Path) -> None:
     )
 
 
+def _runtime_owned_templates(runtime: Path) -> set[str]:
+    completed = subprocess.run(
+        [
+            str(runtime / "bin/python"),
+            "-c",
+            (
+                "import json; from thpm.templates import owned_names; "
+                "print(json.dumps(sorted(owned_names())))"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    )
+    payload = json.loads(completed.stdout)
+    if not isinstance(payload, list) or not all(
+        isinstance(name, str) and name and Path(name).name == name
+        for name in payload
+    ):
+        raise RuntimeError("staged runtime returned invalid template ownership")
+    return set(payload)
+
+
 def _remove_path(path: Path) -> None:
     if path.is_symlink() or not path.is_dir():
         path.unlink(missing_ok=True)
@@ -617,12 +641,7 @@ def apply(
         runtime = _source_runtime()
         staged = runtime.with_name(f"runtime.next-{os.getpid()}"); previous = runtime.with_name("runtime.previous")
         shutil.rmtree(staged, ignore_errors=True); _stage_runtime(source, staged); shutil.rmtree(previous, ignore_errors=True)
-        next_template_dir = source / "assets/templates"
-        next_templates = (
-            {item.name for item in next_template_dir.iterdir() if item.is_file()}
-            if next_template_dir.is_dir()
-            else set()
-        )
+        next_templates = _runtime_owned_templates(staged)
         integration_backups = _backup_integrations(
             paths,
             temp / "integration-backup",

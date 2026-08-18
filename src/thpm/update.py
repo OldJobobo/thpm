@@ -292,14 +292,28 @@ def _remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def _restore_directory_contents(source: Path, destination: Path) -> None:
+def _copy_managed_templates(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        if not item.name.startswith("thpm-"):
+            continue
+        target = destination / item.name
+        if item.is_symlink():
+            target.symlink_to(os.readlink(item))
+        elif item.is_dir():
+            shutil.copytree(item, target, symlinks=True)
+        else:
+            shutil.copy2(item, target)
+
+
+def _restore_managed_templates(source: Path, destination: Path) -> None:
     if destination.is_symlink() or not destination.is_dir():
         _remove_path(destination)
         destination.mkdir(parents=True)
-    else:
-        for child in destination.iterdir():
-            _remove_path(child)
-    shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
+    for item in destination.iterdir():
+        if item.name.startswith("thpm-"):
+            _remove_path(item)
+    _copy_managed_templates(source, destination)
 
 
 def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | None]:
@@ -335,9 +349,15 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
                 backup.with_name(f"{backup.name}.referent-path").write_text(
                     str(referent)
                 )
-                shutil.copytree(referent, referent_backup, symlinks=True)
+                referent_backup.mkdir()
+                _copy_managed_templates(referent, referent_backup)
         elif target.is_dir():
-            shutil.copytree(target, backup)
+            if target == paths.themed_dir:
+                backup.mkdir()
+                backup.with_name(f"{backup.name}.templates-only").touch()
+                _copy_managed_templates(target, backup)
+            else:
+                shutil.copytree(target, backup)
         else:
             shutil.copy2(target, backup)
         backups[target] = backup
@@ -346,6 +366,11 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
 
 def _restore_integrations(backups: dict[Path, Path | None]) -> None:
     for target, backup in backups.items():
+        if backup is not None and backup.with_name(
+            f"{backup.name}.templates-only"
+        ).exists():
+            _restore_managed_templates(backup, target)
+            continue
         _remove_path(target)
         if backup is None:
             continue
@@ -359,7 +384,7 @@ def _restore_integrations(backups: dict[Path, Path | None]) -> None:
             if referent_backup.exists() and referent_path_backup.exists():
                 referent = Path(referent_path_backup.read_text())
                 referent.parent.mkdir(parents=True, exist_ok=True)
-                _restore_directory_contents(referent_backup, referent)
+                _restore_managed_templates(referent_backup, referent)
             if not (
                 target.is_symlink() and os.readlink(target) == link_target
             ):

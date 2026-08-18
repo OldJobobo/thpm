@@ -6736,7 +6736,7 @@ class UpdateTests(Sandbox):
         target.parent.mkdir(parents=True)
         external = self.paths.home / "managed-templates"
         external.mkdir()
-        (external / "before.tpl").write_text("keep")
+        (external / "thpm-before.tpl").write_text("keep")
         chained = target.parent / "current-templates"
         chained.symlink_to(external)
         link_targets = {
@@ -6756,10 +6756,10 @@ class UpdateTests(Sandbox):
                 if kind == "dangling":
                     target.unlink()
                     target.mkdir()
-                    (target / "new.tpl").write_text("new runtime")
+                    (target / "thpm-new.tpl").write_text("new runtime")
                 else:
-                    (target / "before.tpl").unlink()
-                    (target / "new.tpl").write_text("new runtime")
+                    (target / "thpm-before.tpl").unlink()
+                    (target / "thpm-new.tpl").write_text("new runtime")
 
                 with patch(
                     "thpm.update.shutil.rmtree", wraps=shutil.rmtree
@@ -6769,8 +6769,10 @@ class UpdateTests(Sandbox):
                 self.assertNotIn(call(external), remove_tree.call_args_list)
                 self.assertTrue(target.is_symlink())
                 self.assertEqual(os.readlink(target), link_target)
-                self.assertEqual((external / "before.tpl").read_text(), "keep")
-                self.assertFalse((external / "new.tpl").exists())
+                self.assertEqual(
+                    (external / "thpm-before.tpl").read_text(), "keep"
+                )
+                self.assertFalse((external / "thpm-new.tpl").exists())
 
     def test_update_rollback_accepts_symlink_to_its_own_parent(self):
         target = self.paths.themed_dir
@@ -6779,13 +6781,16 @@ class UpdateTests(Sandbox):
         backups = updater._backup_integrations(
             self.paths, self.paths.home / "backup-parent-link"
         )
-        (target / "new.tpl").write_text("new runtime")
+        (target / "thpm-new.tpl").write_text("new runtime")
+        unrelated = target / "concurrent-user-file"
+        unrelated.write_text("preserve")
 
         updater._restore_integrations(backups)
 
         self.assertTrue(target.is_symlink())
         self.assertEqual(os.readlink(target), ".")
-        self.assertFalse((target.parent / "new.tpl").exists())
+        self.assertFalse((target.parent / "thpm-new.tpl").exists())
+        self.assertEqual(unrelated.read_text(), "preserve")
 
     def test_update_rollback_does_not_rewrite_file_template_referents(self):
         external = self.paths.home / "not-a-template-directory"

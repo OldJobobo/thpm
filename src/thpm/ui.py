@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -34,7 +35,80 @@ def _surface(paths: Paths) -> str:
     return str(value) if value in SURFACES else "gui"
 
 
-def _write_menu(paths: Paths, surface: str) -> None:
+def _json_string_end(text: str, start: int) -> int:
+    index = start + 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+        elif text[index] == '"':
+            return index + 1
+        else:
+            index += 1
+    raise ValueError("unterminated string in Omarchy menu extension")
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
+def _parse_jsonc(text: str) -> object:
+    uncommented: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] == '"':
+            end = _json_string_end(text, index)
+            uncommented.append(text[index:end])
+            index = end
+        elif text.startswith("//", index):
+            line_endings = (
+                position
+                for marker in ("\r", "\n")
+                if (position := text.find(marker, index + 2)) >= 0
+            )
+            index = min(line_endings, default=len(text))
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end < 0:
+                raise ValueError("unterminated comment in Omarchy menu extension")
+            uncommented.append(" ")
+            index = end + 2
+        else:
+            uncommented.append(text[index])
+            index += 1
+    cleaned = "".join(uncommented)
+    output: list[str] = []
+    index = 0
+    while index < len(cleaned):
+        if cleaned[index] == '"':
+            end = _json_string_end(cleaned, index)
+            output.append(cleaned[index:end])
+            index = end
+        elif cleaned[index] == ",":
+            lookbehind = index - 1
+            while lookbehind >= 0 and cleaned[lookbehind].isspace():
+                lookbehind -= 1
+            lookahead = index + 1
+            while lookahead < len(cleaned) and cleaned[lookahead].isspace():
+                lookahead += 1
+            has_preceding_value = (
+                lookbehind >= 0 and cleaned[lookbehind] not in "[{,:"
+            )
+            if (
+                has_preceding_value
+                and lookahead < len(cleaned)
+                and cleaned[lookahead] in "}]"
+            ):
+                index += 1
+                continue
+            output.append(cleaned[index])
+            index += 1
+        else:
+            output.append(cleaned[index])
+            index += 1
+    return json.loads("".join(output), parse_constant=_reject_json_constant)
+
+
+def _menu_text(paths: Paths, surface: str) -> str:
     menu = paths.menu_extension
     text = menu.read_text() if menu.exists() else "{}\n"
     if START in text or END in text:
@@ -47,7 +121,18 @@ def _write_menu(paths: Paths, surface: str) -> None:
     # managed block ends with a JSONC comment immediately before the root brace.
     managed = f"{START}\n{ENTRIES[surface]}\n{END}"
     suffix = f"\n{body}" if body else ""
-    atomic_text(menu, f"{{\n{managed}{suffix}\n}}\n")
+    rendered = f"{{\n{managed}{suffix}\n}}\n"
+    try:
+        parsed = _parse_jsonc(rendered)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"Omarchy menu extension is invalid JSONC: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Omarchy menu extension is not a top-level JSONC object")
+    return rendered
+
+
+def _write_menu(paths: Paths, surface: str) -> None:
+    atomic_text(paths.menu_extension, _menu_text(paths, surface))
 
 
 def _menu_current(paths: Paths) -> bool:
@@ -229,14 +314,49 @@ def _launch_fallback() -> bool:
 
 
 def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:
+    with _launch_lock(paths):
+        return _surface_locked(paths, requested)
+
+
+def _surface_locked(
+    paths: Paths, requested: str | None = None
+) -> dict[str, object]:
     current = _surface(paths)
     if requested is None:
         return {"surface": current, "changed": False}
     selected = ("tui" if current == "gui" else "gui") if requested == "toggle" else requested
     if selected not in SURFACES:
         raise ValueError(f"unknown UI surface: {requested}")
-    atomic_text(paths.ui_state_file, f'menu_surface = "{selected}"\n')
-    _write_menu(paths, selected)
+    menu = paths.menu_extension
+    previous_link = os.readlink(menu) if menu.is_symlink() else None
+    previous_file = previous_link is None and menu.exists()
+    next_menu = _menu_text(paths, selected)
+    rollback_file: Path | None = None
+    if previous_file:
+        descriptor, rollback_name = tempfile.mkstemp(
+            prefix=".thpm-menu-rollback-", dir=menu.parent
+        )
+        os.close(descriptor)
+        rollback_file = Path(rollback_name)
+        rollback_file.unlink()
+        os.replace(menu, rollback_file)
+    try:
+        atomic_text(menu, next_menu)
+        atomic_text(paths.ui_state_file, f'menu_surface = "{selected}"\n')
+    except (OSError, UnicodeError) as exc:
+        try:
+            menu.unlink(missing_ok=True)
+            if previous_link is not None:
+                menu.symlink_to(previous_link)
+            elif rollback_file is not None:
+                os.replace(rollback_file, menu)
+        except (OSError, UnicodeError) as rollback_exc:
+            raise RuntimeError(
+                f"menu surface state failed: {exc}; menu rollback failed: {rollback_exc}"
+            ) from exc
+        raise
+    if rollback_file is not None:
+        rollback_file.unlink(missing_ok=True)
     if shell_running():
         run("menu", "refresh", check=False)
     return {"surface": selected, "changed": selected != current}

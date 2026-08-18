@@ -787,6 +787,126 @@ class UiTests(Sandbox):
         self.assertIn('"foreign"', self.paths.menu_extension.read_text())
         self.assertNotIn("style.theme-hooks", self.paths.menu_extension.read_text())
 
+    def test_surface_rejects_invalid_menu_without_persisting_selection(self):
+        self.paths.ui_state_file.parent.mkdir(parents=True)
+        self.paths.ui_state_file.write_text('menu_surface = "gui"\n')
+        self.paths.menu_extension.parent.mkdir(parents=True)
+
+        for invalid in (
+            "[]\n",
+            '{"broken"\n',
+            '{"broken"}\n',
+            '{"foreign": t/*comment*/rue}\n',
+            '{"foreign": [,]}\n',
+        ):
+            with self.subTest(menu=invalid):
+                self.paths.menu_extension.write_text(invalid)
+
+                with self.assertRaises(ValueError):
+                    ui.surface(self.paths, "tui")
+
+                self.assertEqual(
+                    self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
+                )
+                self.assertEqual(self.paths.menu_extension.read_text(), invalid)
+
+    def test_surface_accepts_jsonc_with_cr_only_line_endings(self):
+        text = '{\r"foreign": true, // keep this entry\r}\r'
+        self.assertEqual(ui._parse_jsonc(text), {"foreign": True})
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        self.paths.menu_extension.write_bytes(text.encode())
+
+        result = ui.surface(self.paths, "tui")
+
+        self.assertEqual(result["surface"], "tui")
+        self.assertIn('"foreign": true', self.paths.menu_extension.read_text())
+
+    def test_surface_restores_menu_when_state_write_fails(self):
+        self.paths.ui_state_file.parent.mkdir(parents=True)
+        self.paths.ui_state_file.write_text('menu_surface = "gui"\n')
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        previous_menu = '{\n  "foreign": {"label":"Mine"}\n}\n'
+        self.paths.menu_extension.write_text(previous_menu)
+        self.paths.menu_extension.chmod(0o600)
+        hard_link = self.paths.menu_extension.with_name("menu-hard-link.jsonc")
+        os.link(self.paths.menu_extension, hard_link)
+        previous_inode = self.paths.menu_extension.stat().st_ino
+        atomic_text = ui.atomic_text
+
+        def fail_state(path, text, mode=0o644):
+            if path == self.paths.ui_state_file:
+                raise OSError("state unavailable")
+            return atomic_text(path, text, mode)
+
+        with patch("thpm.ui.atomic_text", side_effect=fail_state), self.assertRaises(
+            OSError
+        ):
+            ui.surface(self.paths, "tui")
+
+        self.assertEqual(self.paths.menu_extension.read_text(), previous_menu)
+        self.assertEqual(self.paths.menu_extension.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.paths.menu_extension.stat().st_ino, previous_inode)
+        self.assertEqual(hard_link.stat().st_ino, previous_inode)
+        self.assertEqual(hard_link.read_text(), previous_menu)
+        self.assertEqual(
+            self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
+        )
+
+    def test_surface_restores_menu_after_encoding_failure(self):
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        previous_menu = '{\n  "foreign": {"label":"Mine"}\n}\n'
+        self.paths.menu_extension.write_text(previous_menu)
+        previous_inode = self.paths.menu_extension.stat().st_ino
+        atomic_text = ui.atomic_text
+
+        def fail_menu(path, text, mode=0o644):
+            if path == self.paths.menu_extension:
+                raise UnicodeEncodeError("ascii", "󰆍", 0, 1, "unsupported")
+            return atomic_text(path, text, mode)
+
+        with patch("thpm.ui.atomic_text", side_effect=fail_menu), self.assertRaises(
+            UnicodeEncodeError
+        ):
+            ui.surface(self.paths, "tui")
+
+        self.assertEqual(self.paths.menu_extension.read_text(), previous_menu)
+        self.assertEqual(self.paths.menu_extension.stat().st_ino, previous_inode)
+
+    def test_surface_serializes_the_complete_transaction(self):
+        with patch("thpm.ui._launch_lock", wraps=ui._launch_lock) as lock:
+            ui.surface(self.paths, "tui")
+
+        lock.assert_called_once_with(self.paths)
+
+    def test_surface_restores_menu_symlink_when_state_write_fails(self):
+        self.paths.ui_state_file.parent.mkdir(parents=True)
+        self.paths.ui_state_file.write_text('menu_surface = "gui"\n')
+        menu_target = self.paths.home / "dotfiles/omarchy-menu.jsonc"
+        menu_target.parent.mkdir(parents=True)
+        previous_menu = '{\n  "foreign": {"label":"Mine"}\n}\n'
+        menu_target.write_text(previous_menu)
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        link_target = os.path.relpath(menu_target, self.paths.menu_extension.parent)
+        self.paths.menu_extension.symlink_to(link_target)
+        atomic_text = ui.atomic_text
+
+        def fail_state(path, text, mode=0o644):
+            if path == self.paths.ui_state_file:
+                raise OSError("state unavailable")
+            return atomic_text(path, text, mode)
+
+        with patch("thpm.ui.atomic_text", side_effect=fail_state), self.assertRaises(
+            OSError
+        ):
+            ui.surface(self.paths, "tui")
+
+        self.assertTrue(self.paths.menu_extension.is_symlink())
+        self.assertEqual(os.readlink(self.paths.menu_extension), link_target)
+        self.assertEqual(menu_target.read_text(), previous_menu)
+        self.assertEqual(
+            self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
+        )
+
     def test_open_repairs_disabled_plugin_and_confirms_active_panel(self):
         assets = Path(__file__).parents[1] / "assets"
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(

@@ -103,6 +103,10 @@ class Paths:
         return (self.cache_root or self.home / ".cache") / "thpm/update.json"
 
     @property
+    def ui_lock_dir(self) -> Path:
+        return (self.cache_root or self.home / ".cache") / "thpm/locks"
+
+    @property
     def install_metadata(self) -> Path:
         return self.data_home / "thpm/install.toml"
 

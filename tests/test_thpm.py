@@ -873,10 +873,44 @@ class UiTests(Sandbox):
         self.assertEqual(self.paths.menu_extension.stat().st_ino, previous_inode)
 
     def test_surface_serializes_the_complete_transaction(self):
-        with patch("thpm.ui._launch_lock", wraps=ui._launch_lock) as lock:
+        with patch("thpm.ui._ui_lock", wraps=ui._ui_lock) as lock:
             ui.surface(self.paths, "tui")
 
         lock.assert_called_once_with(self.paths)
+
+    def test_ui_lock_is_user_scoped_and_guards_all_menu_writers(self):
+        with ui._ui_lock(self.paths):
+            pass
+        lock_dir = self.paths.ui_lock_dir
+        self.assertTrue((lock_dir / "ui.lock").exists())
+        self.assertEqual(lock_dir.stat().st_uid, os.getuid())
+        self.assertEqual(lock_dir.stat().st_mode & 0o777, 0o700)
+        self.paths.thpm_state_dir.mkdir(parents=True)
+        shutil.rmtree(self.paths.thpm_state_dir)
+        self.assertTrue((lock_dir / "ui.lock").exists())
+
+        with patch("thpm.ui._ui_lock", wraps=ui._ui_lock) as lock, patch(
+            "thpm.ui._install_locked", return_value={"installed": True}
+        ):
+            ui.install(self.paths)
+        lock.assert_called_once_with(self.paths)
+
+        with patch("thpm.ui._ui_lock", wraps=ui._ui_lock) as lock, patch(
+            "thpm.ui._remove_locked", return_value={"installed": False}
+        ):
+            ui.remove(self.paths)
+        lock.assert_called_once_with(self.paths)
+
+    def test_ui_lock_rejects_a_symlinked_private_directory(self):
+        external = self.paths.home / "attacker-locks"
+        external.mkdir()
+        lock_dir = self.paths.ui_lock_dir
+        lock_dir.parent.mkdir(parents=True)
+        lock_dir.symlink_to(external)
+
+        with self.assertRaisesRegex(PermissionError, "privately owned"):
+            with ui._ui_lock(self.paths):
+                pass
 
     def test_surface_restores_menu_symlink_when_state_write_fails(self):
         self.paths.ui_state_file.parent.mkdir(parents=True)

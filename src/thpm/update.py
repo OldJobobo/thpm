@@ -303,7 +303,17 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
         backup = destination / str(index)
         backup.parent.mkdir(parents=True, exist_ok=True)
         if target.is_symlink():
-            backup.symlink_to(os.readlink(target))
+            link_target = os.readlink(target)
+            backup.symlink_to(link_target)
+            referent = Path(link_target)
+            if not referent.is_absolute():
+                referent = target.parent / referent
+            referent_backup = backup.with_name(f"{backup.name}.referent")
+            if referent.exists() and not referent.is_symlink():
+                if referent.is_dir():
+                    shutil.copytree(referent, referent_backup, symlinks=True)
+                else:
+                    shutil.copy2(referent, referent_backup)
         elif target.is_dir():
             shutil.copytree(target, backup)
         else:
@@ -322,7 +332,22 @@ def _restore_integrations(backups: dict[Path, Path | None]) -> None:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         if backup.is_symlink():
-            target.symlink_to(os.readlink(backup))
+            link_target = os.readlink(backup)
+            referent = Path(link_target)
+            if not referent.is_absolute():
+                referent = target.parent / referent
+            referent_backup = backup.with_name(f"{backup.name}.referent")
+            if referent_backup.exists():
+                if referent.is_symlink() or not referent.is_dir():
+                    referent.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(referent)
+                referent.parent.mkdir(parents=True, exist_ok=True)
+                if referent_backup.is_dir():
+                    shutil.copytree(referent_backup, referent, symlinks=True)
+                else:
+                    shutil.copy2(referent_backup, referent)
+            target.symlink_to(link_target)
         elif backup.is_dir():
             shutil.copytree(backup, target)
         else:

@@ -36,6 +36,64 @@ def _surface(paths: Paths) -> str:
     return str(value) if value in SURFACES else "gui"
 
 
+def _json_string_end(text: str, start: int) -> int:
+    index = start + 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+        elif text[index] == '"':
+            return index + 1
+        else:
+            index += 1
+    raise ValueError("unterminated string in Omarchy menu extension")
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
+def _parse_jsonc(text: str) -> object:
+    uncommented: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] == '"':
+            end = _json_string_end(text, index)
+            uncommented.append(text[index:end])
+            index = end
+        elif text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end < 0:
+                raise ValueError("unterminated comment in Omarchy menu extension")
+            index = end + 2
+        else:
+            uncommented.append(text[index])
+            index += 1
+    cleaned = "".join(uncommented)
+    output: list[str] = []
+    index = 0
+    while index < len(cleaned):
+        if cleaned[index] == '"':
+            end = _json_string_end(cleaned, index)
+            output.append(cleaned[index:end])
+            index = end
+        elif cleaned[index] == ",":
+            lookahead = index + 1
+            while lookahead < len(cleaned) and cleaned[lookahead].isspace():
+                lookahead += 1
+            if lookahead < len(cleaned) and cleaned[lookahead] in "}]":
+                index += 1
+                continue
+            output.append(cleaned[index])
+            index += 1
+        else:
+            output.append(cleaned[index])
+            index += 1
+    return json.loads("".join(output), parse_constant=_reject_json_constant)
+
+
 def _menu_text(paths: Paths, surface: str) -> str:
     menu = paths.menu_extension
     text = menu.read_text() if menu.exists() else "{}\n"
@@ -49,7 +107,14 @@ def _menu_text(paths: Paths, surface: str) -> str:
     # managed block ends with a JSONC comment immediately before the root brace.
     managed = f"{START}\n{ENTRIES[surface]}\n{END}"
     suffix = f"\n{body}" if body else ""
-    return f"{{\n{managed}{suffix}\n}}\n"
+    rendered = f"{{\n{managed}{suffix}\n}}\n"
+    try:
+        parsed = _parse_jsonc(rendered)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"Omarchy menu extension is invalid JSONC: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Omarchy menu extension is not a top-level JSONC object")
+    return rendered
 
 
 def _write_menu(paths: Paths, surface: str) -> None:

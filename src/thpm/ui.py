@@ -34,7 +34,7 @@ def _surface(paths: Paths) -> str:
     return str(value) if value in SURFACES else "gui"
 
 
-def _write_menu(paths: Paths, surface: str) -> None:
+def _menu_text(paths: Paths, surface: str) -> str:
     menu = paths.menu_extension
     text = menu.read_text() if menu.exists() else "{}\n"
     if START in text or END in text:
@@ -47,7 +47,11 @@ def _write_menu(paths: Paths, surface: str) -> None:
     # managed block ends with a JSONC comment immediately before the root brace.
     managed = f"{START}\n{ENTRIES[surface]}\n{END}"
     suffix = f"\n{body}" if body else ""
-    atomic_text(menu, f"{{\n{managed}{suffix}\n}}\n")
+    return f"{{\n{managed}{suffix}\n}}\n"
+
+
+def _write_menu(paths: Paths, surface: str) -> None:
+    atomic_text(paths.menu_extension, _menu_text(paths, surface))
 
 
 def _menu_current(paths: Paths) -> bool:
@@ -235,8 +239,23 @@ def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:
     selected = ("tui" if current == "gui" else "gui") if requested == "toggle" else requested
     if selected not in SURFACES:
         raise ValueError(f"unknown UI surface: {requested}")
-    atomic_text(paths.ui_state_file, f'menu_surface = "{selected}"\n')
-    _write_menu(paths, selected)
+    menu = paths.menu_extension
+    previous_menu = menu.read_text() if menu.exists() else None
+    next_menu = _menu_text(paths, selected)
+    atomic_text(menu, next_menu)
+    try:
+        atomic_text(paths.ui_state_file, f'menu_surface = "{selected}"\n')
+    except OSError as exc:
+        try:
+            if previous_menu is None:
+                menu.unlink(missing_ok=True)
+            else:
+                atomic_text(menu, previous_menu)
+        except OSError as rollback_exc:
+            raise RuntimeError(
+                f"menu surface state failed: {exc}; menu rollback failed: {rollback_exc}"
+            ) from exc
+        raise
     if shell_running():
         run("menu", "refresh", check=False)
     return {"surface": selected, "changed": selected != current}

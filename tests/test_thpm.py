@@ -787,6 +787,46 @@ class UiTests(Sandbox):
         self.assertIn('"foreign"', self.paths.menu_extension.read_text())
         self.assertNotIn("style.theme-hooks", self.paths.menu_extension.read_text())
 
+    def test_surface_rejects_invalid_menu_without_persisting_selection(self):
+        self.paths.ui_state_file.parent.mkdir(parents=True)
+        self.paths.ui_state_file.write_text('menu_surface = "gui"\n')
+        self.paths.menu_extension.parent.mkdir(parents=True)
+
+        for invalid in ("[]\n", '{"broken"\n'):
+            with self.subTest(menu=invalid):
+                self.paths.menu_extension.write_text(invalid)
+
+                with self.assertRaises(ValueError):
+                    ui.surface(self.paths, "tui")
+
+                self.assertEqual(
+                    self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
+                )
+                self.assertEqual(self.paths.menu_extension.read_text(), invalid)
+
+    def test_surface_restores_menu_when_state_write_fails(self):
+        self.paths.ui_state_file.parent.mkdir(parents=True)
+        self.paths.ui_state_file.write_text('menu_surface = "gui"\n')
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        previous_menu = '{\n  "foreign": {"label":"Mine"}\n}\n'
+        self.paths.menu_extension.write_text(previous_menu)
+        atomic_text = ui.atomic_text
+
+        def fail_state(path, text, mode=0o644):
+            if path == self.paths.ui_state_file:
+                raise OSError("state unavailable")
+            return atomic_text(path, text, mode)
+
+        with patch("thpm.ui.atomic_text", side_effect=fail_state), self.assertRaises(
+            OSError
+        ):
+            ui.surface(self.paths, "tui")
+
+        self.assertEqual(self.paths.menu_extension.read_text(), previous_menu)
+        self.assertEqual(
+            self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
+        )
+
     def test_open_repairs_disabled_plugin_and_confirms_active_panel(self):
         assets = Path(__file__).parents[1] / "assets"
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(

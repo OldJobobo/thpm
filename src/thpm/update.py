@@ -617,11 +617,12 @@ def apply(
         runtime = _source_runtime()
         staged = runtime.with_name(f"runtime.next-{os.getpid()}"); previous = runtime.with_name("runtime.previous")
         shutil.rmtree(staged, ignore_errors=True); _stage_runtime(source, staged); shutil.rmtree(previous, ignore_errors=True)
-        next_templates = {
-            item.name
-            for item in (source / "assets/templates").iterdir()
-            if item.is_file()
-        }
+        next_template_dir = source / "assets/templates"
+        next_templates = (
+            {item.name for item in next_template_dir.iterdir() if item.is_file()}
+            if next_template_dir.is_dir()
+            else set()
+        )
         integration_backups = _backup_integrations(
             paths,
             temp / "integration-backup",

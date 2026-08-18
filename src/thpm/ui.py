@@ -290,8 +290,16 @@ def _repair_shell() -> dict[str, object]:
 
 @contextmanager
 def _ui_lock(paths: Paths) -> Iterator[None]:
-    lock_path = paths.runtime_dir / f"thpm-ui-{os.getuid()}.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_dir = paths.thpm_state_dir / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if (
+        lock_dir.is_symlink()
+        or not lock_dir.is_dir()
+        or lock_dir.stat(follow_symlinks=False).st_uid != os.getuid()
+    ):
+        raise PermissionError("THPM UI lock directory is not privately owned")
+    lock_dir.chmod(0o700)
+    lock_path = lock_dir / "ui.lock"
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         yield

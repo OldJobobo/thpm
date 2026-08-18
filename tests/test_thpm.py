@@ -879,12 +879,12 @@ class UiTests(Sandbox):
         lock.assert_called_once_with(self.paths)
 
     def test_ui_lock_is_user_scoped_and_guards_all_menu_writers(self):
-        with patch("thpm.ui.os.getuid", return_value=1234):
-            with ui._ui_lock(self.paths):
-                pass
-        self.assertTrue(
-            (self.paths.runtime_dir / "thpm-ui-1234.lock").exists()
-        )
+        with ui._ui_lock(self.paths):
+            pass
+        lock_dir = self.paths.thpm_state_dir / "locks"
+        self.assertTrue((lock_dir / "ui.lock").exists())
+        self.assertEqual(lock_dir.stat().st_uid, os.getuid())
+        self.assertEqual(lock_dir.stat().st_mode & 0o777, 0o700)
 
         with patch("thpm.ui._ui_lock", wraps=ui._ui_lock) as lock, patch(
             "thpm.ui._install_locked", return_value={"installed": True}
@@ -897,6 +897,17 @@ class UiTests(Sandbox):
         ):
             ui.remove(self.paths)
         lock.assert_called_once_with(self.paths)
+
+    def test_ui_lock_rejects_a_symlinked_private_directory(self):
+        external = self.paths.home / "attacker-locks"
+        external.mkdir()
+        lock_dir = self.paths.thpm_state_dir / "locks"
+        lock_dir.parent.mkdir(parents=True)
+        lock_dir.symlink_to(external)
+
+        with self.assertRaisesRegex(PermissionError, "privately owned"):
+            with ui._ui_lock(self.paths):
+                pass
 
     def test_surface_restores_menu_symlink_when_state_write_fails(self):
         self.paths.ui_state_file.parent.mkdir(parents=True)

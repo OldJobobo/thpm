@@ -81,10 +81,20 @@ def _parse_jsonc(text: str) -> object:
             output.append(cleaned[index:end])
             index = end
         elif cleaned[index] == ",":
+            lookbehind = index - 1
+            while lookbehind >= 0 and cleaned[lookbehind].isspace():
+                lookbehind -= 1
             lookahead = index + 1
             while lookahead < len(cleaned) and cleaned[lookahead].isspace():
                 lookahead += 1
-            if lookahead < len(cleaned) and cleaned[lookahead] in "}]":
+            has_preceding_value = (
+                lookbehind >= 0 and cleaned[lookbehind] not in "[{,:"
+            )
+            if (
+                has_preceding_value
+                and lookahead < len(cleaned)
+                and cleaned[lookahead] in "}]"
+            ):
                 index += 1
                 continue
             output.append(cleaned[index])

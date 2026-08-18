@@ -797,6 +797,7 @@ class UiTests(Sandbox):
             '{"broken"\n',
             '{"broken"}\n',
             '{"foreign": t/*comment*/rue}\n',
+            '{"foreign": [,]}\n',
         ):
             with self.subTest(menu=invalid):
                 self.paths.menu_extension.write_text(invalid)

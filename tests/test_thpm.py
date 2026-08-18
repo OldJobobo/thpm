@@ -3174,6 +3174,22 @@ class ZedTests(Sandbox):
         self.assertTrue(result["ok"])
         self.assertTrue(load(self.paths)["zed-extra"])
 
+    def test_setup_preserves_state_changed_before_mutation_lock(self):
+        self.write_zed()
+
+        @contextmanager
+        def changed_before_acquire(_paths):
+            enabled = load(self.paths)
+            enabled["zed-extra"] = True
+            save(self.paths, enabled)
+            yield
+
+        with patch("thpm.service.mutation_lock", changed_before_acquire):
+            result = Service(self.paths).zed_setup(confirmed=True)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(load(self.paths)["zed-extra"])
+
     def test_setup_adds_missing_theme_key_without_dropping_comments(self):
         self.write_zed()
         settings = self.paths.config_home / "zed/settings.json"

@@ -426,47 +426,59 @@ class Service:
             for key in ("zed-extra", "zed-thpm-current")
             for suffix in ("json", "backup", "legacy-checked")
         )
-        try:
-            validate_zed_settings_edit(self.paths)
-            snapshots = {path: _snapshot_file(path) for path in rollback_paths}
-        except (OSError, RuntimeError, UnicodeError, ZedThemeError, ValueError) as exc:
-            return envelope(
-                "zed-setup",
-                False,
-                summary=f"unable to configure Zed: {exc}",
-                result=zed_status(self.paths),
-                errors=[{"message": str(exc)}],
-            )
-
-        was_enabled = bool(load(self.paths).get("zed-extra"))
         self._step("Backing up Zed settings")
         try:
             with mutation_lock(self.paths):
-                settings_changed = configure_zed_settings(self.paths)
-                self._step("Installing and selecting Zed theme")
-                enabled = load(self.paths)
-                enabled["zed-extra"] = was_enabled or enable_sync
-                save(self.paths, enabled)
-                changed = reconcile_templates(self.paths, enabled)
-                result = apply_integration("zed-extra", self.paths)
-                changed.extend(result.changed)
-        except (OSError, RuntimeError, UnicodeError, ZedThemeError, ValueError) as exc:
-            try:
-                with mutation_lock(self.paths):
-                    for path, snapshot in snapshots.items():
-                        _restore_file(path, snapshot)
-                    enabled = load(self.paths)
-                    enabled["zed-extra"] = was_enabled
+                validate_zed_settings_edit(self.paths)
+                snapshots = {path: _snapshot_file(path) for path in rollback_paths}
+                enabled_before = load(self.paths)
+                try:
+                    settings_changed = configure_zed_settings(self.paths)
+                    self._step("Installing and selecting Zed theme")
+                    enabled = dict(enabled_before)
+                    enabled["zed-extra"] = bool(
+                        enabled_before.get("zed-extra")
+                    ) or enable_sync
                     save(self.paths, enabled)
-                    reconcile_templates(self.paths, enabled)
-            except (OSError, RuntimeError, UnicodeError, ValueError) as rollback_exc:
-                return envelope(
-                    "zed-setup",
-                    False,
-                    summary=f"unable to configure Zed: {exc}; rollback failed: {rollback_exc}",
-                    result=zed_status(self.paths),
-                    errors=[{"message": str(exc)}, {"message": f"rollback failed: {rollback_exc}"}],
-                )
+                    changed = reconcile_templates(self.paths, enabled)
+                    result = apply_integration("zed-extra", self.paths)
+                    changed.extend(result.changed)
+                except (
+                    OSError,
+                    RuntimeError,
+                    UnicodeError,
+                    ZedThemeError,
+                    ValueError,
+                ) as exc:
+                    try:
+                        for path, snapshot in snapshots.items():
+                            _restore_file(path, snapshot)
+                        save(self.paths, enabled_before)
+                        reconcile_templates(self.paths, enabled_before)
+                    except (
+                        OSError,
+                        RuntimeError,
+                        UnicodeError,
+                        ValueError,
+                    ) as rollback_exc:
+                        return envelope(
+                            "zed-setup",
+                            False,
+                            summary=f"unable to configure Zed: {exc}; rollback failed: {rollback_exc}",
+                            result=zed_status(self.paths),
+                            errors=[
+                                {"message": str(exc)},
+                                {"message": f"rollback failed: {rollback_exc}"},
+                            ],
+                        )
+                    return envelope(
+                        "zed-setup",
+                        False,
+                        summary=f"unable to configure Zed: {exc}",
+                        result=zed_status(self.paths),
+                        errors=[{"message": str(exc)}],
+                    )
+        except (OSError, RuntimeError, UnicodeError, ZedThemeError, ValueError) as exc:
             return envelope(
                 "zed-setup",
                 False,

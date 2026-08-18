@@ -6745,6 +6745,26 @@ class UpdateTests(Sandbox):
                 self.assertEqual((external / "before.tpl").read_text(), "keep")
                 self.assertFalse((external / "new.tpl").exists())
 
+    def test_update_rollback_does_not_rewrite_untouched_symlink_referents(self):
+        external = self.paths.home / "dotfiles/90-thpm"
+        external.parent.mkdir(parents=True)
+        external.write_text("old hook")
+        self.paths.hook_file.parent.mkdir(parents=True)
+        link_target = os.path.relpath(external, self.paths.hook_file.parent)
+        self.paths.hook_file.symlink_to(link_target)
+        backups = updater._backup_integrations(
+            self.paths, self.paths.home / "backup-hook"
+        )
+        self.paths.hook_file.unlink()
+        self.paths.hook_file.write_text("new runtime hook")
+        external.write_text("concurrent user change")
+
+        updater._restore_integrations(backups)
+
+        self.assertTrue(self.paths.hook_file.is_symlink())
+        self.assertEqual(os.readlink(self.paths.hook_file), link_target)
+        self.assertEqual(external.read_text(), "concurrent user change")
+
     def test_update_refresh_failure_is_reported_as_committed_partial_failure(self):
         result = {
             "status": "updated",

@@ -323,7 +323,11 @@ def _backup_integrations(paths: Paths, destination: Path) -> dict[Path, Path | N
             link_target = os.readlink(target)
             backup.symlink_to(link_target)
             try:
-                referent = target.resolve(strict=True)
+                referent = (
+                    target.resolve(strict=True)
+                    if target == paths.themed_dir
+                    else None
+                )
             except (FileNotFoundError, RuntimeError):
                 referent = None
             if referent is not None:

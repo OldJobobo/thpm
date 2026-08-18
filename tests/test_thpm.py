@@ -810,6 +810,7 @@ class UiTests(Sandbox):
         self.paths.menu_extension.parent.mkdir(parents=True)
         previous_menu = '{\n  "foreign": {"label":"Mine"}\n}\n'
         self.paths.menu_extension.write_text(previous_menu)
+        self.paths.menu_extension.chmod(0o600)
         atomic_text = ui.atomic_text
 
         def fail_state(path, text, mode=0o644):
@@ -823,6 +824,36 @@ class UiTests(Sandbox):
             ui.surface(self.paths, "tui")
 
         self.assertEqual(self.paths.menu_extension.read_text(), previous_menu)
+        self.assertEqual(self.paths.menu_extension.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
+        )
+
+    def test_surface_restores_menu_symlink_when_state_write_fails(self):
+        self.paths.ui_state_file.parent.mkdir(parents=True)
+        self.paths.ui_state_file.write_text('menu_surface = "gui"\n')
+        menu_target = self.paths.home / "dotfiles/omarchy-menu.jsonc"
+        menu_target.parent.mkdir(parents=True)
+        previous_menu = '{\n  "foreign": {"label":"Mine"}\n}\n'
+        menu_target.write_text(previous_menu)
+        self.paths.menu_extension.parent.mkdir(parents=True)
+        link_target = os.path.relpath(menu_target, self.paths.menu_extension.parent)
+        self.paths.menu_extension.symlink_to(link_target)
+        atomic_text = ui.atomic_text
+
+        def fail_state(path, text, mode=0o644):
+            if path == self.paths.ui_state_file:
+                raise OSError("state unavailable")
+            return atomic_text(path, text, mode)
+
+        with patch("thpm.ui.atomic_text", side_effect=fail_state), self.assertRaises(
+            OSError
+        ):
+            ui.surface(self.paths, "tui")
+
+        self.assertTrue(self.paths.menu_extension.is_symlink())
+        self.assertEqual(os.readlink(self.paths.menu_extension), link_target)
+        self.assertEqual(menu_target.read_text(), previous_menu)
         self.assertEqual(
             self.paths.ui_state_file.read_text(), 'menu_surface = "gui"\n'
         )

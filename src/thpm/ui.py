@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
+import stat
 import shutil
 import subprocess
 import tempfile
@@ -240,17 +242,26 @@ def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:
     if selected not in SURFACES:
         raise ValueError(f"unknown UI surface: {requested}")
     menu = paths.menu_extension
-    previous_menu = menu.read_text() if menu.exists() else None
+    previous_link = os.readlink(menu) if menu.is_symlink() else None
+    previous_menu = (
+        None if previous_link is not None else menu.read_text() if menu.exists() else None
+    )
+    previous_mode = (
+        stat.S_IMODE(menu.stat(follow_symlinks=False).st_mode)
+        if previous_menu is not None
+        else 0o644
+    )
     next_menu = _menu_text(paths, selected)
     atomic_text(menu, next_menu)
     try:
         atomic_text(paths.ui_state_file, f'menu_surface = "{selected}"\n')
     except OSError as exc:
         try:
-            if previous_menu is None:
-                menu.unlink(missing_ok=True)
-            else:
-                atomic_text(menu, previous_menu)
+            menu.unlink(missing_ok=True)
+            if previous_link is not None:
+                menu.symlink_to(previous_link)
+            elif previous_menu is not None:
+                atomic_text(menu, previous_menu, previous_mode)
         except OSError as rollback_exc:
             raise RuntimeError(
                 f"menu surface state failed: {exc}; menu rollback failed: {rollback_exc}"

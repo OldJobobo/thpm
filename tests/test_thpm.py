@@ -6707,6 +6707,22 @@ class UpdateTests(Sandbox):
         self.assertIn('"refreshRequired"', update_source)
         self.assertIn('"thpm reconcile --refresh"', update_source)
 
+    def test_staged_runtime_reports_complete_template_ownership(self):
+        runtime = self.paths.home / "runtime.next"
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps(["thpm-current.tpl", "thpm-obsolete-only.tpl"]),
+            "",
+        )
+        with patch("thpm.update.subprocess.run", return_value=completed) as run:
+            owned = updater._runtime_owned_templates(runtime)
+
+        self.assertEqual(
+            owned, {"thpm-current.tpl", "thpm-obsolete-only.tpl"}
+        )
+        self.assertIn("from thpm.templates import owned_names", run.call_args.args[0][2])
+
     def test_staged_runtime_refuses_missing_or_symlinked_dependency_lock(self):
         source = self.paths.home / "source"
         source.mkdir()
@@ -6742,6 +6758,50 @@ class UpdateTests(Sandbox):
         with patch("thpm.update.sys.executable", str(python)):
             self.assertEqual(updater._source_runtime(), runtime)
 
+    def test_staged_ownership_failure_removes_staged_runtime(self):
+        runtime = self.paths.home / "runtime"
+        (runtime / "bin").mkdir(parents=True)
+        fake_python = runtime / "bin/python"
+        fake_python.write_text("old runtime")
+        source = self.paths.home / "source-tree"
+        source.mkdir()
+        (source / "VERSION").write_text("1.0.1")
+        update = {
+            "status": "available",
+            "origin": "source",
+            "currentVersion": "1.0.0rc1",
+            "availableVersion": "1.0.1",
+            "archiveUrl": "archive",
+            "checksumUrl": "checksum",
+        }
+        archive_bytes = b"archive"
+        digest = __import__("hashlib").sha256(archive_bytes).hexdigest()
+
+        def download(url, destination):
+            destination.write_bytes(
+                (digest + "  thpm.tar.gz\n").encode()
+                if url == "checksum"
+                else archive_bytes
+            )
+
+        def stage(_source, destination):
+            (destination / "bin").mkdir(parents=True)
+            (destination / "bin/python").write_text("staged")
+
+        with patch("thpm.update.check", return_value=update), patch(
+            "thpm.update._download", side_effect=download
+        ), patch("thpm.update._safe_extract", return_value=source), patch(
+            "thpm.update._stage_runtime", side_effect=stage
+        ), patch(
+            "thpm.update._runtime_owned_templates",
+            side_effect=RuntimeError("ownership failed"),
+        ), patch("thpm.update.sys.executable", str(fake_python)):
+            with self.assertRaisesRegex(RuntimeError, "ownership failed"):
+                updater.apply(self.paths)
+
+        self.assertEqual(fake_python.read_text(), "old runtime")
+        self.assertEqual(list(self.paths.home.glob("runtime.next-*")), [])
+
     def test_failed_activation_restores_previous_runtime(self):
         fake_root = self.paths.home / "runtime"
         (fake_root / "bin").mkdir(parents=True)
@@ -6765,6 +6825,7 @@ class UpdateTests(Sandbox):
             raise RuntimeError("install failed")
         with patch("thpm.update.check", return_value=result), patch("thpm.update._download", side_effect=download), \
              patch("thpm.update._safe_extract", return_value=source), patch("thpm.update._stage_runtime", side_effect=stage), \
+             patch("thpm.update._runtime_owned_templates", return_value=set()), \
              patch("thpm.update.sys.executable", str(fake_python)), patch("thpm.update.subprocess.run", side_effect=fail_install):
             with self.assertRaisesRegex(RuntimeError, "install failed"):
                 updater.apply(self.paths)
@@ -6801,6 +6862,8 @@ class UpdateTests(Sandbox):
             "thpm.update._download", side_effect=download
         ), patch("thpm.update._safe_extract", return_value=source), patch(
             "thpm.update._stage_runtime", side_effect=stage
+        ), patch(
+            "thpm.update._runtime_owned_templates", return_value=set()
         ), patch("thpm.update.sys.executable", str(fake_python)), patch(
             "thpm.update.subprocess.run", return_value=completed
         ) as run:

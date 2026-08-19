@@ -344,7 +344,7 @@ def parser() -> argparse.ArgumentParser:
     update_apply = update_sub.add_parser(
         "apply",
         help="install the latest release and reconcile integrations",
-        description="Update THPM through the system package manager, then reconcile.",
+        description="Update THPM through its configured installation source, then reconcile.",
     )
     update_apply.add_argument(
         "--terminal",

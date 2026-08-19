@@ -2652,6 +2652,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("check installation prerequisites", install_help)
         update_status_help = self._help_output("update", "status")
         self.assertIn("reusing a recent cached result", update_status_help)
+        update_apply_help = self._help_output("update", "apply")
+        self.assertIn("configured installation source", update_apply_help)
         uninstall_help = self._help_output("uninstall")
         self.assertIn("THPM-managed", uninstall_help)
 

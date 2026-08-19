@@ -2654,6 +2654,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("reusing a recent cached result", update_status_help)
         update_apply_help = self._help_output("update", "apply")
         self.assertIn("configured installation source", update_apply_help)
+        ui_open_help = self._help_output("ui", "open")
+        self.assertIn("interactive calls fall back to the TUI", ui_open_help)
         uninstall_help = self._help_output("uninstall")
         self.assertIn("THPM-managed", uninstall_help)
 

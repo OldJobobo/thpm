@@ -251,7 +251,7 @@ def parser() -> argparse.ArgumentParser:
         "sync": "synchronize installed control-panel assets",
         "remove": "remove the graphical control panel",
         "status": "show graphical control-panel installation status",
-        "open": "open the graphical control panel with terminal fallback",
+        "open": "open the graphical control panel; interactive calls fall back to the TUI",
     }
     for name, summary in ui_help.items():
         sub = ui_sub.add_parser(name, help=summary, description=_sentence(summary))

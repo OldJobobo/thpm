@@ -43,127 +43,309 @@ def _json_parse_errors(root: argparse.ArgumentParser, enabled: bool) -> None:
 
 def _output_options(command: argparse.ArgumentParser, *, nested: bool = False) -> None:
     default = argparse.SUPPRESS if nested else False
-    command.add_argument("--json", action="store_true", default=default)
-    command.add_argument("-v", "--verbose", action="store_true", default=default)
-    command.add_argument("-q", "--quiet", action="store_true", default=default)
+    command.add_argument(
+        "--json",
+        action="store_true",
+        default=default,
+        help="emit one machine-readable JSON document",
+    )
+    command.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=default,
+        help="show adapter details, changed paths, and command output",
+    )
+    command.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=default,
+        help="suppress interactive progress",
+    )
+
+
+def _sentence(summary: str) -> str:
+    return summary[:1].upper() + summary[1:]
 
 
 def parser() -> argparse.ArgumentParser:
     root = ThpmArgumentParser(
-        prog="thpm", description="Omarchy 4 theme integration manager"
+        prog="thpm",
+        description=(
+            "Manage external application themes alongside Omarchy 4.\n\n"
+            "Run without a command to list integrations and their current state."
+        ),
+        epilog=(
+            "examples:\n"
+            "  thpm status\n"
+            "  thpm enable firefox\n"
+            "  thpm run --verbose\n"
+            "  thpm reconcile --refresh\n"
+            "  thpm doctor cava --fix\n"
+            "  thpm update check"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    root.add_argument("--json", action="store_true", dest="global_json")
     root.add_argument(
-        "-v", "--verbose", action="store_true", dest="global_verbose"
+        "--json",
+        action="store_true",
+        dest="global_json",
+        help="emit one machine-readable JSON document",
     )
-    root.add_argument("-q", "--quiet", action="store_true", dest="global_quiet")
-    root.add_argument("--version", action="version", version=f"thpm {__version__}")
-    commands = root.add_subparsers(dest="command")
+    root.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        dest="global_verbose",
+        help="show adapter details, changed paths, and command output",
+    )
+    root.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        dest="global_quiet",
+        help="suppress interactive progress",
+    )
+    root.add_argument(
+        "--version",
+        action="version",
+        version=f"thpm {__version__}",
+        help="show the installed THPM version and exit",
+    )
+    commands = root.add_subparsers(
+        dest="command",
+        metavar="COMMAND",
+        title="commands",
+        description="Run 'thpm COMMAND --help' for command-specific options.",
+    )
 
-    for name in (
-        "list",
-        "status",
-        "native-status",
-        "reconcile",
-        "run",
-        "install",
-        "uninstall",
-        "migrate",
-        "version",
-        "tui",
-    ):
-        sub = commands.add_parser(name)
+    command_help = {
+        "list": "list integrations and whether they are enabled",
+        "status": "show integration state and ownership",
+        "native-status": "show state using the native-status compatibility command",
+        "reconcile": "repair managed files and optionally reapply the active theme",
+        "run": "apply the active theme to enabled integrations",
+        "install": "install hooks, templates, and the graphical manager",
+        "uninstall": "remove THPM-managed hooks, templates, and configuration",
+        "migrate": "migrate a recognized legacy installation",
+        "version": "show the installed THPM version",
+        "tui": "open the full-screen terminal interface",
+    }
+    for name, summary in command_help.items():
+        sub = commands.add_parser(name, help=summary, description=_sentence(summary))
         _output_options(sub)
         if name == "reconcile":
-            sub.add_argument("--refresh", action="store_true")
+            sub.add_argument(
+                "--refresh",
+                action="store_true",
+                help="reapply the active theme after reconciling files",
+            )
             sub.add_argument(
                 "--defer-upgrade-refresh",
                 action="store_true",
                 help=argparse.SUPPRESS,
             )
         if name == "install":
-            sub.add_argument("--no-ui", action="store_true")
-            sub.add_argument("--check", action="store_true", dest="install_check")
+            sub.add_argument(
+                "--no-ui",
+                action="store_true",
+                help="skip installation of the graphical manager",
+            )
+            sub.add_argument(
+                "--check",
+                action="store_true",
+                dest="install_check",
+                help="check installation prerequisites without changing files",
+            )
 
     for name in ("enable", "disable"):
-        sub = commands.add_parser(name)
-        sub.add_argument("plugin")
-        sub.add_argument("--yes", action="store_true")
+        summary = f"{name} ongoing synchronization for an integration"
+        sub = commands.add_parser(name, help=summary, description=_sentence(summary))
+        sub.add_argument("plugin", metavar="INTEGRATION", help="integration ID")
+        sub.add_argument(
+            "--yes",
+            action="store_true",
+            help=(
+                "confirm sensitive enablement non-interactively"
+                if name == "enable"
+                else argparse.SUPPRESS
+            ),
+        )
         _output_options(sub)
 
-    doctor = commands.add_parser("doctor")
-    doctor.add_argument("plugin", nargs="?")
-    doctor.add_argument("--fix", action="store_true", help="repair one diagnosed integration")
-    doctor.add_argument("--yes", action="store_true", help="confirm the repair non-interactively")
+    doctor = commands.add_parser(
+        "doctor",
+        help="diagnose integrations and optionally repair supported issues",
+        description="Diagnose all integrations or inspect one integration in detail.",
+    )
+    doctor.add_argument(
+        "plugin", nargs="?", metavar="INTEGRATION", help="integration ID"
+    )
+    doctor.add_argument(
+        "--fix", action="store_true", help="repair one diagnosed integration"
+    )
+    doctor.add_argument(
+        "--yes", action="store_true", help="confirm the repair non-interactively"
+    )
     _output_options(doctor)
 
     report = commands.add_parser(
-        "report", help="create a privacy-preserving support report"
+        "report",
+        help="create a privacy-preserving support report",
+        description="Create a redacted diagnostic report for remote troubleshooting.",
     )
-    report.add_argument("plugin", nargs="?")
-    report.add_argument("--output", type=Path)
+    report.add_argument(
+        "plugin", nargs="?", metavar="INTEGRATION", help="integration ID"
+    )
+    report.add_argument(
+        "--output", type=Path, metavar="PATH", help="write the report to PATH"
+    )
     _output_options(report)
 
-    hook = commands.add_parser("hook-run")
-    hook.add_argument("event")
-    hook.add_argument("event_args", nargs="*")
+    hook = commands.add_parser(
+        "hook-run",
+        help="process an Omarchy theme hook event",
+        description="Process a theme event supplied by Omarchy's hook runner.",
+    )
+    hook.add_argument("event", metavar="EVENT", help="Omarchy hook event name")
+    hook.add_argument(
+        "event_args", nargs="*", metavar="ARG", help="event arguments from Omarchy"
+    )
     _output_options(hook)
 
-    plugin = commands.add_parser("plugin")
-    plugin_sub = plugin.add_subparsers(dest="plugin_command", required=True)
+    plugin = commands.add_parser(
+        "plugin",
+        help="manage integrations through the compatibility namespace",
+        description="Enable or disable an integration.",
+    )
+    plugin_sub = plugin.add_subparsers(
+        dest="plugin_command", required=True, metavar="ACTION", title="actions"
+    )
     for name in ("enable", "disable"):
-        sub = plugin_sub.add_parser(name)
-        sub.add_argument("plugin")
-        sub.add_argument("--yes", action="store_true")
+        summary = f"{name} an integration"
+        sub = plugin_sub.add_parser(name, help=summary, description=_sentence(summary))
+        sub.add_argument("plugin", metavar="INTEGRATION", help="integration ID")
+        sub.add_argument(
+            "--yes",
+            action="store_true",
+            help=(
+                "confirm sensitive enablement non-interactively"
+                if name == "enable"
+                else argparse.SUPPRESS
+            ),
+        )
         _output_options(sub)
 
-    ui_cmd = commands.add_parser("ui")
-    ui_sub = ui_cmd.add_subparsers(dest="ui_command", required=True)
-    for name in ("state", "install", "sync", "remove", "status", "open"):
-        sub = ui_sub.add_parser(name)
+    ui_cmd = commands.add_parser(
+        "ui",
+        help="manage or open the graphical control panel",
+        description="Install, inspect, or open THPM's Omarchy Shell control panel.",
+    )
+    ui_sub = ui_cmd.add_subparsers(
+        dest="ui_command", required=True, metavar="ACTION", title="actions"
+    )
+    ui_help = {
+        "state": "show integration state used by the control panel",
+        "install": "install the graphical control panel",
+        "sync": "synchronize installed control-panel assets",
+        "remove": "remove the graphical control panel",
+        "status": "show graphical control-panel installation status",
+        "open": "open the graphical control panel; interactive calls fall back to the TUI",
+    }
+    for name, summary in ui_help.items():
+        sub = ui_sub.add_parser(name, help=summary, description=_sentence(summary))
         _output_options(sub)
-    surface = ui_sub.add_parser("surface")
+    surface = ui_sub.add_parser(
+        "surface",
+        help="inspect or choose the menu launcher surface",
+        description="Show or change whether the Omarchy menu opens the GUI or TUI.",
+    )
     surface.add_argument(
-        "surface", nargs="?", choices=("gui", "tui", "toggle")
+        "surface",
+        nargs="?",
+        choices=("gui", "tui", "toggle"),
+        metavar="{gui,tui,toggle}",
+        help="new launcher surface; omit to show the current choice",
     )
     _output_options(surface)
 
     config = commands.add_parser(
-        "config", help="inspect or change user preferences"
+        "config",
+        help="inspect or change user preferences",
+        description="Show user preferences or change one preference.",
     )
     _output_options(config)
-    config_sub = config.add_subparsers(dest="config_command")
+    config_sub = config.add_subparsers(
+        dest="config_command", metavar="SETTING", title="settings"
+    )
     restart_policy = config_sub.add_parser(
         "restart-policy",
         help="choose automatic restarts or notify-only behavior",
+        description="Show or change how running applications respond to theme changes.",
     )
     restart_policy.add_argument(
-        "policy", nargs="?", choices=("automatic", "notify", "toggle")
+        "policy",
+        nargs="?",
+        choices=("automatic", "notify", "toggle"),
+        metavar="{automatic,notify,toggle}",
+        help="new policy; omit to show the current policy",
     )
     _output_options(restart_policy, nested=True)
 
     zed = commands.add_parser(
-        "zed", help="inspect or configure the authored Zed theme override"
+        "zed",
+        help="inspect or configure the authored Zed theme override",
+        description="Manage the optional THPM Current authored theme for Zed.",
     )
-    zed_sub = zed.add_subparsers(dest="zed_command", required=True)
+    zed_sub = zed.add_subparsers(
+        dest="zed_command", required=True, metavar="ACTION", title="actions"
+    )
     zed_status = zed_sub.add_parser(
-        "status", help="show authored-theme and Omazed fallback diagnostics"
+        "status",
+        help="show authored-theme and Omazed fallback diagnostics",
+        description="Show the selected authored theme and available Zed fallback.",
     )
     _output_options(zed_status)
     zed_setup = zed_sub.add_parser(
-        "setup", help="select THPM Current with a one-time settings backup"
+        "setup",
+        help="select THPM Current with a one-time settings backup",
+        description="Install the authored theme and safely select THPM Current.",
     )
-    zed_setup.add_argument("--yes", action="store_true")
+    zed_setup.add_argument(
+        "--yes", action="store_true", help="confirm the settings change non-interactively"
+    )
     _output_options(zed_setup)
 
-    update = commands.add_parser("update")
+    update = commands.add_parser(
+        "update",
+        help="check for or apply THPM package updates",
+        description="Apply the latest THPM package update, then reconcile integrations.",
+    )
     _output_options(update)
-    update_sub = update.add_subparsers(dest="update_command")
-    check = update_sub.add_parser("check")
-    check.add_argument("--force", action="store_true")
+    update_sub = update.add_subparsers(
+        dest="update_command", metavar="ACTION", title="actions"
+    )
+    check = update_sub.add_parser(
+        "check",
+        help="check whether a newer release is available",
+        description="Check the configured package source for a newer THPM release.",
+    )
+    check.add_argument(
+        "--force", action="store_true", help="ignore the cached update check"
+    )
     _output_options(check, nested=True)
-    _output_options(update_sub.add_parser("status"), nested=True)
-    update_apply = update_sub.add_parser("apply")
+    update_status = update_sub.add_parser(
+        "status",
+        help="check update availability using the normal cache policy",
+        description="Check for updates, reusing a recent cached result when available.",
+    )
+    _output_options(update_status, nested=True)
+    update_apply = update_sub.add_parser(
+        "apply",
+        help="install the latest release and reconcile integrations",
+        description="Update THPM through its configured installation source, then reconcile.",
+    )
     update_apply.add_argument(
         "--terminal",
         action="store_true",

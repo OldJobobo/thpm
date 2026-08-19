@@ -2615,7 +2615,7 @@ class CliTests(unittest.TestCase):
             "update",
         )
         for command in commands:
-            self.assertRegex(output, rf"(?m)^    {re.escape(command)}\s")
+            self.assertRegex(output, rf"(?m)^    {re.escape(command)}\s+\S")
         self.assertIn("Run 'thpm COMMAND --help'", output)
         self.assertIn("thpm enable firefox", output)
         self.assertIn("--json", output)
@@ -2632,18 +2632,28 @@ class CliTests(unittest.TestCase):
             with self.subTest(command=command):
                 output = self._help_output(command)
                 for action in actions:
-                    self.assertRegex(output, rf"(?m)^    {re.escape(action)}\s")
+                    self.assertRegex(output, rf"(?m)^    {re.escape(action)}\s+\S")
 
     def test_command_help_explains_arguments_and_flags(self):
         enable_help = self._help_output("enable")
         self.assertIn("INTEGRATION", enable_help)
-        self.assertIn("confirm configuration changes", enable_help)
+        self.assertIn("confirm sensitive enablement", enable_help)
+        disable_help = self._help_output("disable")
+        self.assertNotIn("--yes", disable_help)
         reconcile_help = self._help_output("reconcile")
         self.assertIn("--refresh", reconcile_help)
         self.assertIn("reapply the active theme", reconcile_help)
         report_help = self._help_output("report")
         self.assertIn("--output PATH", report_help)
         self.assertIn("redacted diagnostic report", report_help)
+
+    def test_reviewed_help_claims_match_command_behavior(self):
+        install_help = self._help_output("install")
+        self.assertIn("check installation prerequisites", install_help)
+        update_status_help = self._help_output("update", "status")
+        self.assertIn("reusing a recent cached result", update_status_help)
+        uninstall_help = self._help_output("uninstall")
+        self.assertIn("THPM-managed", uninstall_help)
 
     def test_json_usage_errors_are_machine_readable(self):
         with patch("sys.stdout", new_callable=io.StringIO) as stdout, patch(

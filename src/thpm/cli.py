@@ -65,6 +65,10 @@ def _output_options(command: argparse.ArgumentParser, *, nested: bool = False) -
     )
 
 
+def _sentence(summary: str) -> str:
+    return summary[:1].upper() + summary[1:]
+
+
 def parser() -> argparse.ArgumentParser:
     root = ThpmArgumentParser(
         prog="thpm",
@@ -129,7 +133,7 @@ def parser() -> argparse.ArgumentParser:
         "tui": "open the full-screen terminal interface",
     }
     for name, summary in command_help.items():
-        sub = commands.add_parser(name, help=summary, description=summary.capitalize())
+        sub = commands.add_parser(name, help=summary, description=_sentence(summary))
         _output_options(sub)
         if name == "reconcile":
             sub.add_argument(
@@ -152,17 +156,21 @@ def parser() -> argparse.ArgumentParser:
                 "--check",
                 action="store_true",
                 dest="install_check",
-                help="check installation health without changing files",
+                help="check installation prerequisites without changing files",
             )
 
     for name in ("enable", "disable"):
         summary = f"{name} ongoing synchronization for an integration"
-        sub = commands.add_parser(name, help=summary, description=summary.capitalize())
+        sub = commands.add_parser(name, help=summary, description=_sentence(summary))
         sub.add_argument("plugin", metavar="INTEGRATION", help="integration ID")
         sub.add_argument(
             "--yes",
             action="store_true",
-            help="confirm configuration changes non-interactively",
+            help=(
+                "confirm sensitive enablement non-interactively"
+                if name == "enable"
+                else argparse.SUPPRESS
+            ),
         )
         _output_options(sub)
 
@@ -216,12 +224,16 @@ def parser() -> argparse.ArgumentParser:
     )
     for name in ("enable", "disable"):
         summary = f"{name} an integration"
-        sub = plugin_sub.add_parser(name, help=summary, description=summary.capitalize())
+        sub = plugin_sub.add_parser(name, help=summary, description=_sentence(summary))
         sub.add_argument("plugin", metavar="INTEGRATION", help="integration ID")
         sub.add_argument(
             "--yes",
             action="store_true",
-            help="confirm configuration changes non-interactively",
+            help=(
+                "confirm sensitive enablement non-interactively"
+                if name == "enable"
+                else argparse.SUPPRESS
+            ),
         )
         _output_options(sub)
 
@@ -242,7 +254,7 @@ def parser() -> argparse.ArgumentParser:
         "open": "open the graphical control panel with terminal fallback",
     }
     for name, summary in ui_help.items():
-        sub = ui_sub.add_parser(name, help=summary, description=summary.capitalize())
+        sub = ui_sub.add_parser(name, help=summary, description=_sentence(summary))
         _output_options(sub)
     surface = ui_sub.add_parser(
         "surface",
@@ -325,8 +337,8 @@ def parser() -> argparse.ArgumentParser:
     _output_options(check, nested=True)
     update_status = update_sub.add_parser(
         "status",
-        help="show cached update availability",
-        description="Show the result of the latest update check.",
+        help="check update availability using the normal cache policy",
+        description="Check for updates, reusing a recent cached result when available.",
     )
     _output_options(update_status, nested=True)
     update_apply = update_sub.add_parser(

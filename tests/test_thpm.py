@@ -2584,6 +2584,67 @@ class PresentationTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def _help_output(self, *arguments: str) -> str:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            with self.assertRaisesRegex(SystemExit, "0"):
+                main([*arguments, "--help"])
+        return stdout.getvalue()
+
+    def test_root_help_lists_every_command_with_descriptions(self):
+        output = self._help_output()
+        commands = (
+            "list",
+            "status",
+            "native-status",
+            "reconcile",
+            "run",
+            "install",
+            "uninstall",
+            "migrate",
+            "version",
+            "tui",
+            "enable",
+            "disable",
+            "doctor",
+            "report",
+            "hook-run",
+            "plugin",
+            "ui",
+            "config",
+            "zed",
+            "update",
+        )
+        for command in commands:
+            self.assertRegex(output, rf"(?m)^    {re.escape(command)}\s")
+        self.assertIn("Run 'thpm COMMAND --help'", output)
+        self.assertIn("thpm enable firefox", output)
+        self.assertIn("--json", output)
+        self.assertIn("machine-readable JSON", output)
+
+    def test_nested_help_lists_available_actions(self):
+        expected_actions = {
+            "ui": ("state", "install", "sync", "remove", "status", "open", "surface"),
+            "config": ("restart-policy",),
+            "zed": ("status", "setup"),
+            "update": ("check", "status", "apply"),
+        }
+        for command, actions in expected_actions.items():
+            with self.subTest(command=command):
+                output = self._help_output(command)
+                for action in actions:
+                    self.assertRegex(output, rf"(?m)^    {re.escape(action)}\s")
+
+    def test_command_help_explains_arguments_and_flags(self):
+        enable_help = self._help_output("enable")
+        self.assertIn("INTEGRATION", enable_help)
+        self.assertIn("confirm configuration changes", enable_help)
+        reconcile_help = self._help_output("reconcile")
+        self.assertIn("--refresh", reconcile_help)
+        self.assertIn("reapply the active theme", reconcile_help)
+        report_help = self._help_output("report")
+        self.assertIn("--output PATH", report_help)
+        self.assertIn("redacted diagnostic report", report_help)
+
     def test_json_usage_errors_are_machine_readable(self):
         with patch("sys.stdout", new_callable=io.StringIO) as stdout, patch(
             "sys.stderr", new_callable=io.StringIO

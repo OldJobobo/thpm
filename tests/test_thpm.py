@@ -4337,27 +4337,54 @@ class IntegrationTests(Sandbox):
         (extension / "package.json").write_text(json.dumps(manifest))
         (extension / "themes/theme.json").write_text(json.dumps({"name": "Dos-Moos", "type": "dark", "colors": {}}))
 
-    def test_disabling_browser_restores_stylesheet_and_removes_import(self):
-        base = self.paths.home / ".mozilla/firefox"
-        profile = base / "profile.default"
-        profile.mkdir(parents=True)
-        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
-        source = self.paths.current_theme / "thpm-firefox.css"
+    def test_disabling_browser_restores_stylesheet_and_reports_restart(self):
+        assets = Path(__file__).parents[1] / "assets"
+        cases = (
+            ("firefox", "Firefox", ".mozilla/firefox"),
+            ("zen", "Zen Browser", ".zen"),
+        )
+        for plugin_id, label, base_name in cases:
+            with self.subTest(plugin_id=plugin_id):
+                base = self.paths.home / base_name
+                profile = base / "profile.default"
+                profile.mkdir(parents=True)
+                (base / "profiles.ini").write_text(
+                    "[Install1]\nDefault=profile.default\n"
+                )
+                source = self.paths.current_theme / f"thpm-{plugin_id}.css"
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("theme css")
+                managed = profile / f"chrome/thpm-{plugin_id}.css"
+                managed.parent.mkdir(parents=True)
+                managed.write_text("user css")
+                apply(plugin_id, self.paths)
+                enabled = load(self.paths)
+                enabled[plugin_id] = True
+                save(self.paths, enabled)
+                with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+                    payload = Service(self.paths).set_enabled(
+                        plugin_id, False, refresh=False
+                    )
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["restartRequired"], [label])
+                self.assertEqual(managed.read_text(), "user css")
+                self.assertFalse((profile / "chrome/userChrome.css").exists())
+                self.assertFalse(source.exists())
+
+    def test_disabling_browser_without_profile_change_does_not_require_restart(self):
+        source = self.paths.current_theme / "thpm-zen.css"
         source.parent.mkdir(parents=True)
         source.write_text("theme css")
-        managed = profile / "chrome/thpm-firefox.css"
-        managed.parent.mkdir(parents=True)
-        managed.write_text("user css")
-        apply("firefox", self.paths)
-        assets = Path(__file__).parents[1] / "assets"
         enabled = load(self.paths)
-        enabled["firefox"] = True
+        enabled["zen"] = True
         save(self.paths, enabled)
+        assets = Path(__file__).parents[1] / "assets"
+
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
-            payload = Service(self.paths).set_enabled("firefox", False, refresh=False)
+            payload = Service(self.paths).set_enabled("zen", False, refresh=False)
+
         self.assertTrue(payload["ok"])
-        self.assertEqual(managed.read_text(), "user css")
-        self.assertFalse((profile / "chrome/userChrome.css").exists())
+        self.assertEqual(payload["restartRequired"], [])
         self.assertFalse(source.exists())
 
     def test_browser_profile_cannot_escape_profile_root(self):
@@ -5820,6 +5847,37 @@ class IntegrationTests(Sandbox):
         self.assertEqual(managed.read_text(), "/* preferred */\n")
         self.assertEqual(result.status, "applied")
         self.assertEqual(set(result.changed), {str(managed), str(user_chrome)})
+        self.assertEqual(result.restartRequired, ["Firefox"])
+        unchanged = apply("firefox", self.paths)
+        self.assertEqual(unchanged.restartRequired, [])
+
+    def test_zen_reports_restart_only_after_browser_css_changes(self):
+        generated = self.paths.current_theme / "thpm-zen.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("/* generated */\n")
+        base = self.paths.home / ".zen"
+        base.mkdir(parents=True)
+        (base / "profiles.ini").write_text(
+            "[Install1]\nDefault=profile.default\n"
+        )
+        user_chrome = base / "profile.default/chrome/userChrome.css"
+        user_chrome.parent.mkdir(parents=True)
+        user_chrome.write_text(
+            "/* THPM Zen hook start */\n"
+            '@import url("./thpm-zen-colors.css");\n'
+            '@import url("./thpm-zen-userChrome.css");\n'
+            "/* THPM Zen hook end */\n"
+            "/* user styles */\n"
+        )
+
+        changed = apply("zen", self.paths)
+        unchanged = apply("zen", self.paths)
+
+        self.assertEqual(changed.restartRequired, ["Zen Browser"])
+        self.assertEqual(unchanged.restartRequired, [])
+        self.assertIn('@import url("thpm-zen.css");', user_chrome.read_text())
+        self.assertNotIn("THPM Zen hook", user_chrome.read_text())
+        self.assertIn("/* user styles */", user_chrome.read_text())
 
     def test_unresolved_generated_output_is_refused_and_reported_unavailable(self):
         generated = self.paths.current_theme / "thpm-fish.fish"
@@ -6017,6 +6075,35 @@ class IntegrationTests(Sandbox):
             self.assertIn(key, document["theme"])
         self.assertIn("composerRing", document["theme"]["colors"])
         self.assertIn("brightWhite", document["theme"]["darkTerminal"])
+
+    def test_zen_template_themes_modern_browser_chrome(self):
+        template = (
+            Path(__file__).parents[1] / "assets/templates/thpm-zen.css.tpl"
+        ).read_text()
+
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            self.assertIn(key, CANONICAL_COLORS)
+            return CANONICAL_COLORS[key]
+
+        rendered = re.sub(r"\{\{ ([a-z_]+) \}\}", replace, template)
+        self.assertNotIn("{{", rendered)
+        for declaration in (
+            "--zen-colors-primary: var(--thpm-bg) !important;",
+            "--zen-colors-secondary: var(--thpm-surface) !important;",
+            "--zen-colors-tertiary: var(--thpm-surface-raised) !important;",
+            "--lwt-accent-color: var(--thpm-bg) !important;",
+            "--toolbar-bgcolor: var(--thpm-bg) !important;",
+            "--toolbar-field-background-color: var(--thpm-surface) !important;",
+            "--arrowpanel-background: var(--thpm-surface) !important;",
+        ):
+            self.assertIn(declaration, rendered)
+        self.assertIn(
+            "#zen-sidebar-top-buttons,\n"
+            "#zen-sidebar-foot-buttons,\n"
+            "#zen-appcontent-wrapper {",
+            rendered,
+        )
 
     def test_heroic_template_defines_heroic_css_variables(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-heroic.css.tpl").read_text()

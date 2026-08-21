@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-- Theme modern Zen Browser chrome surfaces with the generated semantic palette and report the required browser restart after Firefox or Zen stylesheet changes.
+## 1.0.0rc22 - 2026-08-21
+
+- Theme modern Zen Browser chrome with the generated semantic palette, migrate complete legacy Firefox and Zen hook imports without disturbing user CSS, and report browser restarts only when profile files actually change.
+- Make the graphical manager self-healing through a stable launcher, staged QML synchronization, bounded Shell verification, a recovery TUI, richer UI status, and an idempotent post-update sync hook.
+- Serialize every user-scoped menu writer and make surface selection transactional, preserving the previous menu and UI state across invalid JSONC, encoding failures, concurrent repairs, and failed state writes.
+- Preserve relative, absolute, and dangling symlinks during source-update rollback, and derive complete managed-template ownership from the staged runtime before activation.
+- Keep direct `thpm zed setup` from silently changing persistent `zed-extra` synchronization state while retaining normal enable behavior across the CLI, TUI, and GUI.
+- Document every root command, nested action, positional argument, global option, and command-specific flag in the built-in CLI help.
 
 ## 1.0.0rc21 - 2026-08-17
 

@@ -1,6 +1,7 @@
 # Maintainer: OldJobobo <aur at oldjobobo dot com>
 pkgname=thpm-git
-pkgver=1.0.0rc21.r0.gb77fef1
+# Pre-tag placeholder; replace with the tagged rc22 describe value.
+pkgver=1.0.0rc22.r0.g0000000
 pkgrel=1
 pkgdesc='Omarchy 4-native manager for external theme integrations (git)'
 arch=('any')

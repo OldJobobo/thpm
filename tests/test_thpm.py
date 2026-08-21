@@ -34,6 +34,20 @@ from thpm.audit import (
     record_payload,
     sanitize,
 )
+from thpm.browser import (
+    ZenProcess,
+    ZenRestartError,
+    ZenRestartPlan,
+    ZenRestartResult,
+    _close_windows as close_zen_windows,
+    _discover as discover_zen_restart,
+    _launch as launch_zen,
+    _process as zen_process,
+    _process_exited as zen_process_exited,
+    _profile_command_is_safe,
+    _started as started_zen,
+    restart_zen,
+)
 from thpm.cava import (
     CavaError,
 )
@@ -4177,6 +4191,266 @@ class CavaTests(Sandbox):
         self.assertFalse(load(self.paths)["fish"])
 
 
+class BrowserRestartTests(Sandbox):
+    def plan(self, *, addresses=("0xabc",)):
+        profile = self.paths.home / ".zen/profile.default"
+        return ZenRestartPlan(
+            ZenProcess(
+                4242,
+                98765,
+                Path("/opt/zen-browser-bin/zen-bin"),
+                ("/opt/zen-browser-bin/zen-bin",),
+            ),
+            profile,
+            addresses,
+            "/usr/bin/hyprctl",
+            "/usr/bin/systemd-run",
+            "/usr/bin/uwsm-app",
+        )
+
+    def test_process_identity_accepts_only_same_user_main_zen_process(self):
+        proc_root = self.paths.home / "proc"
+        process = proc_root / "4242"
+        process.mkdir(parents=True)
+        executable = self.paths.home / "zen-bin"
+        executable.write_text("#!/bin/sh\n")
+        executable.chmod(0o755)
+        (process / "exe").symlink_to(executable)
+        (process / "cmdline").write_bytes(f"{executable}\0".encode())
+        fields = ["S", *(["0"] * 18), "98765"]
+        (process / "stat").write_text(f"4242 (zen-bin) {' '.join(fields)}\n")
+
+        discovered = zen_process(4242, proc_root)
+
+        self.assertIsNotNone(discovered)
+        self.assertEqual(discovered.start_time, 98765)
+        (process / "cmdline").write_bytes(
+            f"{executable}\0-contentproc\0".encode()
+        )
+        self.assertIsNone(zen_process(4242, proc_root))
+
+    def test_process_exit_requires_the_pid_to_disappear(self):
+        proc_root = self.paths.home / "proc"
+        process = proc_root / "4242"
+        process.mkdir(parents=True)
+
+        self.assertFalse(zen_process_exited(4242, proc_root))
+        process.rmdir()
+        self.assertTrue(zen_process_exited(4242, proc_root))
+
+    def test_only_default_or_exact_profile_launch_arguments_are_restartable(self):
+        profile = self.paths.home / ".zen/profile.default"
+        process = self.plan().process
+        exact = ZenProcess(
+            process.pid,
+            process.start_time,
+            process.executable,
+            (str(process.executable), "--profile", str(profile)),
+        )
+        url_launch = ZenProcess(
+            process.pid,
+            process.start_time,
+            process.executable,
+            (str(process.executable), "https://example.test"),
+        )
+
+        self.assertTrue(_profile_command_is_safe(process, profile))
+        self.assertTrue(_profile_command_is_safe(exact, profile))
+        self.assertFalse(_profile_command_is_safe(url_launch, profile))
+
+    def test_discovery_correlates_profile_process_and_exact_windows(self):
+        expected = self.plan(addresses=("0xabc", "0xdef"))
+        clients = [
+            {"pid": 4242, "address": "0xabc", "class": "zen"},
+            {"pid": 4242, "address": "0xdef", "initialClass": "zen"},
+        ]
+        commands = {
+            "hyprctl": expected.hyprctl,
+            "systemd-run": expected.systemd_run,
+            "uwsm-app": expected.uwsm_app,
+        }
+        with patch.dict(
+            os.environ, {"HYPRLAND_INSTANCE_SIGNATURE": "test-instance"}
+        ), patch("thpm.browser.shutil.which", side_effect=commands.get), patch(
+            "thpm.browser._clients", return_value=clients
+        ), patch("thpm.browser._lock_owner", return_value=4242), patch(
+            "thpm.browser._process", return_value=expected.process
+        ), patch("thpm.browser._other_active_profile_pids", return_value=set()):
+            state, plan, warning = discover_zen_restart(
+                expected.profile.parent, expected.profile
+            )
+
+        self.assertEqual(state, "running")
+        self.assertEqual(plan, expected)
+        self.assertEqual(warning, "")
+
+    def test_closed_zen_is_not_launched_or_reported(self):
+        with patch("thpm.browser._discover", return_value=("closed", None, "")), patch(
+            "thpm.browser._close_windows"
+        ) as close:
+            result = restart_zen(
+                self.paths.home / ".zen",
+                self.paths.home / ".zen/profile.default",
+                automatic=True,
+            )
+
+        self.assertEqual(result, ZenRestartResult())
+        close.assert_not_called()
+
+    def test_notify_policy_leaves_running_zen_untouched(self):
+        plan = self.plan()
+        with patch(
+            "thpm.browser._discover", return_value=("running", plan, "")
+        ), patch("thpm.browser._close_windows") as close:
+            result = restart_zen(plan.profile.parent, plan.profile, automatic=False)
+
+        self.assertEqual(result.restart_required, ["Zen Browser"])
+        close.assert_not_called()
+
+    def test_close_and_launch_commands_use_exact_validated_targets(self):
+        plan = self.plan(addresses=("0xabc", "0xdef"))
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with patch("thpm.browser.subprocess.run", return_value=completed) as run:
+            close_zen_windows(plan)
+            launch_zen(plan)
+
+        close_command = run.call_args_list[0].args[0]
+        self.assertEqual(close_command[:2], [plan.hyprctl, "eval"])
+        self.assertIn('"address:0xabc"', close_command[2])
+        self.assertIn('"address:0xdef"', close_command[2])
+        self.assertIn("hl.get_windows()", close_command[2])
+        self.assertIn("window.pid ~= 4242", close_command[2])
+        self.assertIn("window.class ~= 'zen'", close_command[2])
+        self.assertIn("close({window=window})", close_command[2])
+        launch_command = run.call_args_list[1].args[0]
+        self.assertEqual(launch_command[0], plan.systemd_run)
+        self.assertEqual(
+            launch_command[-5:],
+            [
+                plan.uwsm_app,
+                "--",
+                str(plan.process.executable),
+                "--profile",
+                str(plan.profile),
+            ],
+        )
+        self.assertNotIn("https://", " ".join(launch_command))
+
+    def test_automatic_restart_closes_all_windows_and_launches_once(self):
+        plan = self.plan(addresses=("0xabc", "0xdef"))
+        with patch(
+            "thpm.browser._discover", return_value=("running", plan, "")
+        ), patch("thpm.browser._close_windows") as close, patch(
+            "thpm.browser._shut_down", return_value=True
+        ) as shut_down, patch("thpm.browser._launch") as launch, patch(
+            "thpm.browser._started", return_value=True
+        ) as started:
+            result = restart_zen(plan.profile.parent, plan.profile, automatic=True)
+
+        close.assert_called_once_with(plan)
+        shut_down.assert_called_once_with(plan)
+        launch.assert_called_once_with(plan)
+        started.assert_called_once_with(
+            plan.profile.parent, plan.profile, 4242, 2
+        )
+        self.assertEqual(
+            result.actions,
+            ["Zen Browser close requested for 2 window(s)", "Zen Browser relaunched"],
+        )
+        self.assertEqual(result.restart_required, [])
+
+    def test_startup_verification_waits_for_every_restored_window(self):
+        original = self.plan(addresses=("0xabc", "0xdef"))
+        new_process = ZenProcess(
+            5252,
+            99999,
+            original.process.executable,
+            (
+                str(original.process.executable),
+                "--profile",
+                str(original.profile),
+            ),
+        )
+        partial = ZenRestartPlan(
+            new_process,
+            original.profile,
+            ("0x111",),
+            original.hyprctl,
+            original.systemd_run,
+            original.uwsm_app,
+        )
+        complete = ZenRestartPlan(
+            new_process,
+            original.profile,
+            ("0x111", "0x222"),
+            original.hyprctl,
+            original.systemd_run,
+            original.uwsm_app,
+        )
+        with patch(
+            "thpm.browser._discover",
+            side_effect=[("running", partial, ""), ("running", complete, "")],
+        ), patch("thpm.browser.time.monotonic", side_effect=[0.0, 0.0, 0.1]), patch(
+            "thpm.browser.time.sleep"
+        ):
+            restored = started_zen(
+                original.profile.parent,
+                original.profile,
+                original.process.pid,
+                2,
+            )
+
+        self.assertTrue(restored)
+
+    def test_ambiguous_identity_falls_back_without_mutation(self):
+        with patch(
+            "thpm.browser._discover",
+            return_value=("ambiguous", None, "multiple Zen profiles are active"),
+        ), patch("thpm.browser._close_windows") as close:
+            result = restart_zen(
+                self.paths.home / ".zen",
+                self.paths.home / ".zen/profile.default",
+                automatic=True,
+            )
+
+        self.assertEqual(result.restart_required, ["Zen Browser"])
+        self.assertIn("multiple Zen profiles", result.warnings[0])
+        close.assert_not_called()
+
+    def test_changed_window_set_falls_back_before_closing(self):
+        original = self.plan(addresses=("0xabc",))
+        changed = self.plan(addresses=("0xdef",))
+        with patch(
+            "thpm.browser._discover",
+            side_effect=[("running", original, ""), ("running", changed, "")],
+        ), patch("thpm.browser._close_windows") as close:
+            result = restart_zen(
+                original.profile.parent, original.profile, automatic=True
+            )
+
+        self.assertEqual(result.restart_required, ["Zen Browser"])
+        self.assertIn("changed", result.warnings[0])
+        close.assert_not_called()
+
+    def test_shutdown_timeout_never_relaunches_or_force_kills(self):
+        plan = self.plan()
+        with patch(
+            "thpm.browser._discover", return_value=("running", plan, "")
+        ), patch("thpm.browser._close_windows"), patch(
+            "thpm.browser._shut_down", return_value=False
+        ), patch("thpm.browser._launch") as launch, self.assertRaisesRegex(
+            ZenRestartError, "did not finish closing"
+        ) as raised:
+            restart_zen(plan.profile.parent, plan.profile, automatic=True)
+
+        launch.assert_not_called()
+        self.assertEqual(raised.exception.restart_required, ["Zen Browser"])
+        self.assertEqual(
+            raised.exception.actions,
+            ["Zen Browser close requested for 1 window(s)"],
+        )
+
+
 class IntegrationTests(Sandbox):
     def test_obsidian_terminal_updates_discovered_vault_and_preserves_settings(self):
         self.write_palette()
@@ -5870,14 +6144,81 @@ class IntegrationTests(Sandbox):
             "/* user styles */\n"
         )
 
-        changed = apply("zen", self.paths)
-        unchanged = apply("zen", self.paths)
+        with patch(
+            "thpm.integrations.restart_zen",
+            return_value=ZenRestartResult(restart_required=["Zen Browser"]),
+        ) as restart:
+            changed = apply("zen", self.paths)
+            unchanged = apply("zen", self.paths)
 
         self.assertEqual(changed.restartRequired, ["Zen Browser"])
         self.assertEqual(unchanged.restartRequired, [])
+        restart.assert_called_once_with(
+            base,
+            (base / "profile.default").resolve(),
+            automatic=True,
+        )
         self.assertIn('@import url("thpm-zen.css");', user_chrome.read_text())
         self.assertNotIn("THPM Zen hook", user_chrome.read_text())
         self.assertIn("/* user styles */", user_chrome.read_text())
+
+    def test_zen_automatic_policy_restarts_after_change_and_explicit_reapply(self):
+        generated = self.paths.current_theme / "thpm-zen.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("/* generated */\n")
+        base = self.paths.home / ".zen"
+        base.mkdir(parents=True)
+        (base / "profiles.ini").write_text(
+            "[Install1]\nDefault=profile.default\n"
+        )
+        restart_result = ZenRestartResult(
+            actions=[
+                "Zen Browser close requested for 1 window(s)",
+                "Zen Browser relaunched",
+            ]
+        )
+
+        with patch(
+            "thpm.integrations.restart_zen", return_value=restart_result
+        ) as restart:
+            changed = apply("zen", self.paths, automatic_restarts=True)
+            forced = apply(
+                "zen",
+                self.paths,
+                automatic_restarts=True,
+                force_reload=True,
+            )
+
+        self.assertEqual(changed.restartRequired, [])
+        self.assertEqual(forced.restartRequired, [])
+        self.assertEqual(changed.actions, restart_result.actions)
+        self.assertEqual(forced.actions, restart_result.actions)
+        self.assertEqual(restart.call_count, 2)
+        for restart_call in restart.call_args_list:
+            self.assertTrue(restart_call.kwargs["automatic"])
+
+    def test_zen_restart_failure_preserves_changed_files_and_pending_restart(self):
+        generated = self.paths.current_theme / "thpm-zen.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("/* generated */\n")
+        base = self.paths.home / ".zen"
+        base.mkdir(parents=True)
+        (base / "profiles.ini").write_text(
+            "[Install1]\nDefault=profile.default\n"
+        )
+        failure = ZenRestartError(
+            "Zen did not finish closing; it was not relaunched",
+            actions=["Zen Browser close requested for 1 window(s)"],
+        )
+
+        with patch("thpm.integrations.restart_zen", side_effect=failure), self.assertRaises(
+            ApplyFailure
+        ) as raised:
+            apply("zen", self.paths, automatic_restarts=True)
+
+        self.assertEqual(len(raised.exception.changed), 2)
+        self.assertEqual(raised.exception.actions, failure.actions)
+        self.assertEqual(raised.exception.restart_required, ["Zen Browser"])
 
     def test_unresolved_generated_output_is_refused_and_reported_unavailable(self):
         generated = self.paths.current_theme / "thpm-fish.fish"

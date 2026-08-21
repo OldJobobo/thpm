@@ -4371,6 +4371,22 @@ class IntegrationTests(Sandbox):
                 self.assertFalse((profile / "chrome/userChrome.css").exists())
                 self.assertFalse(source.exists())
 
+    def test_disabling_browser_without_profile_change_does_not_require_restart(self):
+        source = self.paths.current_theme / "thpm-zen.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("theme css")
+        enabled = load(self.paths)
+        enabled["zen"] = True
+        save(self.paths, enabled)
+        assets = Path(__file__).parents[1] / "assets"
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled("zen", False, refresh=False)
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["restartRequired"], [])
+        self.assertFalse(source.exists())
+
     def test_browser_profile_cannot_escape_profile_root(self):
         generated = self.paths.current_theme / "thpm-firefox.css"
         generated.parent.mkdir(parents=True)

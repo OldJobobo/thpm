@@ -860,7 +860,12 @@ class Service:
                     )
                     changed.extend(cleanup_changed)
                     record_cleanup(cleanup_warnings)
-                    if plugin_id in {"firefox", "zen"} and cleanup_changed:
+                    browser_profile_changed = plugin_id in {"firefox", "zen"} and any(
+                        Path(path)
+                        != self.paths.current_theme / f"thpm-{plugin_id}.css"
+                        for path in cleanup_changed
+                    )
+                    if browser_profile_changed:
                         restart_required.append(BY_ID[plugin_id].label)
         refreshed = False
         if value and refresh:

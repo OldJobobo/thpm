@@ -1,6 +1,6 @@
-## THPM 1.0.0rc21 is now available
+## THPM 1.0.0rc22 is now available
 
-**THPM is built for Omarchy Quattro and targets Omarchy 4.x. RC21 is a focused reliability release for updates and desktop appearance diagnostics.**
+**THPM is built for Omarchy Quattro and targets Omarchy 4.x. RC22 is a browser-theming and reliability release for Zen, the graphical manager, menu updates, source rollback, Zed setup, and CLI discoverability.**
 
 ### Install or upgrade the latest release
 
@@ -10,30 +10,32 @@ curl -fsSL https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install
 
 The installer resolves the newest published GitHub release, verifies its source archive and checksum, builds the Arch package with `makepkg`, installs it through pacman, and completes THPM's per-user setup.
 
-## What’s new in rc21
+## What’s new in rc22
 
-### Updates now synchronize every THPM surface
+### Zen follows the active Omarchy palette
 
-`thpm update` now completes the package upgrade, integration reconciliation, active-theme refresh, and graphical control-panel installation as one coordinated transaction. Users no longer need to run `thpm ui install` after every THPM-managed update.
+The generated Zen fallback now styles modern browser chrome, including Zen palette variables, sidebar controls, navigation surfaces, the URL bar, and the app-content wrapper. Upgraded profiles migrate complete legacy Firefox and Zen hook import blocks while preserving unrelated user CSS.
 
-The same behavior is available from the CLI, Textual TUI, and QML control panel. Interactive CLI updates stay in the current terminal. TUI, QML, and non-TTY human callers open a visible Omarchy terminal for package authorization and receive the final structured result through a private mode-`0600` handoff file.
+Firefox and Zen now report a required restart after profile stylesheets change so new `userChrome.css` colors are not mistaken for a failed hook. Removing only an unused rendered source does not produce a false restart notice. The Zen path was also validated live against the current browser release and an active Omarchy palette.
 
-If the package update commits but theme or control-panel synchronization fails, THPM reports the committed partial failure honestly and provides the exact recovery command instead of presenting the operation as a total success or losing the result.
+### The graphical manager and menu recover safely
 
-### Doctor finds stale GTK and desktop appearance state
+The Omarchy menu now launches the graphical manager through a stable `thpm ui open` path. THPM can stage and switch stale QML, verify Shell discovery and readiness with bounded retries, and open the TUI as a recovery surface when the graphical path cannot load. An idempotent post-update hook keeps already-installed control panels synchronized.
 
-Doctor now detects unmanaged and stale GTK CSS—including recognizable Aether overrides—legacy `gtk-application-prefer-dark-theme` settings, GNOME color-scheme or GTK-theme drift, desktop-portal color-scheme drift, and failed native probes.
+Every user-scoped menu writer now shares one per-user lock. Surface changes validate the next JSONC document before committing, restore the previous menu when state persistence fails, and remain coherent across concurrent install, synchronization, repair, removal, and surface-selection operations.
 
-The checks remain read-only and ownership-safe. GTK compatibility findings stay attributed to `gtk-css-compat`, while GNOME and portal findings remain under `native-gnome`; THPM does not claim or rewrite configuration it does not own.
+### Updates, Zed setup, and CLI help are more predictable
 
-### Safer verified release installation
+Source-update rollback now preserves relative, absolute, and dangling symlinks exactly. Snapshot ownership comes from the staged runtime's complete template registry, including obsolete outputs that the next version must remove.
 
-The verified release-source installer can replace the unavoidable pre-tag stable-package checksum placeholder in its temporary build tree after validating the published archive digest. It rejects any non-placeholder checksum that disagrees with the verified release asset.
+Direct `thpm zed setup` preserves the user's existing `zed-extra` synchronization state instead of silently enabling ongoing synchronization. Normal enable operations through the CLI, TUI, and GUI still opt into that behavior explicitly.
+
+Built-in help now documents every root command, nested action, positional argument, global option, and command-specific flag, making the complete CLI discoverable without external documentation.
 
 ### Verification
 
-The rc21 preparation passes the complete automated suite: 355 tests, Python 3.11 through 3.14, and clean stable and VCS Arch package builds.
+The rc22 preparation passes the complete automated suite: 385 tests, Python 3.11 through 3.14, and clean stable and VCS Arch package builds.
 
-This remains a release candidate. Please report update handoff, graphical-manager synchronization, GTK diagnostics, or packaging issues.
+This remains a release candidate. Please report Zen theming, graphical-manager recovery, menu synchronization, source rollback, Zed setup, or packaging issues.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc21)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc22)

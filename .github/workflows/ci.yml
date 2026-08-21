@@ -48,12 +48,12 @@ jobs:
       - name: Run Python and shell static checks
         run: |
           ruff check --select E9,F src tests scripts/verify-release.py
-          shellcheck install.sh uninstall.sh assets/hooks/90-thpm scripts/install-arch-release.sh scripts/release-assets.sh scripts/update-vencord-base.sh scripts/agent-worktree.sh scripts/setup-dev.sh .githooks/pre-commit .githooks/pre-push
+          shellcheck install.sh uninstall.sh assets/hooks/90-thpm assets/hooks/90-thpm-ui scripts/install-arch-release.sh scripts/release-assets.sh scripts/update-vencord-base.sh scripts/agent-worktree.sh scripts/setup-dev.sh .githooks/pre-commit .githooks/pre-push
 
       - name: Build and inspect wheel
         run: |
           python -m build --wheel
-          python -c 'import glob, zipfile; names = zipfile.ZipFile(glob.glob("dist/thpm-*.whl")[0]).namelist(); assert any(name.endswith("share/thpm/vencord/thpm-midnight.css") for name in names); assert any(name.endswith("share/thpm/vencord/LICENSE.midnight") for name in names); assert any(name.endswith("share/thpm/spicetify/omarchy-user.css") for name in names)'
+          python -c 'import glob, zipfile; names = zipfile.ZipFile(glob.glob("dist/thpm-*.whl")[0]).namelist(); assert any(name.endswith("share/thpm/hooks/90-thpm") for name in names); assert any(name.endswith("share/thpm/hooks/90-thpm-ui") for name in names); assert any(name.endswith("share/thpm/vencord/thpm-midnight.css") for name in names); assert any(name.endswith("share/thpm/vencord/LICENSE.midnight") for name in names); assert any(name.endswith("share/thpm/spicetify/omarchy-user.css") for name in names)'
           python -m pip install --force-reinstall --no-deps dist/thpm-*.whl
           python -c 'from thpm.tui import ThpmTui; import thpm; print(thpm.__version__)'
 
@@ -121,6 +121,8 @@ jobs:
           test -x /usr/bin/thpm
           test -f /usr/share/thpm/templates/thpm-fish.fish.tpl
           test -f /usr/share/thpm/qml/Panel.qml.in
+          test -x /usr/share/thpm/hooks/90-thpm
+          test -x /usr/share/thpm/hooks/90-thpm-ui
           test -f /usr/share/thpm/vencord/thpm-midnight.css
           test -f /usr/share/thpm/spicetify/omarchy-user.css
           pacman -Qkk "$PACKAGE"

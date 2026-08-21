@@ -102,7 +102,7 @@ package() {
     /usr/bin/python -m installer --destdir="\$pkgdir" dist/*.whl
     install -Dm644 -t "\$pkgdir/usr/share/thpm/templates" assets/templates/*
     install -Dm644 -t "\$pkgdir/usr/share/thpm/qml" assets/qml/*
-    install -Dm755 assets/hooks/90-thpm "\$pkgdir/usr/share/thpm/hooks/90-thpm"
+    install -Dm755 -t "\$pkgdir/usr/share/thpm/hooks" assets/hooks/90-thpm assets/hooks/90-thpm-ui
     install -Dm644 assets/compat/theme-env.sh "\$pkgdir/usr/share/thpm/compat/theme-env.sh"
     install -Dm644 -t "\$pkgdir/usr/share/thpm/vencord" assets/vencord/*
     install -Dm644 -t "\$pkgdir/usr/share/thpm/spicetify" assets/spicetify/*

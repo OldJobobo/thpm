@@ -597,6 +597,17 @@ def _discord_directories(paths: Paths) -> tuple[Path, ...]:
     )
 
 
+def _browser_import_blocks(plugin_id: str) -> tuple[tuple[str, str], ...]:
+    legacy_label = "Firefox" if plugin_id == "firefox" else "Zen"
+    return (
+        ("/* thpm-import-start */", "/* thpm-import-end */"),
+        (
+            f"/* THPM {legacy_label} hook start */",
+            f"/* THPM {legacy_label} hook end */",
+        ),
+    )
+
+
 def _browser_default_profile(base: Path) -> str:
     profiles = base / "profiles.ini"
     if not profiles.is_file():
@@ -1010,13 +1021,12 @@ def _browser_import(paths: Paths, plugin_id: str, base: Path) -> tuple[list[str]
         ),
     )
     user_chrome = chrome / "userChrome.css"
-    start, end = "/* thpm-import-start */", "/* thpm-import-end */"
+    blocks = _browser_import_blocks(plugin_id)
     existing = user_chrome.read_text() if user_chrome.exists() else ""
-    existing = (
-        remove_managed_block(existing, start, end)
-        if start in existing or end in existing
-        else existing
-    )
+    for managed_start, managed_end in blocks:
+        if managed_start in existing or managed_end in existing:
+            existing = remove_managed_block(existing, managed_start, managed_end)
+    start, end = blocks[0]
     block = f'{start}\n@import url("{managed.name}");\n{end}\n'
     updated = block + existing.lstrip()
     import_changed = not user_chrome.is_file() or user_chrome.read_text() != updated
@@ -1312,7 +1322,7 @@ def _cleanup_browser(paths: Paths, plugin_id: str, *, assume_legacy: bool) -> tu
     sources = _current_plugin_sources(paths, plugin_id)
     changed: list[str] = []
     warnings: list[str] = []
-    start, end = "/* thpm-import-start */", "/* thpm-import-end */"
+    blocks = _browser_import_blocks(plugin_id)
     for chrome in (path for path in base.rglob("chrome") if path.is_dir()):
         managed = chrome / f"thpm-{plugin_id}.css"
         item_changed, item_warnings = _cleanup_optional_asset(
@@ -1326,16 +1336,22 @@ def _cleanup_browser(paths: Paths, plugin_id: str, *, assume_legacy: bool) -> tu
         user_chrome = chrome / "userChrome.css"
         if user_chrome.is_file():
             existing = user_chrome.read_text()
-            if (start in existing) != (end in existing):
-                warnings.append(f"preserved incomplete THPM browser import block: {user_chrome}")
-            elif start in existing:
-                updated = remove_managed_block(existing, start, end)
-                if updated != existing:
-                    if updated.strip():
-                        atomic_text(user_chrome, updated)
-                    else:
-                        user_chrome.unlink()
-                    changed.append(str(user_chrome))
+            updated = existing
+            incomplete = False
+            for start, end in blocks:
+                if (start in updated) != (end in updated):
+                    incomplete = True
+                    warnings.append(
+                        f"preserved incomplete THPM browser import block: {user_chrome}"
+                    )
+                elif start in updated:
+                    updated = remove_managed_block(updated, start, end)
+            if not incomplete and updated != existing:
+                if updated.strip():
+                    atomic_text(user_chrome, updated)
+                else:
+                    user_chrome.unlink()
+                changed.append(str(user_chrome))
     return changed, warnings
 
 

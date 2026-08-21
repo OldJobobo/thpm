@@ -5844,12 +5844,24 @@ class IntegrationTests(Sandbox):
         (base / "profiles.ini").write_text(
             "[Install1]\nDefault=profile.default\n"
         )
+        user_chrome = base / "profile.default/chrome/userChrome.css"
+        user_chrome.parent.mkdir(parents=True)
+        user_chrome.write_text(
+            "/* THPM Zen hook start */\n"
+            '@import url("./thpm-zen-colors.css");\n'
+            '@import url("./thpm-zen-userChrome.css");\n'
+            "/* THPM Zen hook end */\n"
+            "/* user styles */\n"
+        )
 
         changed = apply("zen", self.paths)
         unchanged = apply("zen", self.paths)
 
         self.assertEqual(changed.restartRequired, ["Zen Browser"])
         self.assertEqual(unchanged.restartRequired, [])
+        self.assertIn('@import url("thpm-zen.css");', user_chrome.read_text())
+        self.assertNotIn("THPM Zen hook", user_chrome.read_text())
+        self.assertIn("/* user styles */", user_chrome.read_text())
 
     def test_unresolved_generated_output_is_refused_and_reported_unavailable(self):
         generated = self.paths.current_theme / "thpm-fish.fish"

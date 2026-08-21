@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Theme modern Zen Browser chrome surfaces with the generated semantic palette and report the required browser restart after Firefox or Zen stylesheet changes.
+
 ## 1.0.0rc21 - 2026-08-17
 
 - Synchronize package state, integrations, active-theme output, and the graphical control panel across CLI, TUI, and QML update flows. Package authorization remains visible in a separate terminal for callers without an attached TTY, while a private result channel returns the completed transaction and actionable partial-failure recovery.

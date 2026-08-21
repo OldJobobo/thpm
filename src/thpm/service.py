@@ -860,6 +860,8 @@ class Service:
                     )
                     changed.extend(cleanup_changed)
                     record_cleanup(cleanup_warnings)
+                    if plugin_id in {"firefox", "zen"} and cleanup_changed:
+                        restart_required.append(BY_ID[plugin_id].label)
         refreshed = False
         if value and refresh:
             self._step("Refreshing active theme")

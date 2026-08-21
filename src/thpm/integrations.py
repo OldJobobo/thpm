@@ -2128,6 +2128,7 @@ def apply(
         browser_paths, browser_changed = _browser_import(paths, plugin_id, base)
         if browser_changed:
             changed.extend(browser_paths)
+            restart_required.append(BY_ID[plugin_id].label)
     elif plugin_id == "steam":
         script = home / ".local/share/steam-adwaita/install.py"
         if not script.is_file():

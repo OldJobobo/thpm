@@ -45,6 +45,7 @@ from thpm.browser import (
     _process as zen_process,
     _process_exited as zen_process_exited,
     _profile_command_is_safe,
+    _shut_down as shut_down_zen,
     _started as started_zen,
     restart_zen,
 )
@@ -4335,6 +4336,30 @@ class BrowserRestartTests(Sandbox):
             ],
         )
         self.assertNotIn("https://", " ".join(launch_command))
+        self.assertIn("--property=StandardOutput=journal", launch_command)
+        self.assertIn("--property=StandardError=journal", launch_command)
+
+    def test_stale_profile_lock_is_released_when_owner_process_exits(self):
+        plan = self.plan()
+        with patch("thpm.browser._lock_owner", return_value=plan.process.pid), patch(
+            "thpm.browser._process_exited", return_value=True
+        ), patch("thpm.browser._clients", return_value=[]), patch(
+            "thpm.browser.time.monotonic", side_effect=[0.0, 0.0]
+        ):
+            stopped = shut_down_zen(plan)
+
+        self.assertTrue(stopped)
+
+    def test_unverifiable_process_does_not_release_a_retained_profile_lock(self):
+        plan = self.plan()
+        with patch("thpm.browser._lock_owner", return_value=plan.process.pid), patch(
+            "thpm.browser._process_exited", return_value=False
+        ), patch("thpm.browser._clients", return_value=[]), patch(
+            "thpm.browser.time.monotonic", side_effect=[0.0, 0.0, 21.0]
+        ), patch("thpm.browser.time.sleep"):
+            stopped = shut_down_zen(plan)
+
+        self.assertFalse(stopped)
 
     def test_automatic_restart_closes_all_windows_and_launches_once(self):
         plan = self.plan(addresses=("0xabc", "0xdef"))

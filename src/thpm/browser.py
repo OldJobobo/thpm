@@ -258,8 +258,9 @@ def _process_exited(pid: int, proc_root: Path = Path("/proc")) -> bool:
 def _shut_down(plan: ZenRestartPlan) -> bool:
     deadline = time.monotonic() + SHUTDOWN_TIMEOUT
     while time.monotonic() < deadline:
-        lock_released = _lock_owner(plan.profile) != plan.process.pid
         process_exited = _process_exited(plan.process.pid)
+        lock_owner = _lock_owner(plan.profile)
+        lock_released = lock_owner != plan.process.pid or process_exited
         try:
             original_windows_gone = not any(
                 address in plan.addresses
@@ -281,8 +282,8 @@ def _launch(plan: ZenRestartPlan) -> None:
         "--quiet",
         "--collect",
         f"--unit={unit}",
-        "--property=StandardOutput=null",
-        "--property=StandardError=null",
+        "--property=StandardOutput=journal",
+        "--property=StandardError=journal",
         "--",
         plan.uwsm_app,
         "--",

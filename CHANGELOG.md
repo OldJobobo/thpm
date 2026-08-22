@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a strict, best-effort automatic restart for one verified Zen Browser profile after managed chrome changes or an explicit `thpm run`, using exact Hyprland window closes, bounded shutdown and window-restoration verification, and notification-only fallback for ambiguous sessions.
+
 ## 1.0.0rc22 - 2026-08-21
 
 - Theme modern Zen Browser chrome with the generated semantic palette, migrate complete legacy Firefox and Zen hook imports without disturbing user CSS, and report browser restarts only when profile files actually change.

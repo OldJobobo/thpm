@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from .browser import ZenRestartError, restart_zen
 from .cava import (
     CavaError,
 )
@@ -2144,6 +2145,29 @@ def apply(
         browser_paths, browser_changed = _browser_import(paths, plugin_id, base)
         if browser_changed:
             changed.extend(browser_paths)
+        if plugin_id == "zen" and (browser_changed or force_reload):
+            profile = _browser_default_profile(base)
+            if profile is None:
+                restart_required.append(BY_ID[plugin_id].label)
+            else:
+                try:
+                    restart = restart_zen(
+                        base,
+                        (base / profile).resolve(),
+                        automatic=automatic_restarts,
+                    )
+                except ZenRestartError as exc:
+                    raise ApplyFailure(
+                        str(exc),
+                        changed=changed,
+                        actions=exc.actions,
+                        warnings=exc.warnings,
+                        restart_required=exc.restart_required,
+                    ) from exc
+                setup_actions.extend(restart.actions)
+                warnings.extend(restart.warnings)
+                restart_required.extend(restart.restart_required)
+        elif browser_changed:
             restart_required.append(BY_ID[plugin_id].label)
     elif plugin_id == "steam":
         script = home / ".local/share/steam-adwaita/install.py"

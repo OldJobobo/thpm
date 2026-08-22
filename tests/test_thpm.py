@@ -447,10 +447,15 @@ class StateTests(Sandbox):
         self.assertFalse(obsolete.exists())
         self.assertIn(str(obsolete), changed)
 
-    def test_experimental_plugins_are_opt_in_by_default(self):
+    def test_plugin_defaults_and_support_statuses_are_explicitly_scoped(self):
         enabled = load(self.paths)
-        self.assertTrue(all(not enabled[plugin.id] for plugin in PLUGINS))
-        self.assertTrue(all(plugin.support_status == "experimental" for plugin in PLUGINS))
+        self.assertEqual(
+            {plugin.id for plugin in PLUGINS if plugin.support_status == "experimental"},
+            {"swaync"},
+        )
+        self.assertTrue(all(enabled[plugin.id] == plugin.default_enabled for plugin in PLUGINS))
+        self.assertTrue(enabled["fish"])
+        self.assertFalse(enabled["swaync"])
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -478,10 +483,13 @@ class StateTests(Sandbox):
             )
         self.assertEqual(
             [plugin_id for plugin_id, _, status, _ in rows if status == "Experimental"],
-            [plugin.id for plugin in PLUGINS],
+            ["swaync"],
         )
         self.assertTrue(all(audit == "Incomplete" for _, audit, _, _ in rows))
-        self.assertFalse(any(status == "Supported" for _, _, status, _ in rows))
+        self.assertEqual(
+            [plugin_id for plugin_id, _, status, _ in rows if status == "Supported"],
+            [plugin.id for plugin in PLUGINS if plugin.id != "swaync"],
+        )
 
     def test_templates_use_canonical_palette_keys_and_render_completely(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -1213,8 +1221,13 @@ class ServiceTests(Sandbox):
         native = [p for p in payload["plugins"] if p["ownership"] == "native"]
         self.assertTrue(active)
         self.assertTrue(native)
-        self.assertTrue(all(p["supportStatus"] == "experimental" for p in active))
-        self.assertTrue(all(not p["enabled"] for p in active))
+        by_id = {plugin.id: plugin for plugin in PLUGINS}
+        self.assertTrue(
+            all(p["supportStatus"] == by_id[p["id"]].support_status for p in active)
+        )
+        self.assertTrue(
+            all(p["enabled"] == by_id[p["id"]].default_enabled for p in active)
+        )
         self.assertTrue(all(p["supportStatus"] == "native" for p in native))
         self.assertEqual(payload["menuSurface"], "gui")
 

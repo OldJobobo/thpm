@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restore per-integration support labels and established defaults instead of blanket-labeling every active adapter Experimental and default-disabled; keep SwayNC explicitly Experimental and retain deliberate opt-in defaults for higher-impact integrations.
+
 ## 1.0.0rc22 - 2026-08-21
 
 - Theme modern Zen Browser chrome with the generated semantic palette, migrate complete legacy Firefox and Zen hook imports without disturbing user CSS, and report browser restarts only when profile files actually change.

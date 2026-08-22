@@ -47,8 +47,9 @@ gates, and roadmap. Section 10 begins with an explicit current-state gap registe
 
 Where this document says an integration is active, it means the integration is
 present in the current registry. It does not mean end-to-end support certification
-has been completed. Registry and snapshot metadata now expose support status; all
-active integrations remain Experimental until promoted through recorded evidence.
+has been completed. Registry and snapshot metadata expose product support status separately from the
+certification evidence register. Established integrations are Supported; only
+adapters with a specifically identified unstable contract remain Experimental.
 
 ## 2. Product vision
 
@@ -529,8 +530,10 @@ integration ID.
 An integration progresses through these stages:
 
 1. **Candidate:** contract and ownership design only; not exposed.
-2. **Experimental:** opt-in, explicitly labeled, end-to-end validation incomplete.
-3. **Supported:** verified application loading path, full lifecycle, docs, and tests.
+2. **Experimental:** opt-in and explicitly labeled because a specific loader,
+   lifecycle, or restoration contract remains unstable.
+3. **Supported:** maintained for normal use with defined ownership, automated
+   lifecycle coverage, and a documented application loading path.
 4. **Deprecated:** still functional, replacement or removal announced.
 5. **Retired:** removed from active registry; apply disabled; guarded cleanup kept.
 6. **Cleanup withdrawn for safety:** exceptional removal of cleanup code only when
@@ -541,10 +544,12 @@ before 1.0. Experimental integrations shall be visibly labeled and are exempt fr
 supported-certification gates, but they still require safe ownership, disable, and
 uninstall behavior. They may not be presented as fully supported.
 
-A supported integration must have an automated artifact/lifecycle test, a
-documented real-application validation procedure against recorded application and
-Omarchy versions, and maintainer signoff. A file-copy test alone does not qualify it
-as supported.
+A supported integration must have automated artifact and lifecycle coverage plus a
+documented real-application validation procedure. Recorded live observations,
+application and Omarchy versions, and maintainer signoff belong in the certification
+evidence register; an incomplete evidence row remains visible but does not by itself
+downgrade a maintained integration. A file-copy test alone does not qualify it as
+supported.
 
 Retired cleanup shall remain indefinitely unless retaining it creates a security or
 data-safety issue.
@@ -717,9 +722,11 @@ UI and uninstall summaries should reflect these classes.
 
 ### Decision 7: Require end-to-end validation for support claims
 
-Every supported integration must prove that the application loads the installed
-theme. Integrations that only copy output without verified loading must be labeled
-experimental or retired.
+Every supported integration must identify how the application loads the installed
+theme and provide a repeatable validation procedure. Missing recorded live evidence
+remains an explicit certification backlog. An adapter is Experimental or retired
+when its loader or lifecycle contract itself is unstable, not merely because the
+evidence record is incomplete.
 
 ### Decision 8: Keep ordinary external plugins data-only
 
@@ -737,10 +744,10 @@ effects require warning, confirmation, and honest persistence disclosure.
 
 ### Decision 10: Support the current stable platform
 
-Each THPM release targets the then-current stable Omarchy release. Promotion of an
-integration to supported requires automated lifecycle coverage, real-application
-validation with documented versions, and maintainer signoff. Experimental
-integrations remain visible but disabled by default.
+Each THPM release targets the then-current stable Omarchy release. Supported
+integrations require automated lifecycle coverage and a documented real-application
+validation path; recorded observations and versions remain tracked as certification
+evidence. Experimental integrations remain visible but disabled by default.
 
 ## 14. Success metrics and release gates
 
@@ -750,8 +757,9 @@ integrations remain visible but disabled by default.
 - Every active integration has readiness, apply, no-op, disable, uninstall, and
   user-modification preservation coverage appropriate to its effect class.
 - Every supported integration has a documented end-to-end validation path.
-- Every supported integration records validated application and Omarchy versions
-  and has maintainer signoff.
+- The certification register records completed application/Omarchy observations,
+  maintainer signoff, and any remaining evidence backlog without rewriting product
+  support status automatically.
 - Readiness exceptions cannot abort later integrations.
 - Lock contention is covered by cross-process tests.
 - Invalid state and restoration metadata fail closed.

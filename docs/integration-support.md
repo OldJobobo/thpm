@@ -6,11 +6,11 @@ This document records the 1.0 support boundary for THPM's built-in integrations.
 
 THPM uses the lifecycle defined in the [PRD](PRD.md#fr-16-integration-support-lifecycle):
 
-- **Supported** requires automated artifact and lifecycle coverage, a documented real-application procedure proving that the application loads the result, recorded application and Omarchy versions, and explicit maintainer signoff.
-- **Experimental** is visible and opt-in while end-to-end validation is incomplete. It must still preserve user files and support safe disable and uninstall.
+- **Supported** identifies a maintained built-in whose ownership, rendering, apply, disable, and failure contracts are covered and intended for normal use. Remaining live-application observations stay visible in the separate certification-audit column.
+- **Experimental** is visible and opt-in when a specific loader, lifecycle, or restoration contract is still unstable. It must still preserve user files and support safe disable and uninstall.
 - **Retired** is absent from the active registry. Apply is disabled, while guarded cleanup remains.
 
-**Incomplete** in the register is a certification audit result, not a lifecycle stage. Every active adapter is currently **Experimental**, visibly labeled, and default-disabled for new state until complete evidence supports promotion. Schema 1 serialized every inherited default, so an existing `true` cannot be distinguished from a later explicit re-enable. Those values are grandfathered to avoid silently disabling adapters while leaving application effects behind; they are **not** treated as proof of opt-in or certification. Existing users should review the Experimental labels and disable integrations they do not want. Cava remains the deliberate exception and still requires its separate consent marker. An adapter must be certified and reviewed before its lifecycle changes to Supported or its new-install default can become enabled.
+**Incomplete** in the register is an evidence-audit result, not a product lifecycle stage. It must not automatically downgrade an established working adapter to Experimental. Defaults are decided per integration: ordinary generated and guarded compatibility outputs remain enabled, while alternate surfaces and higher-impact takeovers may be Supported but default-disabled. SwayNC is the current Experimental adapter because its active stylesheet import still lacks end-to-end validation. Cava remains Supported but separately gated by its durable consent marker.
 
 Automated sandbox tests prove portions of parsing, rendering, shared generated-output machinery, ownership, restoration, and failure handling. Coverage depth varies by adapter and does not by itself prove a complete lifecycle. A copied file alone never proves that a real application imports, selects, or displays it.
 
@@ -70,7 +70,7 @@ Then complete these gates in order:
 4. **Disable/restoration:** run `thpm disable "$id"`. Compare destinations with the recorded baseline and verify the application no longer uses THPM output. Unrelated shared-config sentinels must remain.
 5. **User modification:** enable again on Fixture A, modify a managed destination in a safe recognizable way, then disable. THPM must preserve the unknown user-modified target and report the preservation or incomplete cleanup honestly. Restore the disposable baseline manually before continuing.
 6. **Uninstall/restoration:** reinstall/enable the candidate in the disposable environment, apply Fixture A, run `thpm uninstall`, and repeat baseline and application checks. If cleanup is incomplete, the command must retain recovery data and provide a successful retry path.
-7. **Signoff:** attach the completed record template, outputs, metadata, and visual evidence to a pull request. A maintainer reviews the evidence and changes the row to Supported only when every applicable gate passes.
+7. **Signoff:** attach the completed record template, outputs, metadata, and visual evidence to a pull request. A maintainer reviews the evidence and changes the Certification audit to Complete only when every applicable gate passes.
 
 For external actions that are not reversible, replace restoration with proof that THPM warned before execution, recorded the persistent effect, stopped future execution after disable, and described manual reversal. For adapters with both generated and authored paths, repeat the protocol once for each path.
 
@@ -80,30 +80,30 @@ The **Real-application evidence** column is the adapter-specific addition to the
 
 | Integration ID | Certification audit | Lifecycle disposition | Default | Real-application evidence |
 |---|---|---|---:|---|
-| `gtk-css-compat` | Incomplete | Experimental | disabled | Launch recorded GTK 3 and GTK 4 test applications and prove the managed imports alter rendered surfaces. |
-| `vscode-local-compat` | Incomplete | Experimental | disabled | For every claimed installed editor command (`code`, `code-insiders`, `codium`, or `cursor`), install the fixture's data-only extension, select its theme, and prove it renders. |
-| `pi-hot-reload` | Incomplete | Experimental | disabled | Keep a recorded `pi` session using `omarchy-system` open across both fixture changes and prove its watcher repaints without rewriting the native file. |
-| `fish` | Incomplete | Experimental | disabled | Start a recorded `fish` login session after each change and inspect Fish's effective color variables. |
-| `fzf` | Incomplete | Experimental | disabled | Launch recorded `fzf` from Fish after each change and prove it consumes the rendered `FZF_DEFAULT_OPTS` palette. |
-| `branding` | Incomplete | Experimental | disabled | Run `omarchy-launch-about` and `omarchy-launch-screensaver`; prove each authored asset is displayed and independently restored. |
-| `discord` | Incomplete | Experimental | disabled | Launch the chosen recorded Vencord client, enable `vencord.theme.css`, and prove both authored and generated Midnight paths render. |
-| `discord-system24` | Incomplete | Experimental | disabled | Launch the chosen recorded Vencord client, enable `vencord.theme.css`, and prove both authored and generated System24 paths render. |
-| `qt6ct` | Incomplete | Experimental | disabled | Launch recorded `qt6ct`, select the generated scheme in a disposable profile, then prove a Qt 6 test application renders it. |
-| `spotify` | Incomplete | Experimental | disabled | With recorded `spotify` and `spicetify` versions and a completed backup, prove refresh plus both restart policies changes colors without launching a closed client. |
-| `superfile` | Incomplete | Experimental | disabled | Launch recorded `spf` with a disposable config and prove its theme discovery loads both authored and generated outputs. |
-| `zellij` | Incomplete | Experimental | disabled | Run `scripts/zellij-live-test.sh` with a recorded `zellij` version, visually prove a running session repaints, and retain restoration evidence from the harness. |
-| `obsidian-terminal` | Incomplete | Experimental | disabled | Launch recorded `obsidian` and Terminal community-plugin versions in a disposable vault; prove xterm.js colors change after the documented restart. |
-| `nwg-dock` | Incomplete | Experimental | disabled | Record the complete `nwg-dock-hyprland` launch command, restart it with identical flags, and prove the dock loads the installed stylesheet. |
-| `zed-extra` | Incomplete | Experimental | disabled | Launch recorded `zeditor` with a disposable profile, select **THPM Current**, prove authored rendering, and verify prior selection/file restoration. |
+| `gtk-css-compat` | Incomplete | Supported | enabled | Launch recorded GTK 3 and GTK 4 test applications and prove the managed imports alter rendered surfaces. |
+| `vscode-local-compat` | Incomplete | Supported | enabled | For every claimed installed editor command (`code`, `code-insiders`, `codium`, or `cursor`), install the fixture's data-only extension, select its theme, and prove it renders. |
+| `pi-hot-reload` | Incomplete | Supported | disabled | Keep a recorded `pi` session using `omarchy-system` open across both fixture changes and prove its watcher repaints without rewriting the native file. |
+| `fish` | Incomplete | Supported | enabled | Start a recorded `fish` login session after each change and inspect Fish's effective color variables. |
+| `fzf` | Incomplete | Supported | enabled | Launch recorded `fzf` from Fish after each change and prove it consumes the rendered `FZF_DEFAULT_OPTS` palette. |
+| `branding` | Incomplete | Supported | disabled | Run `omarchy-launch-about` and `omarchy-launch-screensaver`; prove each authored asset is displayed and independently restored. |
+| `discord` | Incomplete | Supported | enabled | Launch the chosen recorded Vencord client, enable `vencord.theme.css`, and prove both authored and generated Midnight paths render. |
+| `discord-system24` | Incomplete | Supported | disabled | Launch the chosen recorded Vencord client, enable `vencord.theme.css`, and prove both authored and generated System24 paths render. |
+| `qt6ct` | Incomplete | Supported | enabled | Launch recorded `qt6ct`, select the generated scheme in a disposable profile, then prove a Qt 6 test application renders it. |
+| `spotify` | Incomplete | Supported | enabled | With recorded `spotify` and `spicetify` versions and a completed backup, prove refresh plus both restart policies changes colors without launching a closed client. |
+| `superfile` | Incomplete | Supported | enabled | Launch recorded `spf` with a disposable config and prove its theme discovery loads both authored and generated outputs. |
+| `zellij` | Incomplete | Supported | disabled | Run `scripts/zellij-live-test.sh` with a recorded `zellij` version, visually prove a running session repaints, and retain restoration evidence from the harness. |
+| `obsidian-terminal` | Incomplete | Supported | enabled | Launch recorded `obsidian` and Terminal community-plugin versions in a disposable vault; prove xterm.js colors change after the documented restart. |
+| `nwg-dock` | Incomplete | Supported | enabled | Record the complete `nwg-dock-hyprland` launch command, restart it with identical flags, and prove the dock loads the installed stylesheet. |
+| `zed-extra` | Incomplete | Supported | disabled | Launch recorded `zeditor` with a disposable profile, select **THPM Current**, prove authored rendering, and verify prior selection/file restoration. |
 | `swaync` | Incomplete | Experimental | disabled | In a disposable SwayNC config, prove the active stylesheet imports `colors.css`, run the recorded daemon/client reload command, and capture isolated visual validation. |
-| `cava` | Incomplete | Experimental | disabled | Run `scripts/cava-live-test.sh` with recorded Cava 0.10.6+; additionally capture visual proof of the selected gradient, PID-specific reload, and restoration. |
-| `firefox` | Incomplete | Experimental | disabled | Launch recorded `firefox` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
-| `zen` | Incomplete | Experimental | disabled | Launch recorded `zen-browser` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
-| `hermes` | Incomplete | Experimental | disabled | Launch recorded `Hermes` with a disposable config and prove it discovers and renders the generated Omarchy descriptor. |
-| `qutebrowser` | Incomplete | Experimental | disabled | Launch recorded `qutebrowser` with a disposable basedir sourcing the generated config and prove the effective UI/web palette. |
-| `steam` | Incomplete | Experimental | disabled | With recorded Steam and steam-adwaita versions, apply the fixture, prove the client renders it, and document the external action's persistence/manual reversal. |
-| `heroic` | Incomplete | Experimental | disabled | Launch recorded `heroic` with a disposable config and prove its custom-theme loader consumes the installed semantic CSS variables. |
-| `cliamp` | Incomplete | Experimental | disabled | Launch recorded `cliamp` with a disposable config and prove it loads the optional theme file, then verify prior-file restoration. |
+| `cava` | Incomplete | Supported | disabled | Run `scripts/cava-live-test.sh` with recorded Cava 0.10.6+; additionally capture visual proof of the selected gradient, PID-specific reload, and restoration. |
+| `firefox` | Incomplete | Supported | disabled | Launch recorded `firefox` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
+| `zen` | Incomplete | Supported | disabled | Launch recorded `zen-browser` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
+| `hermes` | Incomplete | Supported | enabled | Launch recorded `Hermes` with a disposable config and prove it discovers and renders the generated Omarchy descriptor. |
+| `qutebrowser` | Incomplete | Supported | enabled | Launch recorded `qutebrowser` with a disposable basedir sourcing the generated config and prove the effective UI/web palette. |
+| `steam` | Incomplete | Supported | disabled | With recorded Steam and steam-adwaita versions, apply the fixture, prove the client renders it, and document the external action's persistence/manual reversal. |
+| `heroic` | Incomplete | Supported | enabled | Launch recorded `heroic` with a disposable config and prove its custom-theme loader consumes the installed semantic CSS variables. |
+| `cliamp` | Incomplete | Supported | enabled | Launch recorded `cliamp` with a disposable config and prove it loads the optional theme file, then verify prior-file restoration. |
 
 ## Native ownership records
 
@@ -138,4 +138,4 @@ Evidence links:
 Maintainer and signoff date:
 ```
 
-A failed or partial run remains useful evidence but does not promote the integration.
+A failed or partial run remains useful evidence but does not complete the certification audit.

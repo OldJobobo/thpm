@@ -71,7 +71,7 @@ Add two named integrations:
 - `gtk-css-compat`
 - `vscode-local-compat`
 
-The original compatibility plan enabled them by default and distinguished applicability from readiness. The 1.0 certification policy now keeps them Experimental and default-disabled for new state until their real-editor/GTK validation records are complete; schema-1 `true` values are grandfathered because the old format cannot distinguish inherited defaults from explicit choices. Their runtime states remain:
+These established compatibility adapters are Supported and enabled by default, while applicability remains distinct from readiness and their real-editor/GTK certification evidence stays tracked in the support register. Explicit persisted user choices continue to override defaults. Their runtime states remain:
 
 - not applicable: the active theme does not request the capability;
 - unavailable: the theme requests it but a prerequisite is missing;

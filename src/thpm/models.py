@@ -18,10 +18,10 @@ class Plugin:
     commands: tuple[str, ...] = ()
     theme_assets: tuple[str, ...] = ()
     templates: tuple[str, ...] = ()
-    default_enabled: bool = False
+    default_enabled: bool = True
     confirmation: bool = False
     native: bool = False
-    support_status: SupportStatus = "experimental"
+    support_status: SupportStatus = "supported"
 
 
 @dataclass
@@ -55,7 +55,7 @@ class PluginView:
     templates: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     confirmationRequired: bool = False
-    supportStatus: SupportStatus = "experimental"
+    supportStatus: SupportStatus = "supported"
 
     def json(self) -> dict[str, object]:
         return asdict(self)

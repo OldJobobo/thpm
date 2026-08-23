@@ -42,7 +42,6 @@ from .cava import (
     theme_source as cava_theme_source,
 )
 from .compat import (
-    cleanup_gtk,
     gtk_file_doctor_warnings,
     gtk_session_doctor_warnings,
     vscode_doctor_warnings,
@@ -57,7 +56,9 @@ from .integrations import (
     RETIRED_MANAGED_OUTPUT_PLUGINS,
     RETIRED_OPTIONAL_ASSET_PLUGINS,
     apply_enabled,
+    cleanup_gtk_assets,
     cleanup_managed_outputs,
+    cleanup_obsidian_terminal,
     cleanup_optional_assets,
     cleanup_zed_assets,
     cleanup_zellij,
@@ -794,7 +795,9 @@ class Service:
             save(self.paths, enabled)
             changed = reconcile_templates(self.paths, enabled)
             if not value and plugin_id == "gtk-css-compat":
-                changed.extend(cleanup_gtk(self.paths))
+                cleanup_changed, cleanup_warnings = cleanup_gtk_assets(self.paths)
+                changed.extend(cleanup_changed)
+                record_cleanup(cleanup_warnings)
             elif not value and plugin_id == "zellij":
                 cleanup_changed, cleanup_warnings = cleanup_zellij(self.paths)
                 changed.extend(cleanup_changed)
@@ -802,6 +805,12 @@ class Service:
             elif not value and plugin_id == "zed-extra":
                 cleanup_changed, cleanup_warnings = cleanup_zed_assets(
                     self.paths, assume_legacy=True
+                )
+                changed.extend(cleanup_changed)
+                record_cleanup(cleanup_warnings)
+            elif not value and plugin_id == "obsidian-terminal":
+                cleanup_changed, cleanup_warnings = cleanup_obsidian_terminal(
+                    self.paths
                 )
                 changed.extend(cleanup_changed)
                 record_cleanup(cleanup_warnings)
@@ -1228,8 +1237,15 @@ class Service:
             with mutation_lock(self.paths):
                 disabled = {plugin_id: False for plugin_id in BY_ID}
                 changed = reconcile_templates(self.paths, disabled)
-                changed.extend(cleanup_gtk(self.paths))
+                gtk_changed, gtk_warnings = cleanup_gtk_assets(self.paths)
+                changed.extend(gtk_changed)
+                record_cleanup("gtk-css-compat", gtk_warnings)
                 self._step("Restoring managed application files")
+                obsidian_changed, obsidian_warnings = cleanup_obsidian_terminal(
+                    self.paths
+                )
+                changed.extend(obsidian_changed)
+                record_cleanup("obsidian-terminal", obsidian_warnings)
                 for plugin_id in sorted(
                     OPTIONAL_ASSET_PLUGINS | RETIRED_OPTIONAL_ASSET_PLUGINS
                 ):

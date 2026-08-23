@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Enforce authored-theme precedence across safe declarative integrations, add semantic fallbacks for GTK applications/Nautilus, SwayNC, and cliamp, and expose authored overrides for Qt6ct, Spicetify, nwg-dock, Hermes, Heroic, and Obsidian Terminal.
+- Preserve and safely restore each vault's prior Obsidian Terminal palette on disable or uninstall, while retaining user-modified settings and rejecting unsafe authored theme objects.
+- Keep executable Fish, fzf, and Qutebrowser theme inputs generated-only until restrictive validators can prevent theme-authored code execution.
+
 ## 1.0.0rc22 - 2026-08-21
 
 - Theme modern Zen Browser chrome with the generated semantic palette, migrate complete legacy Firefox and Zen hook imports without disturbing user CSS, and report browser restarts only when profile files actually change.

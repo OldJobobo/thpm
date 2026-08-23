@@ -87,7 +87,7 @@ Existing native records remain read-only but describe their real scope:
 
 ### 3. Deploy GTK CSS through managed files
 
-When the active theme provides `gtk.css`:
+When the active theme provides `gtk.css`, THPM prefers it. Otherwise the enabled compatibility integration uses its rendered semantic `thpm-gtk.css` fallback. For either selected source:
 
 1. atomically synchronize it to:
    - `~/.config/gtk-3.0/thpm-theme.css`;
@@ -97,9 +97,9 @@ When the active theme provides `gtk.css`:
 4. report changed and already-current files;
 5. report that running GTK applications may need to restart.
 
-When the next theme does not provide `gtk.css`, remove only the managed imports and THPM-owned stylesheets so stale theme CSS does not survive a theme switch.
+Disabling the integration removes only the managed imports and THPM-owned stylesheets so stale theme CSS does not survive.
 
-Do not initially kill Nautilus or `xdg-desktop-portal-gtk`, overwrite complete user stylesheets, or fight Omarchy's native mode selection. Validate GTK 3, GTK 4, libadwaita, and Nautilus behavior first. Restore `adw-gtk3[-dark]` selection only if functional testing proves it is required and the package is present.
+Nautilus is covered through this shared GTK effect rather than a second plugin with colliding targets. Do not kill Nautilus or `xdg-desktop-portal-gtk`, overwrite complete user stylesheets, or fight Omarchy's native mode selection. Validate GTK 3, GTK 4, libadwaita, and Nautilus behavior first. Restore `adw-gtk3[-dark]` selection only if functional testing proves it is required and the package is present.
 
 ### 4. Restore local editor themes with a data-only boundary
 
@@ -195,7 +195,7 @@ The implementation released across rc4 and rc5 includes:
 
 - canonical palette resolution through `omarchy-theme-color --all`, with strict semantic fallback only when the resolver is absent;
 - conditional applicability in the shared plugin model and both frontends;
-- managed GTK 3/GTK 4 imports, stale-output cleanup, symlink preservation, and restart guidance;
+- managed GTK 3/GTK 4 imports, authored `gtk.css` precedence, semantic fallback generation, stale-output cleanup, symlink preservation, and restart guidance;
 - data-only local editor source validation, identity and contribution checks, traversal/symlink/file/count/size limits, deterministic VSIX packaging, Omarchy toggle support, source markers, bounded installation, and registration verification;
 - narrowed native ownership descriptions, synchronization warnings, Doctor verification, and legacy migration aliases.
 

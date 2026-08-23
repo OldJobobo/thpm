@@ -3,7 +3,7 @@ from __future__ import annotations
 from .models import Plugin
 
 PLUGINS: tuple[Plugin, ...] = (
-    Plugin("gtk-css-compat", "GTK theme CSS compatibility", "Compatibility", "Deploy theme-provided GTK CSS not yet handled by Omarchy.", "action", theme_assets=("gtk.css",)),
+    Plugin("gtk-css-compat", "GTK applications / Nautilus", "Compatibility", "Theme GTK applications, including Nautilus, with authored CSS or semantic colors.", "hybrid", theme_assets=("gtk.css",), templates=("thpm-gtk.css.tpl",)),
     Plugin("vscode-local-compat", "Local VS Code theme compatibility", "Compatibility", "Install validated theme-bundled local editor themes.", "action"),
     Plugin("pi-hot-reload", "Pi live theme reload", "Compatibility", "Emit a reload event for Pi sessions using Omarchy's generated theme.", "action", ("pi",), default_enabled=False),
     Plugin("fish", "Fish", "Terminal", "Synchronize Fish shell colors.", "hybrid", ("fish",), templates=("thpm-fish.fish.tpl",)),
@@ -11,22 +11,22 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("branding", "Branding extras", "Desktop", "Synchronize optional branding text and restore prior defaults when absent.", "action", theme_assets=("about.txt", "screensaver.txt"), default_enabled=False),
     Plugin("discord", "Discord / Vencord", "Messaging", "Install a theme-provided or generated Vencord theme.", "hybrid", theme_assets=("vencord.theme.css",), templates=("thpm-vencord.theme.css.tpl",)),
     Plugin("discord-system24", "Discord System24", "Messaging", "Install the System24-flavored Vencord surface.", "hybrid", theme_assets=("vencord-system24.theme.css",), templates=("thpm-vencord-system24.theme.css.tpl",), default_enabled=False),
-    Plugin("qt6ct", "Qt6ct", "Desktop", "Generate a Qt6 color scheme.", "hybrid", ("qt6ct",), templates=("thpm-qt6ct.conf.tpl",)),
-    Plugin("spotify", "Spotify / Spicetify", "Media", "Update Spicetify colors and apply them.", "hybrid", ("spicetify",), templates=("thpm-spicetify.ini.tpl",)),
+    Plugin("qt6ct", "Qt6ct", "Desktop", "Install an authored or generated Qt6 color scheme.", "hybrid", ("qt6ct",), theme_assets=("qt6ct.conf",), templates=("thpm-qt6ct.conf.tpl",)),
+    Plugin("spotify", "Spotify / Spicetify", "Media", "Install authored or generated Spicetify colors and apply them.", "hybrid", ("spicetify",), theme_assets=("spicetify.ini",), templates=("thpm-spicetify.ini.tpl",)),
     Plugin("superfile", "Superfile", "Terminal", "Install a semantic Superfile theme.", "hybrid", ("spf",), theme_assets=("superfile.toml",), templates=("thpm-superfile.toml.tpl",)),
     Plugin("zellij", "Zellij", "Terminal", "Generate Zellij colors from the active palette, preferring an authored zellij.kdl override.", "apply", ("zellij",), theme_assets=("zellij.kdl",), default_enabled=False),
-    Plugin("obsidian-terminal", "Obsidian Terminal", "Editors", "Synchronize the Obsidian Terminal community plugin's xterm.js palette.", "action"),
-    Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Install dock colors; restart the dock to apply them.", "hybrid", ("nwg-dock-hyprland",), templates=("thpm-nwg-dock.css.tpl",)),
+    Plugin("obsidian-terminal", "Obsidian Terminal", "Editors", "Synchronize an authored or generated xterm.js palette and restore prior settings.", "hybrid", theme_assets=("obsidian-terminal.json",)),
+    Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Install authored or generated dock colors; restart the dock to apply them.", "hybrid", ("nwg-dock-hyprland",), theme_assets=("nwg-dock.css",), templates=("thpm-nwg-dock.css.tpl",)),
     Plugin("zed-extra", "Zed authored theme", "Editors", "Install and select a validated zed.json or aether.zed.json override as the stable THPM Current theme.", "apply", ("zeditor",), theme_assets=("zed.json", "aether.zed.json"), default_enabled=False),
-    Plugin("swaync", "SwayNC", "Desktop", "Experimentally install optional SwayNC colors and reload; disabled by default until end-to-end stylesheet loading is validated.", "apply", ("swaync-client",), theme_assets=("colors.css",), default_enabled=False),
+    Plugin("swaync", "SwayNC", "Desktop", "Experimentally install authored or generated SwayNC colors and reload; disabled until stylesheet loading is validated.", "hybrid", ("swaync-client",), theme_assets=("colors.css",), templates=("thpm-swaync.css.tpl",), default_enabled=False),
     Plugin("cava", "Cava", "Media", "Install, select, and safely reload a Cava gradient.", "hybrid", ("cava",), theme_assets=("cava_theme",), templates=("thpm-cava.ini.tpl",), default_enabled=False, confirmation=True),
     Plugin("firefox", "Firefox", "Browsers", "Manage Firefox userChrome imports and generated CSS.", "hybrid", ("firefox",), theme_assets=("firefox.css",), templates=("thpm-firefox.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("zen", "Zen Browser", "Browsers", "Manage Zen userChrome imports and generated CSS.", "hybrid", ("zen-browser",), theme_assets=("zen.css",), templates=("thpm-zen.css.tpl",), default_enabled=False, confirmation=True),
-    Plugin("hermes", "Hermes", "Editors", "Generate the Hermes Omarchy theme descriptor.", "hybrid", ("Hermes",), templates=("thpm-hermes.json.tpl",)),
+    Plugin("hermes", "Hermes", "Editors", "Install an authored or generated Hermes Omarchy theme descriptor.", "hybrid", ("Hermes",), theme_assets=("hermes.json",), templates=("thpm-hermes.json.tpl",)),
     Plugin("qutebrowser", "Qutebrowser", "Browsers", "Install generated Qutebrowser colors.", "hybrid", ("qutebrowser",), templates=("thpm-qutebrowser.py.tpl",)),
     Plugin("steam", "Steam", "Games", "Apply the Omarchy color theme through steam-adwaita.", "action", ("steam", "python"), default_enabled=False, confirmation=True),
-    Plugin("heroic", "Heroic", "Games", "Install a Heroic theme stylesheet.", "hybrid", ("heroic",), templates=("thpm-heroic.css.tpl",)),
-    Plugin("cliamp", "cliamp", "Media", "Install optional cliamp colors and restore the prior file when absent.", "apply", ("cliamp",), theme_assets=("cliamp.toml",)),
+    Plugin("heroic", "Heroic", "Games", "Install an authored or generated Heroic theme stylesheet.", "hybrid", ("heroic",), theme_assets=("heroic.css",), templates=("thpm-heroic.css.tpl",)),
+    Plugin("cliamp", "cliamp", "Media", "Install authored or generated cliamp colors and restore the prior file when absent.", "hybrid", ("cliamp",), theme_assets=("cliamp.toml",), templates=("thpm-cliamp.toml.tpl",)),
 )
 
 NATIVE: tuple[Plugin, ...] = (

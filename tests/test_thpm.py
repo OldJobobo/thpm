@@ -65,17 +65,28 @@ from thpm.cava import (
     set_selector as set_cava_selector,
 )
 from thpm.cli import _confirm, _write_update_handoff_result, main
-from thpm.compat import gtk_file_doctor_warnings, gtk_session_doctor_warnings
+from thpm.compat import (
+    GTK_END,
+    GTK_START,
+    _remove_gtk_import,
+    gtk_file_doctor_warnings,
+    gtk_session_doctor_warnings,
+)
 from thpm.config import ConfigError, Preferences
 from thpm.config import load as load_config
 from thpm.config import save as save_config
+from thpm.files import atomic_text as write_atomic_text
 from thpm.integrations import (
+    GENERATED,
     ApplyFailure,
     _browser_import,
+    _plugin_theme_source,
     _reload,
     apply,
     apply_enabled,
     cleanup_managed_outputs,
+    cleanup_obsidian_terminal,
+    cleanup_optional_assets,
     inspect_readiness,
 )
 from thpm.migrate import archive, artifacts, inspect, needs_compat
@@ -584,7 +595,11 @@ class StateTests(Sandbox):
     def test_obsidian_terminal_plugin_is_exposed_separately_from_native_obsidian(self):
         plugins = {plugin.id: plugin for plugin in PLUGINS}
         self.assertIn("obsidian-terminal", plugins)
-        self.assertEqual(plugins["obsidian-terminal"].kind, "action")
+        self.assertEqual(plugins["obsidian-terminal"].kind, "hybrid")
+        self.assertEqual(
+            plugins["obsidian-terminal"].theme_assets,
+            ("obsidian-terminal.json",),
+        )
 
 
 class ConfigTests(Sandbox):
@@ -4238,6 +4253,555 @@ class IntegrationTests(Sandbox):
             )
         self.assertFalse(ready)
         self.assertIn("invalid Obsidian Terminal settings JSON", " ".join(missing))
+
+    def test_obsidian_terminal_authored_theme_wins_without_loading_palette(self):
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"terminalOptions": {"fontSize": 13}}))
+        authored = self.paths.current_theme / "obsidian-terminal.json"
+        authored.parent.mkdir(parents=True)
+        authored.write_text(json.dumps({"background": "#123456", "foreground": "#abcdef"}))
+
+        with patch.dict(os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}), patch(
+            "thpm.integrations.load_palette", side_effect=AssertionError("palette fallback used")
+        ):
+            first = apply("obsidian-terminal", self.paths)
+            state = next(
+                self.paths.managed_asset_state_dir.glob("obsidian-terminal-*.json")
+            )
+            state_mtime = state.stat().st_mtime_ns
+            second = apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(first.status, "applied")
+        self.assertEqual(state.stat().st_mtime_ns, state_mtime)
+        self.assertEqual(second.status, "unchanged")
+        document = json.loads(settings.read_text())
+        self.assertEqual(
+            document["terminalOptions"]["theme"],
+            {"background": "#123456", "foreground": "#abcdef"},
+        )
+        self.assertEqual(document["terminalOptions"]["fontSize"], 13)
+
+    def test_obsidian_terminal_disable_restores_prior_scoped_theme(self):
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        prior = {"background": "#010203"}
+        settings.write_text(json.dumps({"terminalOptions": {"theme": prior, "fontSize": 12}}))
+        self.write_palette()
+        with patch.dict(os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}), patch(
+            "thpm.integrations.load_palette", return_value=COLORS
+        ):
+            apply("obsidian-terminal", self.paths)
+        enabled = load(self.paths)
+        enabled["obsidian-terminal"] = True
+        save(self.paths, enabled)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            result = Service(self.paths).set_enabled(
+                "obsidian-terminal", False, refresh=False
+            )
+
+        self.assertTrue(result["ok"])
+        restored = json.loads(settings.read_text())
+        self.assertEqual(restored["terminalOptions"]["theme"], prior)
+        self.assertEqual(restored["terminalOptions"]["fontSize"], 12)
+        self.assertFalse(
+            list(self.paths.managed_asset_state_dir.glob("obsidian-terminal-*.json"))
+        )
+
+    def test_obsidian_terminal_uninstall_restores_prior_scoped_theme(self):
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        prior = {"foreground": "#010203"}
+        settings.write_text(json.dumps({"terminalOptions": {"theme": prior}}))
+        self.write_palette()
+        with patch.dict(os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}), patch(
+            "thpm.integrations.load_palette", return_value=COLORS
+        ):
+            apply("obsidian-terminal", self.paths)
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            result = Service(self.paths).uninstall()
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            json.loads(settings.read_text())["terminalOptions"]["theme"], prior
+        )
+
+    def test_obsidian_terminal_invalid_restoration_state_fails_closed(self):
+        state = self.paths.managed_asset_state_dir / "obsidian-terminal-bad.json"
+        state.parent.mkdir(parents=True)
+        state.write_text("{}\n")
+        changed, warnings = cleanup_obsidian_terminal(self.paths)
+        self.assertEqual(changed, [])
+        self.assertIn("state is invalid", warnings[0])
+        self.assertTrue(state.exists())
+
+    def test_obsidian_terminal_state_rejects_path_digest_and_location_mismatches(self):
+        root = self.paths.managed_asset_state_dir
+        root.mkdir(parents=True)
+        expected = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        wrong_name = root / "obsidian-terminal-000000000000000000000000.json"
+        wrong_name.write_text(
+            json.dumps(
+                {
+                    "path": str(expected),
+                    "hadTheme": False,
+                    "managedTheme": {"background": "#123456"},
+                }
+            )
+        )
+        unexpected = self.paths.home / "arbitrary/data.json"
+        digest = hashlib.sha256(str(unexpected.absolute()).encode()).hexdigest()[:24]
+        wrong_location = root / f"obsidian-terminal-{digest}.json"
+        wrong_location.write_text(
+            json.dumps(
+                {
+                    "path": str(unexpected),
+                    "hadTheme": False,
+                    "managedTheme": {"background": "#123456"},
+                }
+            )
+        )
+
+        changed, warnings = cleanup_obsidian_terminal(self.paths)
+
+        self.assertEqual(changed, [])
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(all("state is invalid" in warning for warning in warnings))
+        self.assertTrue(wrong_name.exists())
+        self.assertTrue(wrong_location.exists())
+
+    def test_obsidian_terminal_interrupted_theme_transition_keeps_original_prior(self):
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        prior = {"background": "#010203"}
+        first_theme = {"background": "#111111"}
+        second_theme = {"background": "#222222"}
+        settings.write_text(json.dumps({"terminalOptions": {"theme": prior}}))
+        authored = self.paths.current_theme / "obsidian-terminal.json"
+        authored.parent.mkdir(parents=True)
+        authored.write_text(json.dumps(first_theme))
+        with patch.dict(os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}):
+            apply("obsidian-terminal", self.paths)
+            authored.write_text(json.dumps(second_theme))
+
+            def fail_settings_write(path, content, mode=0o644):
+                if path == settings:
+                    raise OSError("injected settings write failure")
+                write_atomic_text(path, content, mode)
+
+            with patch(
+                "thpm.integrations.atomic_text", side_effect=fail_settings_write
+            ), self.assertRaisesRegex(OSError, "injected settings write failure"):
+                apply("obsidian-terminal", self.paths)
+
+        state = next(
+            self.paths.managed_asset_state_dir.glob("obsidian-terminal-*.json")
+        )
+        pending = json.loads(state.read_text())
+        self.assertEqual(pending["managedTheme"], first_theme)
+        self.assertEqual(pending["pendingTheme"], second_theme)
+        self.assertEqual(
+            json.loads(settings.read_text())["terminalOptions"]["theme"], first_theme
+        )
+
+        changed, warnings = cleanup_obsidian_terminal(self.paths)
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(changed, [str(settings)])
+        self.assertEqual(
+            json.loads(settings.read_text())["terminalOptions"]["theme"], prior
+        )
+        self.assertFalse(state.exists())
+
+    def test_obsidian_terminal_cleanup_preserves_user_modified_theme(self):
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"terminalOptions": {"theme": {"background": "#010203"}}}))
+        self.write_palette()
+        with patch.dict(os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}), patch(
+            "thpm.integrations.load_palette", return_value=COLORS
+        ):
+            apply("obsidian-terminal", self.paths)
+        document = json.loads(settings.read_text())
+        document["terminalOptions"]["theme"] = {"background": "#fedcba"}
+        settings.write_text(json.dumps(document))
+
+        changed, warnings = cleanup_obsidian_terminal(self.paths)
+
+        self.assertEqual(changed, [])
+        self.assertEqual(
+            json.loads(settings.read_text())["terminalOptions"]["theme"],
+            {"background": "#fedcba"},
+        )
+        self.assertIn("preserved user-modified", warnings[0])
+        self.assertFalse(
+            list(self.paths.managed_asset_state_dir.glob("obsidian-terminal-*.json"))
+        )
+
+    def test_obsidian_terminal_rejects_unsafe_authored_theme(self):
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}\n")
+        authored = self.paths.current_theme / "obsidian-terminal.json"
+        authored.parent.mkdir(parents=True)
+        authored.write_text(json.dumps({"background": "red", "fontFamily": "monospace"}))
+        with patch.dict(os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}):
+            ready, missing, _warnings = inspect_readiness(
+                "obsidian-terminal", self.paths, which=lambda _command: "/bin/true"
+            )
+        self.assertFalse(ready)
+        self.assertIn("unknown keys: fontFamily", " ".join(missing))
+        self.assertIn("invalid #RRGGBB colors: background", " ".join(missing))
+
+    def test_registry_safe_hybrids_share_authored_first_source_resolution(self):
+        safe_hybrids = {
+            "gtk-css-compat",
+            "discord",
+            "discord-system24",
+            "qt6ct",
+            "spotify",
+            "superfile",
+            "nwg-dock",
+            "swaync",
+            "cava",
+            "firefox",
+            "zen",
+            "hermes",
+            "heroic",
+            "cliamp",
+        }
+        by_id = {plugin.id: plugin for plugin in PLUGINS}
+        self.assertEqual(
+            safe_hybrids,
+            {
+                plugin.id
+                for plugin in PLUGINS
+                if plugin.id in GENERATED and plugin.theme_assets
+            },
+        )
+        for plugin_id in sorted(safe_hybrids):
+            with self.subTest(plugin_id=plugin_id):
+                plugin = by_id[plugin_id]
+                generated = self.paths.current_theme / GENERATED[plugin_id]
+                generated.parent.mkdir(parents=True, exist_ok=True)
+                generated.write_text("{{ unresolved generated fallback }}\n")
+                authored = self.paths.current_theme / plugin.theme_assets[0]
+                authored.write_text("authored\n")
+                self.assertEqual(_plugin_theme_source(self.paths, plugin_id), authored)
+                authored.unlink()
+                generated.write_text("generated\n")
+                self.assertEqual(_plugin_theme_source(self.paths, plugin_id), generated)
+                generated.unlink()
+
+        self.assertEqual(
+            {"fish", "fzf", "qutebrowser"},
+            {
+                plugin.id
+                for plugin in PLUGINS
+                if plugin.id in GENERATED and not plugin.theme_assets
+            },
+        )
+
+    def test_disabled_plugins_never_probe_or_apply(self):
+        with patch("thpm.integrations.inspect_readiness") as readiness, patch(
+            "thpm.integrations.apply"
+        ) as apply_plugin:
+            payload = apply_enabled(
+                self.paths, {plugin.id: False for plugin in PLUGINS}
+            )
+        readiness.assert_not_called()
+        apply_plugin.assert_not_called()
+        self.assertEqual(payload["results"], [])
+
+    def test_missing_application_skips_without_mutating_generated_target(self):
+        generated = self.paths.current_theme / "thpm-fish.fish"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("set -gx THPM_THEME_BG '#000000'\n")
+        target = self.paths.config_home / "fish/conf.d/thpm-theme.fish"
+        with patch("thpm.integrations.shutil.which", return_value=None):
+            payload = apply_enabled(self.paths, {"fish": True})
+        self.assertEqual(payload["results"][0]["status"], "skipped")
+        self.assertFalse(target.exists())
+
+    def test_optional_generated_source_requires_application_but_absence_allows_cleanup(self):
+        cases = {
+            "swaync": (
+                "colors.css",
+                "thpm-swaync.css",
+                self.paths.config_home / "swaync/colors.css",
+            ),
+            "cliamp": (
+                "cliamp.toml",
+                "thpm-cliamp.toml",
+                self.paths.config_home / "cliamp/themes/omarchy.toml",
+            ),
+        }
+        for plugin_id, (authored_name, generated_name, target) in cases.items():
+            with self.subTest(plugin_id=plugin_id, source="generated"):
+                generated = self.paths.current_theme / generated_name
+                generated.parent.mkdir(parents=True, exist_ok=True)
+                generated.write_text(f"generated {plugin_id}\n")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("user default\n")
+                with patch("thpm.integrations.shutil.which", return_value=None):
+                    result = apply_enabled(self.paths, {plugin_id: True})
+                item = next(entry for entry in result["results"] if entry["id"] == plugin_id)
+                self.assertEqual(item["status"], "skipped")
+                self.assertEqual(target.read_text(), "user default\n")
+                generated.unlink()
+
+            with self.subTest(plugin_id=plugin_id, source="absent-cleanup"):
+                authored = self.paths.current_theme / authored_name
+                authored.write_text(f"managed {plugin_id}\n")
+                apply(plugin_id, self.paths)
+                authored.unlink()
+                with patch("thpm.integrations.shutil.which", return_value=None):
+                    result = apply_enabled(self.paths, {plugin_id: True})
+                item = next(entry for entry in result["results"] if entry["id"] == plugin_id)
+                self.assertEqual(item["status"], "applied")
+                self.assertEqual(target.read_text(), "user default\n")
+
+    def test_standard_adapters_prefer_authored_assets_over_generated_fallbacks(self):
+        cases = {
+            "qt6ct": ("qt6ct.conf", "thpm-qt6ct.conf"),
+            "spotify": ("spicetify.ini", "thpm-spicetify.ini"),
+            "nwg-dock": ("nwg-dock.css", "thpm-nwg-dock.css"),
+            "hermes": ("hermes.json", "thpm-hermes.json"),
+            "heroic": ("heroic.css", "thpm-heroic.css"),
+        }
+        targets = {
+            "qt6ct": self.paths.config_home / "qt6ct/colors/thpm.conf",
+            "spotify": self.paths.config_home / "spicetify/Themes/omarchy/color.ini",
+            "nwg-dock": self.paths.config_home / "nwg-dock-hyprland/thpm.css",
+            "hermes": self.paths.config_home / "Hermes/omarchy-theme.json",
+            "heroic": self.paths.config_home / "heroic/themes/thpm.css",
+        }
+        for plugin_id, (authored_name, generated_name) in cases.items():
+            with self.subTest(plugin_id=plugin_id):
+                authored = self.paths.current_theme / authored_name
+                generated = self.paths.current_theme / generated_name
+                authored.parent.mkdir(parents=True, exist_ok=True)
+                authored.write_text(f"authored {plugin_id}\n")
+                generated.write_text(f"generated {plugin_id}\n")
+                with patch(
+                    "thpm.integrations._initialize_spotify_stylesheet", return_value=None
+                ), patch(
+                    "thpm.integrations._select_spotify_theme", return_value=[]
+                ), patch("thpm.integrations._reload", return_value=([], [])):
+                    result = apply(plugin_id, self.paths)
+                self.assertEqual(result.status, "applied")
+                self.assertEqual(targets[plugin_id].read_text(), authored.read_text())
+
+    def test_generated_swaync_and_cliamp_restore_displaced_files_and_preserve_user_edits(self):
+        cases = {
+            "swaync": (
+                "thpm-swaync.css",
+                self.paths.config_home / "swaync/colors.css",
+            ),
+            "cliamp": (
+                "thpm-cliamp.toml",
+                self.paths.config_home / "cliamp/themes/omarchy.toml",
+            ),
+        }
+        for plugin_id, (generated_name, target) in cases.items():
+            with self.subTest(plugin_id=plugin_id, behavior="restore"):
+                generated = self.paths.current_theme / generated_name
+                generated.parent.mkdir(parents=True, exist_ok=True)
+                generated.write_text(f"generated {plugin_id}\n")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("prior user file\n")
+                target.chmod(0o600)
+                apply(plugin_id, self.paths)
+                cleanup_changed, cleanup_warnings = cleanup_optional_assets(
+                    self.paths, plugin_id
+                )
+                self.assertEqual(cleanup_warnings, [])
+                self.assertIn(str(target), cleanup_changed)
+                self.assertEqual(target.read_text(), "prior user file\n")
+                self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+                generated.unlink(missing_ok=True)
+
+            with self.subTest(plugin_id=plugin_id, behavior="preserve-user-edit"):
+                generated = self.paths.current_theme / generated_name
+                generated.write_text(f"generated again {plugin_id}\n")
+                apply(plugin_id, self.paths)
+                target.write_text("user edited managed target\n")
+                cleanup_changed, cleanup_warnings = cleanup_optional_assets(
+                    self.paths, plugin_id
+                )
+                self.assertNotIn(str(target), cleanup_changed)
+                self.assertIn("preserved user-modified", cleanup_warnings[0])
+                self.assertEqual(target.read_text(), "user edited managed target\n")
+                generated.unlink(missing_ok=True)
+
+    def test_generated_swaync_and_cliamp_fallbacks_install_idempotently(self):
+        generated = {
+            "swaync": ("thpm-swaync.css", self.paths.config_home / "swaync/colors.css"),
+            "cliamp": ("thpm-cliamp.toml", self.paths.config_home / "cliamp/themes/omarchy.toml"),
+        }
+        for plugin_id, (name, target) in generated.items():
+            with self.subTest(plugin_id=plugin_id):
+                source = self.paths.current_theme / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"generated {plugin_id}\n")
+                with patch("thpm.integrations.shutil.which", return_value=None):
+                    first = apply(plugin_id, self.paths)
+                    second = apply(plugin_id, self.paths)
+                self.assertEqual(first.status, "applied")
+                self.assertEqual(second.status, "unchanged")
+                self.assertEqual(target.read_text(), source.read_text())
+
+    def test_gtk_generated_fallback_and_authored_precedence_cover_nautilus(self):
+        generated = self.paths.current_theme / "thpm-gtk.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("@define-color window_bg_color #111111;\n")
+        first = apply("gtk-css-compat", self.paths)
+        installed = self.paths.config_home / "gtk-4.0/thpm-theme.css"
+        self.assertEqual(installed.read_bytes(), generated.read_bytes())
+        authored = self.paths.current_theme / "gtk.css"
+        authored.write_text("@define-color window_bg_color #abcdef;\n")
+        second = apply("gtk-css-compat", self.paths)
+        self.assertEqual(installed.read_bytes(), authored.read_bytes())
+        self.assertEqual(first.restartRequired, ["running GTK applications"])
+        self.assertEqual(second.restartRequired, ["running GTK applications"])
+        self.assertNotIn("nautilus", {plugin.id for plugin in PLUGINS})
+
+    def test_gtk_owned_targets_restore_regular_files_and_modes_on_disable(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent_color #abcdef;\n")
+        owned_targets = []
+        for version in ("gtk-3.0", "gtk-4.0"):
+            owned = self.paths.config_home / version / "thpm-theme.css"
+            owned.parent.mkdir(parents=True)
+            owned.write_text(f"prior {version}\n")
+            owned.chmod(0o600)
+            owned_targets.append((owned, f"prior {version}\n"))
+        apply("gtk-css-compat", self.paths)
+        enabled = load(self.paths)
+        enabled["gtk-css-compat"] = True
+        save(self.paths, enabled)
+        result = Service(self.paths).set_enabled(
+            "gtk-css-compat", False, refresh=False
+        )
+        self.assertTrue(result["ok"])
+        for owned, prior in owned_targets:
+            self.assertEqual(owned.read_text(), prior)
+            self.assertEqual(owned.stat().st_mode & 0o777, 0o600)
+
+    def test_gtk_owned_targets_restore_symlinks_on_uninstall(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent_color #abcdef;\n")
+        links = []
+        for version in ("gtk-3.0", "gtk-4.0"):
+            prior = self.paths.home / f"{version}-prior.css"
+            prior.write_text(f"prior {version}\n")
+            owned = self.paths.config_home / version / "thpm-theme.css"
+            owned.parent.mkdir(parents=True)
+            owned.symlink_to(prior)
+            links.append((owned, prior))
+        apply("gtk-css-compat", self.paths)
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            result = Service(self.paths).uninstall()
+        self.assertTrue(result["ok"])
+        for owned, prior in links:
+            self.assertTrue(owned.is_symlink())
+            self.assertEqual(owned.readlink(), prior)
+
+    def test_gtk_disable_preserves_user_modified_owned_targets(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent_color #abcdef;\n")
+        apply("gtk-css-compat", self.paths)
+        owned_targets = [
+            self.paths.config_home / version / "thpm-theme.css"
+            for version in ("gtk-3.0", "gtk-4.0")
+        ]
+        for owned in owned_targets:
+            owned.write_text(f"user modified {owned.parent.name}\n")
+        enabled = load(self.paths)
+        enabled["gtk-css-compat"] = True
+        save(self.paths, enabled)
+        result = Service(self.paths).set_enabled(
+            "gtk-css-compat", False, refresh=False
+        )
+        self.assertTrue(result["ok"])
+        self.assertIn("preserved user-modified", str(result["warnings"]))
+        for owned in owned_targets:
+            self.assertEqual(
+                owned.read_text(), f"user modified {owned.parent.name}\n"
+            )
+            self.assertFalse(
+                self.paths.managed_asset_state_dir.joinpath(
+                    f"{owned.parent.name}-theme.json"
+                ).exists()
+            )
+
+    def test_gtk_invalid_owned_target_state_fails_closed(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent_color #abcdef;\n")
+        apply("gtk-css-compat", self.paths)
+        owned = self.paths.config_home / "gtk-4.0/thpm-theme.css"
+        state = self.paths.managed_asset_state_dir / "gtk-4.0-theme.json"
+        state.write_text("{}\n")
+        enabled = load(self.paths)
+        enabled["gtk-css-compat"] = True
+        save(self.paths, enabled)
+        result = Service(self.paths).set_enabled(
+            "gtk-css-compat", False, refresh=False
+        )
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["cleanupIncomplete"])
+        self.assertTrue(owned.exists())
+        self.assertTrue(state.exists())
+        self.assertIn(str(state), result["retainedPaths"])
+
+    def test_gtk_malformed_import_disable_returns_structured_cleanup_failure(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent_color #abcdef;\n")
+        apply("gtk-css-compat", self.paths)
+        main = self.paths.config_home / "gtk-4.0/gtk.css"
+        main.write_text("/* thpm-gtk-theme-start */\nbroken\n")
+        owned = main.with_name("thpm-theme.css")
+        enabled = load(self.paths)
+        enabled["gtk-css-compat"] = True
+        save(self.paths, enabled)
+        result = Service(self.paths).set_enabled(
+            "gtk-css-compat", False, refresh=False
+        )
+        self.assertFalse(result["ok"])
+        self.assertFalse(load(self.paths)["gtk-css-compat"])
+        self.assertTrue(result["cleanupIncomplete"])
+        self.assertIn(str(main), result["retainedPaths"])
+        self.assertTrue(owned.exists())
+
+    def test_gtk_duplicate_and_nested_import_blocks_fail_closed(self):
+        duplicate = f"{GTK_START}\nfirst\n{GTK_END}\n{GTK_START}\nsecond\n{GTK_END}\n"
+        nested = f"{GTK_START}\n{GTK_START}\nnested\n{GTK_END}\n{GTK_END}\n"
+        for label, content in (("duplicate", duplicate), ("nested", nested)):
+            with self.subTest(label=label), self.assertRaisesRegex(
+                ValueError, "duplicate THPM GTK managed block"
+            ):
+                _remove_gtk_import(content)
+
+    def test_gtk_malformed_import_uninstall_returns_structured_cleanup_failure(self):
+        source = self.paths.current_theme / "gtk.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("@define-color accent_color #abcdef;\n")
+        apply("gtk-css-compat", self.paths)
+        main = self.paths.config_home / "gtk-3.0/gtk.css"
+        main.write_text("/* thpm-gtk-theme-end */\nbroken\n")
+        owned = main.with_name("thpm-theme.css")
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            result = Service(self.paths).uninstall()
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["cleanupIncomplete"])
+        self.assertEqual(result["recoveryCommand"], "thpm uninstall")
+        self.assertIn(str(main), result["retainedPaths"])
+        self.assertTrue(owned.exists())
 
     def test_pi_hot_reload_touches_synchronized_theme_without_replacing_it(self):
         content = '{"name":"omarchy-system"}\n'

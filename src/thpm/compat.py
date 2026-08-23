@@ -9,12 +9,14 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from collections.abc import Callable
 from html import escape
 from pathlib import Path
 
 from .files import atomic_copy, atomic_text, remove_managed_block
 from .models import ApplyResult
 from .paths import Paths
+from .theme_sources import authored_source, select_source
 
 GTK_START = "/* thpm-gtk-theme-start */"
 GTK_END = "/* thpm-gtk-theme-end */"
@@ -42,8 +44,15 @@ SAFE_EXTENSION_SUFFIXES = {
 SAFE_CONTRIBUTIONS = {"themes"}
 
 
+def _gtk_source(paths: Paths) -> Path | None:
+    return select_source(paths, ("gtk.css",), "thpm-gtk.css")
+
+
 def gtk_requested(paths: Paths) -> bool:
-    return (paths.current_theme / "gtk.css").is_file()
+    return (
+        authored_source(paths, ("gtk.css",)) is not None
+        or (paths.current_theme / "thpm-gtk.css").is_file()
+    )
 
 
 def _gtk_targets(paths: Paths) -> tuple[tuple[Path, Path], ...]:
@@ -66,14 +75,20 @@ def _gtk_user_file(path: Path) -> Path:
 
 
 def _remove_gtk_import(content: str) -> str:
-    if GTK_START not in content and GTK_END not in content:
+    starts = content.count(GTK_START)
+    ends = content.count(GTK_END)
+    if starts == 0 and ends == 0:
         return content
+    if starts != 1 or ends != 1:
+        raise ValueError("incomplete or duplicate THPM GTK managed block")
+    if content.index(GTK_START) > content.index(GTK_END):
+        raise ValueError("reversed THPM GTK managed block")
     return remove_managed_block(content, GTK_START, GTK_END)
 
 
 def gtk_synchronized(paths: Paths) -> bool:
-    source = paths.current_theme / "gtk.css"
-    if not source.is_file():
+    source = _gtk_source(paths)
+    if source is None:
         return all(
             not owned.exists()
             and (not main.exists() or GTK_START not in main.read_text())
@@ -88,25 +103,67 @@ def gtk_synchronized(paths: Paths) -> bool:
     )
 
 
-def apply_gtk(paths: Paths, *, force_restart: bool = False) -> ApplyResult:
-    source = paths.current_theme / "gtk.css"
+GtkInstallAsset = Callable[[Paths, str, Path, Path], bool]
+GtkCleanupAsset = Callable[[Paths, str, Path], tuple[list[str], list[str]]]
+
+
+def _gtk_state_key(main: Path) -> str:
+    return f"{main.parent.name}-theme"
+
+
+def _gtk_cleanup_warning(user_file: Path, exc: Exception) -> str:
+    return (
+        "could not remove GTK theme import because stylesheet is invalid "
+        f"({exc}): {user_file}"
+    )
+
+
+def apply_gtk(
+    paths: Paths,
+    *,
+    install_asset: GtkInstallAsset,
+    cleanup_asset: GtkCleanupAsset,
+    force_restart: bool = False,
+    _use_source: bool = True,
+) -> ApplyResult:
+    source = _gtk_source(paths) if _use_source else None
     changed: list[str] = []
     warnings: list[str] = []
 
     for main, owned in _gtk_targets(paths):
-        user_file = _gtk_user_file(main)
-        existing = user_file.read_text() if user_file.is_file() else ""
-        clean = _remove_gtk_import(existing)
-        if source.is_file():
-            if not owned.is_file() or owned.read_bytes() != source.read_bytes():
-                atomic_copy(source, owned)
+        try:
+            user_file = _gtk_user_file(main)
+            existing = user_file.read_text() if user_file.is_file() else ""
+            clean = _remove_gtk_import(existing)
+        except (OSError, UnicodeError, ValueError) as exc:
+            if source is None:
+                warnings.append(_gtk_cleanup_warning(main, exc))
+                continue
+            raise RuntimeError(f"GTK stylesheet is not safely usable: {main}: {exc}") from exc
+
+        state_key = _gtk_state_key(main)
+        if source is not None:
+            legacy_owned = (
+                owned.is_file()
+                and not owned.is_symlink()
+                and owned.read_bytes() == source.read_bytes()
+            )
+            if install_asset(
+                paths,
+                state_key,
+                source,
+                owned,
+                legacy_owned=legacy_owned,
+            ):
                 changed.append(str(owned))
             updated = GTK_IMPORT + ("\n" + clean.lstrip() if clean.strip() else "")
         else:
             updated = clean
-            if owned.exists():
-                owned.unlink()
-                changed.append(str(owned))
+            item_changed, item_warnings = cleanup_asset(
+                paths, state_key, owned, legacy_owned=True
+            )
+            changed.extend(item_changed)
+            warnings.extend(item_warnings)
 
         if updated != existing:
             if updated.strip():
@@ -119,14 +176,14 @@ def apply_gtk(paths: Paths, *, force_restart: bool = False) -> ApplyResult:
 
     restart_required = (
         ["running GTK applications"]
-        if changed or (source.is_file() and force_restart)
+        if changed or (source is not None and force_restart)
         else []
     )
     status = "applied" if changed else "unchanged"
     message = (
         "GTK 3 and GTK 4 theme CSS synchronized"
-        if source.is_file()
-        else "active theme does not request GTK CSS"
+        if source is not None
+        else "active theme does not provide GTK theme input"
     )
     return ApplyResult(
         "gtk-css-compat",
@@ -138,33 +195,25 @@ def apply_gtk(paths: Paths, *, force_restart: bool = False) -> ApplyResult:
     )
 
 
-def cleanup_gtk(paths: Paths) -> list[str]:
-    result = apply_gtk_without_source(paths)
-    return result.changed
+def cleanup_gtk(
+    paths: Paths, *, cleanup_asset: GtkCleanupAsset
+) -> tuple[list[str], list[str]]:
+    result = apply_gtk_without_source(paths, cleanup_asset=cleanup_asset)
+    rendered = paths.current_theme / "thpm-gtk.css"
+    if rendered.is_file():
+        rendered.unlink()
+        result.changed.append(str(rendered))
+    return result.changed, result.warnings
 
 
-def apply_gtk_without_source(paths: Paths) -> ApplyResult:
-    changed: list[str] = []
-    for main, owned in _gtk_targets(paths):
-        user_file = _gtk_user_file(main)
-        existing = user_file.read_text() if user_file.is_file() else ""
-        updated = _remove_gtk_import(existing)
-        if owned.exists():
-            owned.unlink()
-            changed.append(str(owned))
-        if updated != existing:
-            if updated.strip():
-                atomic_text(
-                    user_file, updated if updated.endswith("\n") else updated + "\n"
-                )
-            else:
-                user_file.unlink(missing_ok=True)
-            changed.append(str(main))
-    return ApplyResult(
-        "gtk-css-compat",
-        "applied" if changed else "unchanged",
-        changed=changed,
-        message="THPM-managed GTK CSS removed",
+def apply_gtk_without_source(
+    paths: Paths, *, cleanup_asset: GtkCleanupAsset
+) -> ApplyResult:
+    return apply_gtk(
+        paths,
+        install_asset=lambda *_args, **_kwargs: False,
+        cleanup_asset=cleanup_asset,
+        _use_source=False,
     )
 
 

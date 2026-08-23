@@ -80,7 +80,7 @@ The **Real-application evidence** column is the adapter-specific addition to the
 
 | Integration ID | Certification audit | Lifecycle disposition | Default | Real-application evidence |
 |---|---|---|---:|---|
-| `gtk-css-compat` | Incomplete | Experimental | disabled | Launch recorded GTK 3 and GTK 4 test applications and prove the managed imports alter rendered surfaces. |
+| `gtk-css-compat` | Incomplete | Experimental | disabled | Launch recorded GTK 3/4 applications and Nautilus; prove both authored `gtk.css` and the semantic fallback load through managed imports without unsafe restarts. |
 | `vscode-local-compat` | Incomplete | Experimental | disabled | For every claimed installed editor command (`code`, `code-insiders`, `codium`, or `cursor`), install the fixture's data-only extension, select its theme, and prove it renders. |
 | `pi-hot-reload` | Incomplete | Experimental | disabled | Keep a recorded `pi` session using `omarchy-system` open across both fixture changes and prove its watcher repaints without rewriting the native file. |
 | `fish` | Incomplete | Experimental | disabled | Start a recorded `fish` login session after each change and inspect Fish's effective color variables. |
@@ -92,10 +92,10 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | `spotify` | Incomplete | Experimental | disabled | With recorded `spotify` and `spicetify` versions and a completed backup, prove refresh plus both restart policies changes colors without launching a closed client. |
 | `superfile` | Incomplete | Experimental | disabled | Launch recorded `spf` with a disposable config and prove its theme discovery loads both authored and generated outputs. |
 | `zellij` | Incomplete | Experimental | disabled | Run `scripts/zellij-live-test.sh` with a recorded `zellij` version, visually prove a running session repaints, and retain restoration evidence from the harness. |
-| `obsidian-terminal` | Incomplete | Experimental | disabled | Launch recorded `obsidian` and Terminal community-plugin versions in a disposable vault; prove xterm.js colors change after the documented restart. |
+| `obsidian-terminal` | Incomplete | Experimental | disabled | Launch recorded `obsidian` and Terminal community-plugin versions in disposable vaults; prove generated and authored xterm.js colors change after restart and prior settings restore on disable/uninstall. |
 | `nwg-dock` | Incomplete | Experimental | disabled | Record the complete `nwg-dock-hyprland` launch command, restart it with identical flags, and prove the dock loads the installed stylesheet. |
 | `zed-extra` | Incomplete | Experimental | disabled | Launch recorded `zeditor` with a disposable profile, select **THPM Current**, prove authored rendering, and verify prior selection/file restoration. |
-| `swaync` | Incomplete | Experimental | disabled | In a disposable SwayNC config, prove the active stylesheet imports `colors.css`, run the recorded daemon/client reload command, and capture isolated visual validation. |
+| `swaync` | Incomplete | Experimental | disabled | In a disposable SwayNC config, prove the active stylesheet imports both authored and generated `colors.css`, run the recorded reload command, and capture isolated visual validation. |
 | `cava` | Incomplete | Experimental | disabled | Run `scripts/cava-live-test.sh` with recorded Cava 0.10.6+; additionally capture visual proof of the selected gradient, PID-specific reload, and restoration. |
 | `firefox` | Incomplete | Experimental | disabled | Launch recorded `firefox` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
 | `zen` | Incomplete | Experimental | disabled | Launch recorded `zen-browser` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
@@ -103,7 +103,7 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | `qutebrowser` | Incomplete | Experimental | disabled | Launch recorded `qutebrowser` with a disposable basedir sourcing the generated config and prove the effective UI/web palette. |
 | `steam` | Incomplete | Experimental | disabled | With recorded Steam and steam-adwaita versions, apply the fixture, prove the client renders it, and document the external action's persistence/manual reversal. |
 | `heroic` | Incomplete | Experimental | disabled | Launch recorded `heroic` with a disposable config and prove its custom-theme loader consumes the installed semantic CSS variables. |
-| `cliamp` | Incomplete | Experimental | disabled | Launch recorded `cliamp` with a disposable config and prove it loads the optional theme file, then verify prior-file restoration. |
+| `cliamp` | Incomplete | Experimental | disabled | Launch recorded `cliamp` with a disposable config and prove it loads authored and generated theme files, then verify prior-file restoration. |
 
 ## Native ownership records
 

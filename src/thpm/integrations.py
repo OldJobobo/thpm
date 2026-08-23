@@ -39,6 +39,7 @@ from .cava import (
 from .compat import (
     apply_gtk,
     apply_vscode_local,
+    cleanup_gtk,
     gtk_requested,
     vscode_local_requested,
     vscode_readiness,
@@ -49,6 +50,7 @@ from .palette import load as load_palette
 from .paths import Paths
 from .registry import BY_ID, PLUGINS
 from .resources import asset as packaged_asset
+from .theme_sources import authored_source, ensure_rendered, select_source
 from .zed import ZedThemeError
 from .zed import legacy_target as zed_legacy_target
 from .zed import normalized as normalized_zed_theme
@@ -56,6 +58,7 @@ from .zed import source as zed_source
 from .zed import target as zed_target
 
 GENERATED = {
+    "gtk-css-compat": "thpm-gtk.css",
     "fish": "thpm-fish.fish",
     "fzf": "thpm-fzf.fish",
     "discord": "thpm-vencord.theme.css",
@@ -71,6 +74,8 @@ GENERATED = {
     "hermes": "thpm-hermes.json",
     "qutebrowser": "thpm-qutebrowser.py",
     "heroic": "thpm-heroic.css",
+    "swaync": "thpm-swaync.css",
+    "cliamp": "thpm-cliamp.toml",
 }
 
 ZELLIJ_MANAGED_START = "// thpm-zellij-theme-start"
@@ -86,7 +91,6 @@ ZELLIJ_THEME_DIR_OPTION = re.compile(
     r'^(?P<indent>[ \t]*)theme_dir[ \t]+(?P<value>"(?:\\.|[^"\\\n])*")[ \t]*(?:;[ \t]*)?$',
     re.MULTILINE,
 )
-UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
 OPTIONAL_ASSET_PLUGINS = {
     "branding",
     "swaync",
@@ -479,6 +483,12 @@ def cleanup_optional_assets(
         )
         changed.extend(item_changed)
         warnings.extend(item_warnings)
+    generated = GENERATED.get(plugin_id)
+    if generated:
+        rendered = paths.current_theme / generated
+        if rendered.is_file():
+            rendered.unlink()
+            changed.append(str(rendered))
     return changed, warnings
 
 
@@ -543,12 +553,12 @@ def _apply_zed_asset(paths: Paths) -> ApplyResult:
 
 
 def _ensure_generated_output_is_rendered(source: Path) -> None:
-    match = UNRESOLVED_PLACEHOLDER.search(source.read_text())
-    if match:
-        raise RuntimeError(
-            f"generated theme output contains an unresolved placeholder: "
-            f"{source} ({match.group(0)})"
-        )
+    ensure_rendered(source)
+
+
+def _plugin_theme_source(paths: Paths, plugin_id: str) -> Path | None:
+    plugin = BY_ID[plugin_id]
+    return select_source(paths, plugin.theme_assets, GENERATED.get(plugin_id))
 
 
 def _generated_output_error(plugin_id: str, paths: Paths) -> str | None:
@@ -556,7 +566,7 @@ def _generated_output_error(plugin_id: str, paths: Paths) -> str | None:
     if not name:
         return None
     plugin = BY_ID[plugin_id]
-    if any((paths.current_theme / asset).is_file() for asset in plugin.theme_assets):
+    if authored_source(paths, plugin.theme_assets) is not None:
         return None
     source = paths.current_theme / name
     if not source.is_file():
@@ -731,6 +741,219 @@ def _obsidian_terminal_theme(colors: dict[str, str]) -> dict[str, str]:
     }
 
 
+OBSIDIAN_TERMINAL_THEME_KEYS = frozenset(
+    {
+        "background",
+        "foreground",
+        "cursor",
+        "cursorAccent",
+        "selectionBackground",
+        "selectionForeground",
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "brightBlack",
+        "brightRed",
+        "brightGreen",
+        "brightYellow",
+        "brightBlue",
+        "brightMagenta",
+        "brightCyan",
+        "brightWhite",
+    }
+)
+OBSIDIAN_THEME_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+OBSIDIAN_THEME_MAX_BYTES = 64 * 1024
+
+
+def _read_obsidian_terminal_theme(path: Path) -> dict[str, str]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"refusing unsafe Obsidian Terminal theme asset: {path}")
+    if path.stat().st_size > OBSIDIAN_THEME_MAX_BYTES:
+        raise ValueError(f"Obsidian Terminal theme asset exceeds 64 KiB: {path}")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid Obsidian Terminal theme JSON: {path}") from exc
+    if not isinstance(document, dict) or not document:
+        raise ValueError(f"Obsidian Terminal theme must be a non-empty object: {path}")
+    unknown = sorted(set(document) - OBSIDIAN_TERMINAL_THEME_KEYS)
+    invalid = sorted(
+        key
+        for key, value in document.items()
+        if key in OBSIDIAN_TERMINAL_THEME_KEYS
+        and (not isinstance(value, str) or not OBSIDIAN_THEME_COLOR.fullmatch(value))
+    )
+    if unknown or invalid:
+        details = []
+        if unknown:
+            details.append("unknown keys: " + ", ".join(unknown))
+        if invalid:
+            details.append("invalid #RRGGBB colors: " + ", ".join(invalid))
+        raise ValueError(f"invalid Obsidian Terminal theme asset {path}: " + "; ".join(details))
+    return {str(key): str(value) for key, value in document.items()}
+
+
+def _obsidian_terminal_state_path(paths: Paths, settings: Path) -> Path:
+    digest = hashlib.sha256(str(settings.absolute()).encode()).hexdigest()[:24]
+    return paths.managed_asset_state_dir / f"obsidian-terminal-{digest}.json"
+
+
+def _expected_obsidian_terminal_data_path(path: Path) -> bool:
+    return (
+        path.is_absolute()
+        and path.name == "data.json"
+        and path.parent.name == "terminal"
+        and path.parent.parent.name == "plugins"
+        and path.parent.parent.parent.name == ".obsidian"
+    )
+
+
+def _valid_obsidian_managed_theme(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and bool(value)
+        and not (set(value) - OBSIDIAN_TERMINAL_THEME_KEYS)
+        and all(
+            isinstance(color, str) and OBSIDIAN_THEME_COLOR.fullmatch(color)
+            for color in value.values()
+        )
+    )
+
+
+def _read_obsidian_terminal_state(
+    paths: Paths, path: Path
+) -> dict[str, object] | None:
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(saved, dict) or not isinstance(saved.get("path"), str):
+        return None
+    settings = Path(str(saved["path"]))
+    if (
+        not _expected_obsidian_terminal_data_path(settings)
+        or settings != settings.absolute()
+        or _obsidian_terminal_state_path(paths, settings) != path
+    ):
+        return None
+    if not isinstance(saved.get("hadTheme"), bool):
+        return None
+    if not _valid_obsidian_managed_theme(saved.get("managedTheme")):
+        return None
+    if "pendingTheme" in saved and not _valid_obsidian_managed_theme(
+        saved.get("pendingTheme")
+    ):
+        return None
+    if saved["hadTheme"] and "priorTheme" not in saved:
+        return None
+    return saved
+
+
+def _write_obsidian_terminal_theme(
+    paths: Paths,
+    settings: Path,
+    document: dict[str, object],
+    theme: dict[str, str],
+) -> bool:
+    options = document.setdefault("terminalOptions", {})
+    assert isinstance(options, dict)
+    state_path = _obsidian_terminal_state_path(paths, settings)
+    saved = _read_obsidian_terminal_state(paths, state_path)
+    if state_path.exists() and saved is None:
+        raise RuntimeError(f"Obsidian Terminal restoration state is invalid: {state_path}")
+    current_exists = "theme" in options
+    current = options.get("theme")
+    pending = saved.get("pendingTheme") if saved is not None else None
+    prior_match = bool(saved and pending is not None) and (
+        (bool(saved["hadTheme"]) and current_exists and current == saved.get("priorTheme"))
+        or (not bool(saved["hadTheme"]) and not current_exists)
+    )
+    recognized = bool(saved) and (
+        current == saved.get("managedTheme") or current == pending or prior_match
+    )
+    if saved is not None and pending is None and current == theme == saved.get(
+        "managedTheme"
+    ):
+        return False
+    if not recognized:
+        saved = {
+            "path": str(settings.absolute()),
+            "hadTheme": current_exists,
+            "managedTheme": theme,
+        }
+        if current_exists:
+            saved["priorTheme"] = current
+    saved["pendingTheme"] = theme
+    atomic_text(state_path, json.dumps(saved, separators=(",", ":")) + "\n", 0o600)
+    changed = current != theme
+    if changed:
+        options["theme"] = theme
+        mode = settings.stat(follow_symlinks=False).st_mode & 0o777
+        atomic_text(settings, json.dumps(document, indent=2) + "\n", mode)
+    saved["managedTheme"] = theme
+    saved.pop("pendingTheme", None)
+    atomic_text(state_path, json.dumps(saved, separators=(",", ":")) + "\n", 0o600)
+    return changed
+
+
+def cleanup_obsidian_terminal(paths: Paths) -> tuple[list[str], list[str]]:
+    changed: list[str] = []
+    warnings: list[str] = []
+    root = paths.managed_asset_state_dir
+    if not root.is_dir():
+        return changed, warnings
+    for state_path in sorted(root.glob("obsidian-terminal-*.json")):
+        saved = _read_obsidian_terminal_state(paths, state_path)
+        if saved is None:
+            warnings.append(f"could not restore Obsidian Terminal theme because state is invalid: {state_path}")
+            continue
+        settings = Path(str(saved["path"]))
+        try:
+            document = _read_obsidian_terminal_data(settings)
+        except (TypeError, ValueError) as exc:
+            warnings.append(f"could not restore Obsidian Terminal theme at {settings}: {exc}")
+            continue
+        options = document.setdefault("terminalOptions", {})
+        assert isinstance(options, dict)
+        current_exists = "theme" in options
+        current = options.get("theme")
+        pending = saved.get("pendingTheme")
+        prior_match = pending is not None and (
+            (
+                bool(saved["hadTheme"])
+                and current_exists
+                and current == saved.get("priorTheme")
+            )
+            or (not bool(saved["hadTheme"]) and not current_exists)
+        )
+        if prior_match:
+            state_path.unlink()
+            continue
+        if current != saved.get("managedTheme") and (
+            pending is None or current != pending
+        ):
+            warnings.append(f"preserved user-modified Obsidian Terminal theme: {settings}")
+            state_path.unlink()
+            continue
+        if bool(saved["hadTheme"]):
+            options["theme"] = saved.get("priorTheme")
+        else:
+            options.pop("theme", None)
+        mode = settings.stat(follow_symlinks=False).st_mode & 0o777
+        atomic_text(settings, json.dumps(document, indent=2) + "\n", mode)
+        state_path.unlink()
+        changed.append(str(settings))
+    return changed, warnings
+
+
 def inspect_applicability(plugin_id: str, paths: Paths) -> bool:
     if plugin_id == "gtk-css-compat":
         return gtk_requested(paths)
@@ -847,6 +1070,28 @@ def _spicetify_missing(paths: Paths) -> list[str]:
     return missing
 
 
+def _cleanup_gtk_asset(
+    paths: Paths,
+    key: str,
+    target: Path,
+    *,
+    legacy_owned: bool = False,
+) -> tuple[list[str], list[str]]:
+    return _cleanup_optional_asset(
+        paths,
+        key,
+        target,
+        legacy_owned=legacy_owned
+        and _matches_sources(
+            target, _current_plugin_sources(paths, "gtk-css-compat")
+        ),
+    )
+
+
+def cleanup_gtk_assets(paths: Paths) -> tuple[list[str], list[str]]:
+    return cleanup_gtk(paths, cleanup_asset=_cleanup_gtk_asset)
+
+
 def inspect_readiness(
     plugin_id: str, paths: Paths, which: Callable[[str], str | None] | None = None
 ) -> tuple[bool, list[str], list[str]]:
@@ -877,8 +1122,16 @@ def inspect_readiness(
                 normalized_zed_theme(source)
             except ZedThemeError as exc:
                 missing.append(str(exc))
-    elif plugin_id in OPTIONAL_ASSET_PLUGINS and not assets:
-        # Missing opt-in assets mean "restore defaults", not "unavailable".
+    elif (
+        plugin_id in OPTIONAL_ASSET_PLUGINS
+        and not assets
+        and not (
+            GENERATED.get(plugin_id)
+            and (paths.current_theme / GENERATED[plugin_id]).is_file()
+        )
+    ):
+        # A true source-absent path remains actionable so THPM can restore defaults
+        # after the application is removed. Rendered fallbacks still require the app.
         missing = []
     elif plugin_id == "gtk-css-compat":
         missing = []
@@ -912,6 +1165,12 @@ def inspect_readiness(
                     _read_obsidian_terminal_data(path)
                 except (TypeError, ValueError) as exc:
                     missing.append(str(exc))
+        authored = authored_source(paths, plugin.theme_assets)
+        if authored is not None:
+            try:
+                _read_obsidian_terminal_theme(authored)
+            except ValueError as exc:
+                missing.append(str(exc))
     elif plugin_id == "cava" and not missing:
         version = installed_cava_version(command_path("cava") or "cava")
         if version is None or version < (0, 10, 6):
@@ -982,19 +1241,7 @@ def _copy_first(
 
 
 def _browser_import(paths: Paths, plugin_id: str, base: Path) -> tuple[list[str], bool]:
-    candidates = (
-        ("firefox.css", GENERATED[plugin_id])
-        if plugin_id == "firefox"
-        else ("zen.css", GENERATED[plugin_id])
-    )
-    source = next(
-        (
-            paths.current_theme / name
-            for name in candidates
-            if (paths.current_theme / name).is_file()
-        ),
-        None,
-    )
+    source = _plugin_theme_source(paths, plugin_id)
     if source is None:
         raise RuntimeError(f"{plugin_id}: no theme asset or generated CSS was found")
     profiles = base / "profiles.ini"
@@ -1868,7 +2115,12 @@ def apply(
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
     if plugin_id == "gtk-css-compat":
-        return apply_gtk(paths, force_restart=force_reload)
+        return apply_gtk(
+            paths,
+            install_asset=_install_optional_asset,
+            cleanup_asset=_cleanup_gtk_asset,
+            force_restart=force_reload,
+        )
     if plugin_id == "vscode-local-compat":
         return apply_vscode_local(paths)
     if plugin_id == "pi-hot-reload":
@@ -1911,10 +2163,6 @@ def apply(
     setup_actions: list[str] = []
     home = paths.home
     targets = _standard_output_targets(paths)
-    candidates = {
-        "superfile": ("superfile.toml", GENERATED["superfile"]),
-    }
-
     if plugin_id == "obsidian-terminal":
         settings = _obsidian_terminal_data_files(paths)
         if not settings:
@@ -1924,18 +2172,17 @@ def apply(
                 message="no Obsidian Terminal plugin settings were found",
             )
         documents = [(path, _read_obsidian_terminal_data(path)) for path in settings]
-        theme = _obsidian_terminal_theme(
-            load_palette(paths.current_theme / "colors.toml")
+        authored = authored_source(paths, BY_ID[plugin_id].theme_assets)
+        theme = (
+            _read_obsidian_terminal_theme(authored)
+            if authored is not None
+            else _obsidian_terminal_theme(
+                load_palette(paths.current_theme / "colors.toml")
+            )
         )
         for path, document in documents:
-            options = document.setdefault("terminalOptions", {})
-            assert isinstance(options, dict)
-            if options.get("theme") == theme:
-                continue
-            options["theme"] = theme
-            mode = path.stat(follow_symlinks=False).st_mode & 0o777
-            atomic_text(path, json.dumps(document, indent=2) + "\n", mode)
-            changed.append(str(path))
+            if _write_obsidian_terminal_theme(paths, path, document, theme):
+                changed.append(str(path))
         if changed:
             restart_required.append("Obsidian")
     elif plugin_id == "zellij":
@@ -2022,15 +2269,7 @@ def apply(
             restart_required.extend(reload_restarts)
         return _result(plugin_id, changed, actions, warnings, restart_required)
     elif plugin_id in targets:
-        source_names = candidates.get(plugin_id, (GENERATED[plugin_id],))
-        source = next(
-            (
-                paths.current_theme / name
-                for name in source_names
-                if (paths.current_theme / name).is_file()
-            ),
-            None,
-        )
+        source = _plugin_theme_source(paths, plugin_id)
         if source is None:
             raise RuntimeError(f"{plugin_id}: expected theme output was not found")
         if source.name in set(GENERATED.values()):
@@ -2081,11 +2320,17 @@ def apply(
             restart_required.append("nwg-dock-hyprland")
     elif plugin_id in OPTIONAL_ASSET_PLUGINS:
         for key, asset_name, target in _optional_asset_targets(paths, plugin_id):
-            source = paths.current_theme / asset_name
-            legacy_owned = _matches_installed_theme_asset(
-                paths, target, asset_name
+            source = (
+                _plugin_theme_source(paths, plugin_id)
+                if plugin_id in {"swaync", "cliamp"}
+                else paths.current_theme / asset_name
             )
-            if source.is_file():
+            legacy_owned = (
+                _matches_sources(target, _current_plugin_sources(paths, plugin_id))
+                if plugin_id in {"swaync", "cliamp"}
+                else _matches_installed_theme_asset(paths, target, asset_name)
+            )
+            if source is not None and source.is_file():
                 if _install_optional_asset(
                     paths, key, source, target, legacy_owned=legacy_owned
                 ):
@@ -2099,11 +2344,6 @@ def apply(
         if plugin_id == "swaync" and not shutil.which("swaync-client"):
             return _result(plugin_id, changed, [], warnings)
     elif plugin_id in {"discord", "discord-system24"}:
-        source_names = (
-            ("vencord.theme.css", GENERATED[plugin_id])
-            if plugin_id == "discord"
-            else ("vencord-system24.theme.css", GENERATED[plugin_id])
-        )
         directories = [
             directory for directory in _discord_directories(paths) if directory.is_dir()
         ]
@@ -2113,14 +2353,7 @@ def apply(
                 "skipped",
                 message="no supported Discord client theme directory was found",
             )
-        source = next(
-            (
-                paths.current_theme / name
-                for name in source_names
-                if (paths.current_theme / name).is_file()
-            ),
-            None,
-        )
+        source = _plugin_theme_source(paths, plugin_id)
         if source is None:
             raise RuntimeError(
                 f"{plugin_id}: no theme asset or generated stylesheet was found"

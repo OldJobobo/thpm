@@ -133,6 +133,10 @@ thpm enable spotify
 
 THPM keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized, initializes a missing companion `user.css` from its bundled Omarchy stylesheet, and selects the lowercase `omarchy` theme with the `Base` color scheme. Existing stylesheets are never overwritten or removed. It always refreshes Spicetify's generated theme files after a palette change. Under the `automatic` restart policy, an already-running Spotify client is restarted so the colors take effect; under `notify`, Spotify remains open and is named in the pending-restart notification. A closed client stays closed under either policy. Hooks never perform Spicetify's privileged or destructive first-time backup.
 
+### cliamp themes
+
+The cliamp integration prefers an active-theme `cliamp.toml` override. When that optional asset is absent, THPM generates `~/.config/cliamp/themes/omarchy.toml` from the normalized `colors.toml` palette instead. The generated file follows cliamp's native custom-theme format and appears as `omarchy` in its theme picker. THPM restores a displaced prior file when neither source remains or the integration is disabled, and preserves later user edits rather than overwriting them during cleanup.
+
 ### Zed authored themes
 
 Omarchy's optional `omazed` package is the generated-color fallback for Zed. THPM does not modify Omazed's executable, hook, or `~/.config/zed/themes/omazed.json`. Instead, the opt-in `zed-extra` integration installs a richer authored asset when the active theme provides `zed.json` or, as a compatibility fallback, `aether.zed.json`. Canonical `zed.json` wins when both exist.

@@ -26,7 +26,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("qutebrowser", "Qutebrowser", "Browsers", "Install generated Qutebrowser colors.", "hybrid", ("qutebrowser",), templates=("thpm-qutebrowser.py.tpl",)),
     Plugin("steam", "Steam", "Games", "Apply the Omarchy color theme through steam-adwaita.", "action", ("steam", "python"), default_enabled=False, confirmation=True),
     Plugin("heroic", "Heroic", "Games", "Install a Heroic theme stylesheet.", "hybrid", ("heroic",), templates=("thpm-heroic.css.tpl",)),
-    Plugin("cliamp", "cliamp", "Media", "Install optional cliamp colors and restore the prior file when absent.", "apply", ("cliamp",), theme_assets=("cliamp.toml",)),
+    Plugin("cliamp", "cliamp", "Media", "Prefer an authored cliamp theme or generate one from the active palette.", "apply", ("cliamp",), theme_assets=("cliamp.toml",)),
 )
 
 NATIVE: tuple[Plugin, ...] = (

@@ -542,6 +542,46 @@ def _apply_zed_asset(paths: Paths) -> ApplyResult:
     return _result("zed-extra", paths_changed, [], warnings)
 
 
+def _generated_cliamp_theme(colors_path: Path) -> str:
+    colors = load_palette(colors_path)
+    values = {
+        "bg": colors["bg"],
+        "accent": colors.get("accent", colors["blue"]),
+        "bright_fg": colors["bright_fg"],
+        "fg": colors["fg"],
+        "green": colors["green"],
+        "yellow": colors["yellow"],
+        "red": colors["red"],
+    }
+    return "".join(f'{key} = "{value}"\n' for key, value in values.items())
+
+
+def _apply_cliamp_theme(paths: Paths) -> ApplyResult:
+    target = paths.config_home / "cliamp/themes/omarchy.toml"
+    source = paths.current_theme / "cliamp.toml"
+    colors = paths.current_theme / "colors.toml"
+    if source.is_file():
+        changed = _install_optional_asset(paths, "cliamp", source, target)
+        return _result("cliamp", [str(target)] if changed else [], [])
+    if not colors.is_file():
+        changed, warnings = _cleanup_optional_asset(paths, "cliamp", target)
+        return _result("cliamp", changed, [], warnings)
+
+    content = _generated_cliamp_theme(colors)
+    paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix=".cliamp-theme-", suffix=".toml", dir=paths.thpm_state_dir, text=True
+    )
+    rendered = Path(temporary)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        changed = _install_optional_asset(paths, "cliamp", rendered, target)
+    finally:
+        rendered.unlink(missing_ok=True)
+    return _result("cliamp", [str(target)] if changed else [], [])
+
+
 def _ensure_generated_output_is_rendered(source: Path) -> None:
     match = UNRESOLVED_PLACEHOLDER.search(source.read_text())
     if match:
@@ -877,6 +917,16 @@ def inspect_readiness(
                 normalized_zed_theme(source)
             except ZedThemeError as exc:
                 missing.append(str(exc))
+    elif plugin_id == "cliamp" and not assets:
+        colors = paths.current_theme / "colors.toml"
+        if colors.is_file():
+            try:
+                _generated_cliamp_theme(colors)
+            except ValueError as exc:
+                missing.append(str(exc))
+        else:
+            # Cleanup must remain actionable after cliamp is uninstalled.
+            missing = []
     elif plugin_id in OPTIONAL_ASSET_PLUGINS and not assets:
         # Missing opt-in assets mean "restore defaults", not "unavailable".
         missing = []
@@ -1904,6 +1954,8 @@ def apply(
         )
     if plugin_id == "zed-extra":
         return _apply_zed_asset(paths)
+    if plugin_id == "cliamp":
+        return _apply_cliamp_theme(paths)
     paths.current_theme.mkdir(parents=True, exist_ok=True)
     changed: list[str] = []
     warnings: list[str] = []

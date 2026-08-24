@@ -2169,7 +2169,26 @@ def apply(
                 or f"exit {completed.returncode}"
             )
             raise RuntimeError(f"steam: steam-adwaita failed: {detail}")
-        return _result(plugin_id, [], ["steam-adwaita --color-theme omarchy"])
+        restart_required: list[str] = []
+        if shutil.which("pgrep"):
+            try:
+                running = subprocess.run(
+                    ["pgrep", "-x", "steam"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=2,
+                )
+            except subprocess.TimeoutExpired:
+                running = None
+            if running is not None and running.returncode == 0:
+                restart_required.append("Steam")
+        return _result(
+            plugin_id,
+            [],
+            ["steam-adwaita --color-theme omarchy"],
+            restart_required=restart_required,
+        )
 
     try:
         reload_result = (

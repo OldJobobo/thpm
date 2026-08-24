@@ -5709,10 +5709,13 @@ class IntegrationTests(Sandbox):
         script = self.paths.home / ".local/share/steam-adwaita/install.py"
         script.parent.mkdir(parents=True)
         script.touch()
-        with patch("thpm.integrations.subprocess.run") as run:
+        with patch("thpm.integrations.shutil.which", return_value=None), patch(
+            "thpm.integrations.subprocess.run"
+        ) as run:
             run.return_value.returncode = 0
             result = apply("steam", self.paths)
         self.assertEqual(result.status, "applied")
+        self.assertEqual(result.restartRequired, [])
         run.assert_called_once_with(
             [str(script), "--color-theme", "omarchy"],
             cwd=script.parent,
@@ -5721,6 +5724,46 @@ class IntegrationTests(Sandbox):
             check=False,
             timeout=30,
         )
+
+    def test_steam_restart_notice_depends_on_running_process(self):
+        script = self.paths.home / ".local/share/steam-adwaita/install.py"
+        script.parent.mkdir(parents=True)
+        script.touch()
+        installed = subprocess.CompletedProcess([], 0, "", "")
+
+        for returncode, expected in ((0, ["Steam"]), (1, [])):
+            with self.subTest(returncode=returncode), patch(
+                "thpm.integrations.shutil.which", return_value="/usr/bin/pgrep"
+            ), patch(
+                "thpm.integrations.subprocess.run",
+                side_effect=[
+                    installed,
+                    subprocess.CompletedProcess([], returncode, "", ""),
+                ],
+            ) as run:
+                result = apply("steam", self.paths)
+
+            self.assertEqual(result.restartRequired, expected)
+            self.assertEqual(
+                run.call_args_list,
+                [
+                    call(
+                        [str(script), "--color-theme", "omarchy"],
+                        cwd=script.parent,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=30,
+                    ),
+                    call(
+                        ["pgrep", "-x", "steam"],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=2,
+                    ),
+                ],
+            )
 
     def test_gtk_compat_preserves_user_css_and_removes_only_managed_content(self):
         source = self.paths.current_theme / "gtk.css"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from .models import Plugin
 
 PLUGINS: tuple[Plugin, ...] = (
-    Plugin("gtk-css-compat", "GTK theme CSS compatibility", "Compatibility", "Deploy theme-provided GTK CSS not yet handled by Omarchy.", "action", theme_assets=("gtk.css",)),
+    Plugin("gtk-css-compat", "GTK theme CSS compatibility", "Compatibility", "Deploy theme-provided GTK CSS or generate it from colors.toml.", "action", theme_assets=("gtk.css",)),
     Plugin("vscode-local-compat", "Local VS Code theme compatibility", "Compatibility", "Install validated theme-bundled local editor themes.", "action"),
     Plugin("pi-hot-reload", "Pi live theme reload", "Compatibility", "Emit a reload event for Pi sessions using Omarchy's generated theme.", "action", ("pi",), default_enabled=False),
     Plugin("fish", "Fish", "Terminal", "Synchronize Fish shell colors.", "hybrid", ("fish",), templates=("thpm-fish.fish.tpl",)),

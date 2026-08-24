@@ -80,7 +80,7 @@ The **Real-application evidence** column is the adapter-specific addition to the
 
 | Integration ID | Certification audit | Lifecycle disposition | Default | Real-application evidence |
 |---|---|---|---:|---|
-| `gtk-css-compat` | Incomplete | Experimental | disabled | Launch recorded GTK 3 and GTK 4 test applications and prove the managed imports alter rendered surfaces. |
+| `gtk-css-compat` | Incomplete | Experimental | disabled | Launch recorded GTK 3 and GTK 4 test applications and prove supplied `gtk.css` or the `colors.toml` fallback alters rendered surfaces. |
 | `vscode-local-compat` | Incomplete | Experimental | disabled | For every claimed installed editor command (`code`, `code-insiders`, `codium`, or `cursor`), install the fixture's data-only extension, select its theme, and prove it renders. |
 | `pi-hot-reload` | Incomplete | Experimental | disabled | Keep a recorded `pi` session using `omarchy-system` open across both fixture changes and prove its watcher repaints without rewriting the native file. |
 | `fish` | Incomplete | Experimental | disabled | Start a recorded `fish` login session after each change and inspect Fish's effective color variables. |

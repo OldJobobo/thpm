@@ -55,6 +55,14 @@ class Paths:
         return self.thpm_state_dir / "zellij-theme.json"
 
     @property
+    def steam_theme_file(self) -> Path:
+        return self.thpm_state_dir / "generated/steam-adwaita.css"
+
+    @property
+    def steam_theme_receipt(self) -> Path:
+        return self.thpm_state_dir / "generated/steam-adwaita.json"
+
+    @property
     def managed_asset_state_dir(self) -> Path:
         return self.thpm_state_dir / "managed-assets"
 

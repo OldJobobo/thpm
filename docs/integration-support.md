@@ -101,7 +101,7 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | `zen` | Incomplete | Experimental | disabled | Launch recorded `zen-browser` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
 | `hermes` | Incomplete | Experimental | disabled | Launch recorded `Hermes` with a disposable config and prove it discovers and renders the generated Omarchy descriptor. |
 | `qutebrowser` | Incomplete | Experimental | disabled | Launch recorded `qutebrowser` with a disposable basedir sourcing the generated config and prove the effective UI/web palette. |
-| `steam` | Incomplete | Experimental | disabled | With recorded Steam and steam-adwaita versions, apply the fixture, prove the client renders it, and document the external action's persistence/manual reversal. |
+| `steam` | Incomplete | Experimental | disabled | Quattro evidence covers the installed package/hook, generated dark/light fallback, ordinary no-op, manual upstream reversal, and the unauthenticated Steam surface. Live authored-asset rendering, user-modification/uninstall certification gates, and authenticated Library/Store surfaces remain pending. |
 | `heroic` | Incomplete | Experimental | disabled | Launch recorded `heroic` with a disposable config and prove its custom-theme loader consumes the installed semantic CSS variables. |
 | `cliamp` | Incomplete | Experimental | disabled | Launch recorded `cliamp` with a disposable config and prove it loads the optional theme file, then verify prior-file restoration. |
 

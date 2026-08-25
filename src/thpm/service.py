@@ -59,6 +59,7 @@ from .integrations import (
     apply_enabled,
     cleanup_managed_outputs,
     cleanup_optional_assets,
+    cleanup_steam_assets,
     cleanup_zed_assets,
     cleanup_zellij,
     reload_restored_integration,
@@ -805,6 +806,12 @@ class Service:
                 )
                 changed.extend(cleanup_changed)
                 record_cleanup(cleanup_warnings)
+            elif not value and plugin_id == "steam":
+                cleanup_changed, cleanup_warnings = cleanup_steam_assets(
+                    self.paths, assume_legacy=True
+                )
+                changed.extend(cleanup_changed)
+                record_cleanup(cleanup_warnings)
             elif not value and plugin_id in OPTIONAL_ASSET_PLUGINS:
                 cleanup_changed, cleanup_warnings = cleanup_optional_assets(
                     self.paths, plugin_id, assume_legacy=True
@@ -1252,6 +1259,11 @@ class Service:
                         {"plugin": plugin_id, "message": message}
                         for message in reload_warnings
                     )
+                steam_changed, steam_warnings = cleanup_steam_assets(
+                    self.paths, assume_legacy=True
+                )
+                changed.extend(steam_changed)
+                record_cleanup("steam", steam_warnings)
                 selector_changed, selector_warnings = restore_cava_selector(self.paths)
                 changed.extend(selector_changed)
                 record_cleanup("cava", selector_warnings)

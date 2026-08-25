@@ -133,6 +133,8 @@ thpm enable spotify
 
 THPM keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized, initializes a missing companion `user.css` from its bundled Omarchy stylesheet, and selects the lowercase `omarchy` theme with the `Base` color scheme. Existing stylesheets are never overwritten or removed. It always refreshes Spicetify's generated theme files after a palette change. Under the `automatic` restart policy, an already-running Spotify client is restarted so the colors take effect; under `notify`, Spotify remains open and is named in the pending-restart notification. A closed client stays closed under either policy. Hooks never perform Spicetify's privileged or destructive first-time backup.
 
+Steam requires an initialized client and an Adwaita-for-Steam installer that supports `--custom-css`. When enabled, THPM prefers the active theme's `steam.css`; otherwise it generates custom CSS from `colors.toml` and passes that THPM-owned state file to the external installer. Applying Adwaita-for-Steam replaces its installed skin and can replace prior helper options. Disabling Steam synchronization removes only THPM's generated state—the external skin persists until you reapply preferred Adwaita-for-Steam options or explicitly uninstall that skin.
+
 ### Zed authored themes
 
 Omarchy's optional `omazed` package is the generated-color fallback for Zed. THPM does not modify Omazed's executable, hook, or `~/.config/zed/themes/omazed.json`. Instead, the opt-in `zed-extra` integration installs a richer authored asset when the active theme provides `zed.json` or, as a compatibility fallback, `aether.zed.json`. Canonical `zed.json` wins when both exist.

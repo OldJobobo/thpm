@@ -7,7 +7,9 @@ arch=('any')
 url='https://github.com/oldjobobo/thpm'
 license=('MIT')
 depends=('bash' 'python>=3.11' 'python-rich>=14' 'python-rich<16' 'python-textual>=8.2.8' 'python-textual<9')
-optdepends=('omarchy: Omarchy 4 host integration (required for installation and theme operations)')
+optdepends=('omarchy: Omarchy 4 host integration (required for installation and theme operations)'
+            'steam: Steam application theme integration'
+            'git: provision the Adwaita-for-Steam integration dependency')
 provides=('theme-hook-plugin-manager')
 conflicts=('theme-hook-plugin-manager')
 replaces=('theme-hook-plugin-manager')

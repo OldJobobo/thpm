@@ -5716,11 +5716,19 @@ class IntegrationTests(Sandbox):
         return script, steamui
 
     def _complete_steam_install(self, command):
-        source = Path(command[command.index("--custom-css") + 1])
-        target = self.paths.home / ".steam/steam/steamui/adwaita/custom.css"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read_bytes())
-        (target.parent / "config.css").write_text('@import url("custom.css");\n')
+        source = (
+            self.paths.home
+            / ".local/share/steam-adwaita/adwaita/colorthemes/omarchy/omarchy.css"
+        )
+        self.assertTrue(source.is_file())
+        skin = self.paths.home / ".steam/steam/steamui/adwaita"
+        skin.mkdir(parents=True, exist_ok=True)
+        (skin / "config.css").write_text(
+            '@import url("colorthemes/omarchy/omarchy.css");\n'
+        )
+        css = self.paths.home / ".steam/steam/steamui/css"
+        for name in ("library.css", "gamerecording.css", "gamenotes.css"):
+            (css / name).write_text("/* Adwaita-for-Steam */\n")
         return subprocess.CompletedProcess(command, 0, "Installed successfully\n", "")
 
     def test_steam_colors_only_generates_custom_css_and_installs(self):
@@ -5729,19 +5737,19 @@ class IntegrationTests(Sandbox):
 
         def run_steam(command, **_kwargs):
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
             self.assertEqual(
                 command,
                 [
                     str(script),
                     "--color-theme",
-                    "adwaita",
+                    "omarchy",
                     "--accent-color",
                     "theme",
                     "--color-scheme",
                     "dark",
-                    "--custom-css",
-                    str(source),
+                    "--extras",
+                    "library/hide-whats-new",
                 ],
             )
             return self._complete_steam_install(command)
@@ -5756,13 +5764,16 @@ class IntegrationTests(Sandbox):
         self.assertEqual(run.call_count, 2)
         css = source.read_text()
         self.assertIn("--adw-color-scheme: dark", css)
-        self.assertIn("--adw-system-accent: #4477cc", css)
-        self.assertIn("--adw-window-bg: #111111", css)
-        self.assertIn("--adw-window-fg: #dddddd", css)
-        self.assertIn("--adw-accent-bg-dark: #4477cc", css)
-        self.assertIn("--adw-destructive-bg-dark: #cc4444", css)
-        self.assertIn("--adw-success-bg-dark: #55aa66", css)
-        self.assertIn("--adw-warning-bg-dark: #ccaa44", css)
+        self.assertIn("--adw-accent-bg-rgb: 68, 119, 204", css)
+        self.assertIn("--adw-accent-fg-rgb: 17, 17, 17", css)
+        self.assertIn("--adw-destructive-bg-rgb: 204, 68, 68", css)
+        self.assertIn("--adw-success-bg-rgb: 85, 170, 102", css)
+        self.assertIn("--adw-warning-bg-rgb: 204, 170, 68", css)
+        self.assertIn("--adw-window-bg-rgb: 17, 17, 17", css)
+        self.assertIn("--adw-window-fg-rgb: 221, 221, 221", css)
+        self.assertIn("--adw-view-bg-rgb: 16, 16, 16", css)
+        self.assertIn("--adw-headerbar-bg-rgb: 17, 17, 17", css)
+        self.assertNotIn("--adw-window-bg:", css)
         receipt = json.loads(self.paths.steam_theme_receipt.read_text())
         self.assertEqual(receipt["sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
 
@@ -5774,9 +5785,10 @@ class IntegrationTests(Sandbox):
 
         def run_steam(command, **_kwargs):
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
             self.assertNotIn("--color-scheme", command)
-            self.assertEqual(command[-2:], ["--custom-css", str(self.paths.steam_theme_file)])
+            self.assertIn("omarchy", command)
+            self.assertEqual(command[-2:], ["--extras", "library/hide-whats-new"])
             return self._complete_steam_install(command)
 
         with patch("thpm.palette.shutil.which", return_value=None), patch(
@@ -5794,7 +5806,7 @@ class IntegrationTests(Sandbox):
         def run_steam(command, **_kwargs):
             nonlocal installs
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
             installs += 1
             return self._complete_steam_install(command)
 
@@ -5821,7 +5833,7 @@ class IntegrationTests(Sandbox):
         def run_steam(command, **_kwargs):
             nonlocal attempts
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
             attempts += 1
             if attempts == 1:
                 return subprocess.CompletedProcess(command, 2, "", "failed")
@@ -5844,14 +5856,14 @@ class IntegrationTests(Sandbox):
 
         def run_steam(command, **_kwargs):
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
             return subprocess.CompletedProcess(command, 0, "No changes made\n", "")
 
         with patch("thpm.palette.shutil.which", return_value=None), patch(
             "thpm.integrations.shutil.which", return_value=None
         ), patch("thpm.integrations.subprocess.run", side_effect=run_steam):
             with self.assertRaisesRegex(
-                RuntimeError, "did not deploy matching custom CSS: No changes made"
+                RuntimeError, "did not deploy the Omarchy color theme: No changes made"
             ):
                 apply("steam", self.paths)
 
@@ -5866,7 +5878,7 @@ class IntegrationTests(Sandbox):
 
         def run_steam(command, **_kwargs):
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
             return self._complete_steam_install(command)
 
         with patch("thpm.palette.shutil.which", return_value=None), patch(
@@ -5875,7 +5887,19 @@ class IntegrationTests(Sandbox):
             apply("steam", self.paths)
 
         changed, warnings = cleanup_steam_assets(self.paths)
-        self.assertEqual(set(changed), {str(self.paths.steam_theme_file), str(self.paths.steam_theme_receipt)})
+        color_theme = (
+            script.parent / "adwaita/colorthemes/omarchy/omarchy.css"
+        )
+        self.assertEqual(
+            set(changed),
+            {
+                str(self.paths.steam_theme_file),
+                str(self.paths.steam_theme_receipt),
+                str(color_theme),
+            },
+        )
+        self.assertFalse(color_theme.exists())
+        self.assertTrue(script.is_file())
         self.assertTrue(external.is_file())
         self.assertTrue(any("externally patched" in warning for warning in warnings))
 
@@ -5886,7 +5910,7 @@ class IntegrationTests(Sandbox):
 
             def run_steam(command, **_kwargs):
                 if command[-1] == "--help":
-                    return subprocess.CompletedProcess(command, 0, "--custom-css PATH\n", "")
+                    return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
                 if command[0] == "pgrep":
                     return subprocess.CompletedProcess(command, returncode, "", "")
                 return self._complete_steam_install(command)
@@ -6120,7 +6144,7 @@ class IntegrationTests(Sandbox):
         self.write_palette()
 
         with patch(
-            "thpm.integrations._steam_helper_supports_custom_css",
+            "thpm.integrations._steam_helper_supports_color_theme",
             return_value=(True, ""),
         ):
             ready, missing, _warnings = inspect_readiness(
@@ -6133,7 +6157,7 @@ class IntegrationTests(Sandbox):
         colors = self.paths.current_theme / "colors.toml"
         colors.write_text(colors.read_text().replace('red = "#cc4444"', 'red = "broken"'))
         with patch("thpm.palette.shutil.which", return_value=None), patch(
-            "thpm.integrations._steam_helper_supports_custom_css",
+            "thpm.integrations._steam_helper_supports_color_theme",
             return_value=(True, ""),
         ):
             ready, missing, _warnings = inspect_readiness(
@@ -6145,7 +6169,7 @@ class IntegrationTests(Sandbox):
         authored = self.paths.current_theme / "steam.css"
         authored.write_text(":root { --authored-steam: #123456; }\n")
         with patch("thpm.palette.shutil.which", return_value=None), patch(
-            "thpm.integrations._steam_helper_supports_custom_css",
+            "thpm.integrations._steam_helper_supports_color_theme",
             return_value=(True, ""),
         ):
             ready, missing, _warnings = inspect_readiness(
@@ -6155,14 +6179,14 @@ class IntegrationTests(Sandbox):
         self.assertEqual(missing, [])
 
         with patch(
-            "thpm.integrations._steam_helper_supports_custom_css",
-            return_value=(False, "steam-adwaita installer with --custom-css support"),
+            "thpm.integrations._steam_helper_supports_color_theme",
+            return_value=(False, "steam-adwaita installer with --color-theme support"),
         ):
             ready, missing, _warnings = inspect_readiness(
                 "steam", self.paths, lambda command: f"/usr/bin/{command}"
             )
         self.assertFalse(ready)
-        self.assertIn("steam-adwaita installer with --custom-css support", missing)
+        self.assertIn("steam-adwaita installer with --color-theme support", missing)
 
     def test_steam_missing_helper_skips_and_failure_is_reported(self):
         self.write_palette()
@@ -6173,7 +6197,7 @@ class IntegrationTests(Sandbox):
         script.parent.mkdir(parents=True)
         script.touch()
         with patch("thpm.palette.shutil.which", return_value=None), patch(
-            "thpm.integrations._steam_helper_supports_custom_css",
+            "thpm.integrations._steam_helper_supports_color_theme",
             return_value=(True, ""),
         ), patch("thpm.integrations.subprocess.run") as run:
             run.return_value.returncode = 2
@@ -6806,6 +6830,24 @@ class UpdateTests(Sandbox):
         )
         which_patcher.start()
         self.addCleanup(which_patcher.stop)
+
+    def test_arch_metadata_declares_optional_steam_dependencies_everywhere(self):
+        root = Path(__file__).resolve().parents[1]
+        files = (
+            root / "packaging/aur/thpm/PKGBUILD",
+            root / "packaging/aur/thpm-git/PKGBUILD",
+            root / "packaging/aur/thpm/.SRCINFO",
+            root / "packaging/aur/thpm-git/.SRCINFO",
+            root / "scripts/local-arch-package.sh",
+        )
+        for file in files:
+            with self.subTest(file=file):
+                content = file.read_text(encoding="utf-8")
+                self.assertIn("steam: Steam application theme integration", content)
+                self.assertIn(
+                    "git: provision the Adwaita-for-Steam integration dependency",
+                    content,
+                )
 
     def release(self, version="1.0.1"):
         archive = f"thpm-{version}.tar.gz"

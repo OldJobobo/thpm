@@ -184,7 +184,18 @@ def restore_selection(paths: Paths) -> tuple[list[str], list[str]]:
 
     lines = text.splitlines(keepends=True)
     if bool(state["selectorExisted"]):
-        lines[selector.line] = str(state["previousLine"])
+        previous = str(state["previousLine"])
+        previous_match = _THEME_RE.match(previous)
+        if previous_match is None:
+            raise CliampError(f"invalid cliamp selector restoration state: {state_path}")
+        expected = (
+            previous[: previous_match.start("value")]
+            + _THEME
+            + previous[previous_match.end("value") :]
+        )
+        if lines[selector.line] != expected:
+            return [], ["preserved user-modified cliamp theme selector"]
+        lines[selector.line] = previous
     else:
         expected = str(state["insertedLine"])
         if lines[selector.line] != expected:

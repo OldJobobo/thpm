@@ -4296,6 +4296,30 @@ class IntegrationTests(Sandbox):
             (self.paths.managed_asset_state_dir / "cliamp-selection.json").exists()
         )
 
+    def test_cliamp_cleanup_preserves_user_edited_managed_selector_line(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("# thpm:cliamp-use-native\naccent = \"#020202\"\n")
+        config = self.paths.config_home / "cliamp/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme = "miasma" # original\nvolume = 75\n')
+
+        apply("cliamp", self.paths)
+        config.write_text('theme = "omarchy" # user edited while managed\nvolume = 75\n')
+        source.unlink()
+        result = apply("cliamp", self.paths)
+
+        self.assertEqual(
+            config.read_text(),
+            'theme = "omarchy" # user edited while managed\nvolume = 75\n',
+        )
+        self.assertTrue(
+            any(
+                "preserved user-modified cliamp theme selector" in warning
+                for warning in result.warnings
+            )
+        )
+
     def test_cliamp_colors_only_second_run_is_unchanged(self):
         self.write_palette()
 

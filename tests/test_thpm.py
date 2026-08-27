@@ -5716,6 +5716,9 @@ class IntegrationTests(Sandbox):
         return script, steamui
 
     def _complete_steam_install(self, command):
+        self.assertEqual(command[1:3], ["--color-theme", "omarchy"])
+        self.assertIn("--accent-color", command)
+        self.assertNotIn("--custom-css", command)
         source = (
             self.paths.home
             / ".local/share/steam-adwaita/adwaita/colorthemes/omarchy/omarchy.css"
@@ -5731,13 +5734,13 @@ class IntegrationTests(Sandbox):
             (css / name).write_text("/* Adwaita-for-Steam */\n")
         return subprocess.CompletedProcess(command, 0, "Installed successfully\n", "")
 
-    def test_steam_colors_only_generates_custom_css_and_installs(self):
+    def test_steam_colors_only_generates_color_theme_and_installs(self):
         script, _steamui = self._write_steam_fixture()
         source = self.paths.steam_theme_file
 
         def run_steam(command, **_kwargs):
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n", "")
             self.assertEqual(
                 command,
                 [
@@ -5785,7 +5788,7 @@ class IntegrationTests(Sandbox):
 
         def run_steam(command, **_kwargs):
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n", "")
             self.assertNotIn("--color-scheme", command)
             self.assertIn("omarchy", command)
             self.assertEqual(command[-2:], ["--extras", "library/hide-whats-new"])
@@ -5806,7 +5809,7 @@ class IntegrationTests(Sandbox):
         def run_steam(command, **_kwargs):
             nonlocal installs
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n", "")
             installs += 1
             return self._complete_steam_install(command)
 
@@ -5833,7 +5836,7 @@ class IntegrationTests(Sandbox):
         def run_steam(command, **_kwargs):
             nonlocal attempts
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n", "")
             attempts += 1
             if attempts == 1:
                 return subprocess.CompletedProcess(command, 2, "", "failed")
@@ -5856,7 +5859,7 @@ class IntegrationTests(Sandbox):
 
         def run_steam(command, **_kwargs):
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n", "")
             return subprocess.CompletedProcess(command, 0, "No changes made\n", "")
 
         with patch("thpm.palette.shutil.which", return_value=None), patch(
@@ -5878,7 +5881,7 @@ class IntegrationTests(Sandbox):
 
         def run_steam(command, **_kwargs):
             if command[-1] == "--help":
-                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
+                return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n", "")
             return self._complete_steam_install(command)
 
         with patch("thpm.palette.shutil.which", return_value=None), patch(
@@ -5910,7 +5913,7 @@ class IntegrationTests(Sandbox):
 
             def run_steam(command, **_kwargs):
                 if command[-1] == "--help":
-                    return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n--custom-css PATH\n", "")
+                    return subprocess.CompletedProcess(command, 0, "--color-theme THEME\n", "")
                 if command[0] == "pgrep":
                     return subprocess.CompletedProcess(command, returncode, "", "")
                 return self._complete_steam_install(command)

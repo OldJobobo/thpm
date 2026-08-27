@@ -76,6 +76,7 @@ from thpm.integrations import (
     apply,
     apply_enabled,
     cleanup_managed_outputs,
+    cleanup_optional_assets,
     inspect_readiness,
 )
 from thpm.migrate import archive, artifacts, inspect, needs_compat
@@ -296,14 +297,14 @@ class StateTests(Sandbox):
         self.paths.thpm_state_dir.mkdir(parents=True)
         self.paths.state_file.write_text(
             "version = 1\n\n[plugins]\nfish = true\ngtk-css-compat = true\n"
-            "spotify = true\nbranding = true\nswaync = true\nzed-extra = true\n"
+            "spotify = true\nbranding = true\nfirefox = true\nzed-extra = true\n"
         )
         enabled = load(self.paths)
         self.assertTrue(enabled["fish"])
         self.assertTrue(enabled["gtk-css-compat"])
         self.assertTrue(enabled["spotify"])
         self.assertTrue(enabled["branding"])
-        self.assertTrue(enabled["swaync"])
+        self.assertTrue(enabled["firefox"])
         self.assertTrue(enabled["zed-extra"])
 
     def test_rejects_conflicting_persisted_discord_state(self):
@@ -1386,6 +1387,68 @@ class ServiceTests(Sandbox):
         self.assertFalse(self.paths.thpm_state_dir.exists())
         self.assertIn("preserved user-modified", str(payload["warnings"]))
 
+    def test_uninstall_restores_historical_swaync_asset(self):
+        managed = b"retired SwayNC theme\n"
+        prior = b"user SwayNC theme\n"
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(managed)
+        state = self.paths.managed_asset_state_dir / "swaync.json"
+        backup = self.paths.managed_asset_state_dir / "swaync.backup"
+        state.parent.mkdir(parents=True)
+        backup.write_bytes(prior)
+        state.write_text(
+            json.dumps(
+                {
+                    "existed": True,
+                    "priorType": "file",
+                    "priorSha256": hashlib.sha256(prior).hexdigest(),
+                    "priorMode": 0o644,
+                    "managedSha256": hashlib.sha256(managed).hexdigest(),
+                    "managedMode": 0o644,
+                }
+            )
+        )
+
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            payload = Service(self.paths).uninstall()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(target.read_bytes(), prior)
+        self.assertFalse(state.exists())
+        self.assertFalse(backup.exists())
+
+    def test_uninstall_preserves_user_modified_historical_swaync_asset(self):
+        managed = b"retired SwayNC theme\n"
+        prior = b"user SwayNC theme\n"
+        modified = b"later user edit\n"
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(modified)
+        state = self.paths.managed_asset_state_dir / "swaync.json"
+        backup = self.paths.managed_asset_state_dir / "swaync.backup"
+        state.parent.mkdir(parents=True)
+        backup.write_bytes(prior)
+        state.write_text(
+            json.dumps(
+                {
+                    "existed": True,
+                    "priorType": "file",
+                    "priorSha256": hashlib.sha256(prior).hexdigest(),
+                    "priorMode": 0o644,
+                    "managedSha256": hashlib.sha256(managed).hexdigest(),
+                    "managedMode": 0o644,
+                }
+            )
+        )
+
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            payload = Service(self.paths).uninstall()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(target.read_bytes(), modified)
+        self.assertIn("preserved user-modified", str(payload["warnings"]))
+
     def test_uninstall_removes_legacy_system24_output_despite_shared_marker(self):
         source = self.paths.current_theme / "thpm-vencord-system24.theme.css"
         source.parent.mkdir(parents=True)
@@ -1436,6 +1499,11 @@ class ServiceTests(Sandbox):
         payload = Service(self.paths).set_enabled("zed-etra", True, refresh=False)
         self.assertFalse(payload["ok"])
         self.assertIn("did you mean zed-extra?", payload["summary"])
+
+    def test_retired_swaync_cannot_be_enabled(self):
+        payload = Service(self.paths).set_enabled("swaync", True, refresh=False)
+        self.assertFalse(payload["ok"])
+        self.assertIn("unknown plugin: swaync", payload["summary"])
 
     def test_sensitive_plugin_requires_service_confirmation(self):
         assets = Path(__file__).parents[1] / "assets"
@@ -1511,24 +1579,6 @@ class ServiceTests(Sandbox):
         self.assertTrue(payload["ok"])
         self.assertFalse(target.exists())
         self.assertFalse(source.exists())
-
-    def test_disabling_swaync_restores_and_reloads(self):
-        source = self.paths.current_theme / "colors.css"
-        source.parent.mkdir(parents=True)
-        source.write_text("theme")
-        target = self.paths.config_home / "swaync/colors.css"
-        target.parent.mkdir(parents=True)
-        target.write_text("user default")
-        with patch("thpm.integrations._reload", return_value=[]):
-            apply("swaync", self.paths)
-        assets = Path(__file__).parents[1] / "assets"
-        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
-            "thpm.integrations.shutil.which", return_value="/usr/bin/swaync-client"
-        ), patch("thpm.integrations._reload", return_value=["swaync-client --reload-css"]) as reload_app:
-            payload = Service(self.paths).set_enabled("swaync", False, refresh=False)
-        self.assertTrue(payload["ok"])
-        self.assertEqual(target.read_text(), "user default")
-        reload_app.assert_called_once_with("swaync")
 
     def test_disabling_gtk_compat_removes_only_managed_css(self):
         source = self.paths.current_theme / "gtk.css"
@@ -4828,7 +4878,6 @@ class IntegrationTests(Sandbox):
 
     def test_optional_assets_restore_the_files_they_displaced(self):
         cases = {
-            "swaync": ("colors.css", self.paths.config_home / "swaync/colors.css"),
             "cliamp": ("cliamp.toml", self.paths.config_home / "cliamp/themes/omarchy.toml"),
         }
         with patch("thpm.integrations._reload", return_value=[]):
@@ -4845,6 +4894,72 @@ class IntegrationTests(Sandbox):
                     result = apply(plugin_id, self.paths)
                     self.assertEqual(target.read_text(), f"{plugin_id} user default")
                     self.assertIn(str(target), result.changed)
+
+    def test_reconcile_retires_swaync_and_cleans_historical_output(self):
+        installed_theme = self.paths.config_home / "omarchy/themes/old"
+        installed_theme.mkdir(parents=True)
+        (installed_theme / "colors.css").write_text("legacy swaync theme\n")
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("legacy swaync theme\n")
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            "version = 1\n\n[plugins]\nspotify = true\nswaync = true\n"
+        )
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text(
+            "canonical-palette-v1\n"
+        )
+
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).reconcile()
+
+        self.assertFalse(target.exists())
+        self.assertNotIn("swaync", self.paths.state_file.read_text())
+        self.assertNotIn("swaync", {item["id"] for item in payload["plugins"]})
+        self.assertIn(str(target), payload["changed"])
+
+    def test_reconcile_retires_swaync_and_restores_displaced_stylesheet(self):
+        managed = b"retired SwayNC theme\n"
+        prior = b"user SwayNC theme\n"
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(managed)
+        state = self.paths.managed_asset_state_dir / "swaync.json"
+        backup = self.paths.managed_asset_state_dir / "swaync.backup"
+        state.parent.mkdir(parents=True)
+        backup.write_bytes(prior)
+        state.write_text(
+            json.dumps(
+                {
+                    "existed": True,
+                    "priorType": "file",
+                    "priorSha256": hashlib.sha256(prior).hexdigest(),
+                    "priorMode": 0o644,
+                    "managedSha256": hashlib.sha256(managed).hexdigest(),
+                    "managedMode": 0o644,
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.state_file.write_text(
+            "version = 1\n\n[plugins]\nspotify = true\nswaync = true\n"
+        )
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text(
+            "canonical-palette-v1\n"
+        )
+
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).reconcile()
+
+        self.assertEqual(target.read_bytes(), prior)
+        self.assertFalse(state.exists())
+        self.assertFalse(backup.exists())
+        self.assertNotIn("swaync", self.paths.state_file.read_text())
+        self.assertIn(str(target), payload["changed"])
 
     def test_reconcile_cleans_retired_windsurf_output_without_exposing_plugin(self):
         installed_theme = self.paths.config_home / "omarchy/themes/old"
@@ -4950,19 +5065,23 @@ class IntegrationTests(Sandbox):
         target = self.paths.config_home / "swaync/colors.css"
         target.parent.mkdir(parents=True)
         target.write_text("old managed colors")
-        with patch("thpm.integrations.shutil.which", return_value=None):
-            result = apply("swaync", self.paths)
+        result_changed, result_warnings = cleanup_optional_assets(
+            self.paths, "swaync", assume_legacy=True
+        )
         self.assertFalse(target.exists())
-        self.assertIn(str(target), result.changed)
+        self.assertIn(str(target), result_changed)
+        self.assertEqual(result_warnings, [])
 
         marker = self.paths.managed_asset_state_dir / "swaync.legacy-checked"
         marker.unlink()
         target.write_text("user colors")
-        with patch("thpm.integrations.shutil.which", return_value=None):
-            preserved = apply("swaync", self.paths)
+        preserved_changed, preserved_warnings = cleanup_optional_assets(
+            self.paths, "swaync", assume_legacy=True
+        )
         self.assertTrue(target.exists())
         self.assertEqual(target.read_text(), "user colors")
-        self.assertEqual(preserved.status, "unchanged")
+        self.assertEqual(preserved_changed, [])
+        self.assertEqual(preserved_warnings, [])
 
     def test_optional_asset_without_previous_file_is_removed_when_absent(self):
         source = self.paths.current_theme / "cliamp.toml"
@@ -5086,22 +5205,6 @@ class IntegrationTests(Sandbox):
         apply("branding", self.paths)
         self.assertEqual(about_target.read_text(), "user about")
         self.assertEqual(screen_target.read_text(), "new theme screensaver")
-
-    def test_swaync_cleanup_does_not_require_the_reload_command(self):
-        source = self.paths.current_theme / "colors.css"
-        source.parent.mkdir(parents=True)
-        source.write_text("theme")
-        target = self.paths.config_home / "swaync/colors.css"
-        target.parent.mkdir(parents=True)
-        target.write_text("user default")
-        with patch("thpm.integrations._reload", return_value=[]):
-            apply("swaync", self.paths)
-        source.unlink()
-        with patch("thpm.integrations.shutil.which", return_value=None):
-            result = apply_enabled(self.paths, {"swaync": True})
-        swaync = next(item for item in result["results"] if item["id"] == "swaync")
-        self.assertEqual(swaync["status"], "applied")
-        self.assertEqual(target.read_text(), "user default")
 
     def test_optional_asset_cleanup_does_not_require_the_application(self):
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
@@ -5606,57 +5709,6 @@ class IntegrationTests(Sandbox):
         self.assertEqual(payload["actions"], ["spicetify refresh"])
         self.assertEqual(payload["restartRequired"], ["Spotify"])
 
-    def test_swaync_reload_skips_when_daemon_is_not_running(self):
-        stopped = subprocess.CompletedProcess([], 1, "", "")
-        with patch(
-            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
-        ), patch(
-            "thpm.integrations.subprocess.run", return_value=stopped
-        ) as run:
-            actions, restart_required = _reload("swaync")
-
-        self.assertEqual(actions, [])
-        self.assertEqual(restart_required, [])
-        run.assert_called_once_with(
-            ["pgrep", "-x", "swaync"],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=2,
-        )
-
-    def test_app_reload_timeout_is_reported_without_stalling(self):
-        running = subprocess.CompletedProcess([], 0, "123\n", "")
-        with patch(
-            "thpm.integrations.shutil.which", return_value="/usr/bin/tool"
-        ), patch(
-            "thpm.integrations.subprocess.run",
-            side_effect=[
-                running,
-                subprocess.TimeoutExpired(["swaync-client", "--reload-css"], 5),
-            ],
-        ) as run, self.assertRaisesRegex(RuntimeError, "reload timed out"):
-            _reload("swaync")
-        self.assertEqual(
-            run.call_args_list,
-            [
-                call(
-                    ["pgrep", "-x", "swaync"],
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=2,
-                ),
-                call(
-                    ["swaync-client", "--reload-css"],
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=5,
-                ),
-            ],
-        )
-
     def test_explicit_reapply_forces_reload_when_spotify_colors_are_unchanged(self):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
         generated.parent.mkdir(parents=True)
@@ -5685,10 +5737,7 @@ class IntegrationTests(Sandbox):
         stylesheet = self.paths.config_home / "spicetify/Themes/omarchy/user.css"
         stylesheet.parent.mkdir(parents=True)
         stylesheet.write_text("/* existing theme */\n")
-        swaync = self.paths.current_theme / "colors.css"
-        swaync.write_text("@define-color background #000000;\n")
-
-        for plugin_id in ("spotify", "swaync"):
+        for plugin_id in ("spotify",):
             with self.subTest(plugin_id=plugin_id), patch(
                 "thpm.integrations._reload",
                 return_value=[f"{plugin_id} reload"],

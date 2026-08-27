@@ -61,7 +61,6 @@ from .integrations import (
     cleanup_optional_assets,
     cleanup_zed_assets,
     cleanup_zellij,
-    reload_restored_integration,
 )
 from .integrations import apply as apply_integration
 from .migrate import archive as archive_legacy
@@ -810,14 +809,7 @@ class Service:
                     self.paths, plugin_id, assume_legacy=True
                 )
                 changed.extend(cleanup_changed)
-                _actions, reload_warnings = reload_restored_integration(
-                    plugin_id, cleanup_changed
-                )
                 record_cleanup(cleanup_warnings)
-                warnings.extend(
-                    {"plugin": plugin_id, "message": message}
-                    for message in reload_warnings
-                )
             elif (
                 not value
                 and plugin_id in MANAGED_OUTPUT_PLUGINS
@@ -1244,14 +1236,7 @@ class Service:
                             assume_legacy=True,
                         )
                     changed.extend(cleanup_changed)
-                    _actions, reload_warnings = reload_restored_integration(
-                        plugin_id, cleanup_changed
-                    )
                     record_cleanup(plugin_id, cleanup_warnings)
-                    warnings.extend(
-                        {"plugin": plugin_id, "message": message}
-                        for message in reload_warnings
-                    )
                 selector_changed, selector_warnings = restore_cava_selector(self.paths)
                 changed.extend(selector_changed)
                 record_cleanup("cava", selector_warnings)

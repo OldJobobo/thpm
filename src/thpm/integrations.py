@@ -36,6 +36,8 @@ from .cava import (
 from .cava import (
     theme_target as cava_theme_target,
 )
+from .cliamp import restore_selection as restore_cliamp_selection
+from .cliamp import select_override as select_cliamp_override
 from .compat import (
     apply_gtk,
     apply_vscode_local,
@@ -479,6 +481,10 @@ def cleanup_optional_assets(
         )
         changed.extend(item_changed)
         warnings.extend(item_warnings)
+    if plugin_id == "cliamp":
+        selection_changed, selection_warnings = restore_cliamp_selection(paths)
+        changed.extend(selection_changed)
+        warnings.extend(selection_warnings)
     return changed, warnings
 
 
@@ -542,44 +548,33 @@ def _apply_zed_asset(paths: Paths) -> ApplyResult:
     return _result("zed-extra", paths_changed, [], warnings)
 
 
-def _generated_cliamp_theme(colors_path: Path) -> str:
-    colors = load_palette(colors_path)
-    values = {
-        "bg": colors["bg"],
-        "accent": colors.get("accent", colors["blue"]),
-        "bright_fg": colors["bright_fg"],
-        "fg": colors["fg"],
-        "green": colors["green"],
-        "yellow": colors["yellow"],
-        "red": colors["red"],
-    }
-    return "".join(f'{key} = "{value}"\n' for key, value in values.items())
+CLIAMP_NATIVE_OPT_IN = "# thpm:cliamp-use-native"
+
+
+def _cliamp_authored_override(source: Path) -> bool:
+    if not source.is_file() or source.is_symlink():
+        return False
+    return CLIAMP_NATIVE_OPT_IN in source.read_text(encoding="utf-8").splitlines()
 
 
 def _apply_cliamp_theme(paths: Paths) -> ApplyResult:
     target = paths.config_home / "cliamp/themes/omarchy.toml"
     source = paths.current_theme / "cliamp.toml"
-    colors = paths.current_theme / "colors.toml"
-    if source.is_file():
+    if _cliamp_authored_override(source):
         changed = _install_optional_asset(paths, "cliamp", source, target)
-        return _result("cliamp", [str(target)] if changed else [], [])
-    if not colors.is_file():
-        changed, warnings = _cleanup_optional_asset(paths, "cliamp", target)
-        return _result("cliamp", changed, [], warnings)
-
-    content = _generated_cliamp_theme(colors)
-    paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(
-        prefix=".cliamp-theme-", suffix=".toml", dir=paths.thpm_state_dir, text=True
-    )
-    rendered = Path(temporary)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(content)
-        changed = _install_optional_asset(paths, "cliamp", rendered, target)
-    finally:
-        rendered.unlink(missing_ok=True)
-    return _result("cliamp", [str(target)] if changed else [], [])
+        paths_changed = [str(target)] if changed else []
+        try:
+            selection_changed, warnings = select_cliamp_override(paths)
+        except Exception:
+            _cleanup_optional_asset(paths, "cliamp", target)
+            raise
+        paths_changed.extend(selection_changed)
+        return _result("cliamp", paths_changed, [], warnings)
+    changed, warnings = _cleanup_optional_asset(paths, "cliamp", target)
+    selection_changed, selection_warnings = restore_cliamp_selection(paths)
+    changed.extend(selection_changed)
+    warnings.extend(selection_warnings)
+    return _result("cliamp", changed, [], warnings)
 
 
 def _ensure_generated_output_is_rendered(source: Path) -> None:
@@ -917,16 +912,12 @@ def inspect_readiness(
                 normalized_zed_theme(source)
             except ZedThemeError as exc:
                 missing.append(str(exc))
-    elif plugin_id == "cliamp" and not assets:
-        colors = paths.current_theme / "colors.toml"
-        if colors.is_file():
-            try:
-                _generated_cliamp_theme(colors)
-            except ValueError as exc:
-                missing.append(str(exc))
-        else:
-            # Cleanup must remain actionable after cliamp is uninstalled.
-            missing = []
+    elif plugin_id == "cliamp" and not _cliamp_authored_override(
+        paths.current_theme / "cliamp.toml"
+    ):
+        # No explicit authored opt-in means relinquish THPM ownership and let
+        # cliamp keep its contrast-checked built-in or terminal ANSI theme.
+        missing = []
     elif plugin_id in OPTIONAL_ASSET_PLUGINS and not assets:
         # Missing opt-in assets mean "restore defaults", not "unavailable".
         missing = []

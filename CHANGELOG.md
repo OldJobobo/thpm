@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve cliamp's contrast-checked built-in or terminal-ANSI theming by default; install and select an authored `cliamp.toml` override only with explicit `# thpm:cliamp-use-native` author opt-in, with guarded selector and file restoration.
+
 ## 1.0.0rc22 - 2026-08-21
 
 - Theme modern Zen Browser chrome with the generated semantic palette, migrate complete legacy Firefox and Zen hook imports without disturbing user CSS, and report browser restarts only when profile files actually change.

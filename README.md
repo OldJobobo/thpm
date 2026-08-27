@@ -135,7 +135,7 @@ THPM keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized, initiali
 
 ### cliamp themes
 
-The cliamp integration prefers an active-theme `cliamp.toml` override. When that optional asset is absent, THPM generates `~/.config/cliamp/themes/omarchy.toml` from the normalized `colors.toml` palette instead. The generated file follows cliamp's native custom-theme format and appears as `omarchy` in its theme picker. THPM restores a displaced prior file when neither source remains or the integration is disabled, and preserves later user edits rather than overwriting them during cleanup.
+cliamp already provides contrast-checked built-in themes and a terminal-ANSI default that follows the terminal palette. THPM therefore does not reduce `colors.toml` to cliamp's smaller custom-theme schema. It intervenes only when an active-theme `cliamp.toml` contains the exact line `# thpm:cliamp-use-native`, which records deliberate author intent to replace cliamp's native behavior. THPM then installs the file restorably as `~/.config/cliamp/themes/omarchy.toml` and selects `omarchy` in cliamp's top-level config. When the marker or file disappears—or the integration is disabled or removed—THPM restores both the displaced file and the previous cliamp theme selection. Later user edits and selections are preserved rather than overwritten during cleanup.
 
 ### Zed authored themes
 

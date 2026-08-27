@@ -103,7 +103,7 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | `qutebrowser` | Incomplete | Experimental | disabled | Launch recorded `qutebrowser` with a disposable basedir sourcing the generated config and prove the effective UI/web palette. |
 | `steam` | Incomplete | Experimental | disabled | With recorded Steam and steam-adwaita versions, apply the fixture, prove the client renders it, and document the external action's persistence/manual reversal. |
 | `heroic` | Incomplete | Experimental | disabled | Launch recorded `heroic` with a disposable config and prove its custom-theme loader consumes the installed semantic CSS variables. |
-| `cliamp` | Incomplete | Experimental | disabled | Launch recorded `cliamp` with a disposable config and prove it loads both an authored override and the generated colors-only theme, then verify no-op behavior and prior-file restoration. |
+| `cliamp` | Incomplete | Experimental | disabled | Prove a marked authored override is installed and selected in a disposable config, then prove marker removal/disable restores the prior file and selection. Also verify a colors-only theme leaves cliamp's built-in or terminal-ANSI theming untouched. |
 
 ## Native ownership records
 

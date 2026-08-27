@@ -16,7 +16,6 @@ import tarfile
 import tempfile
 import threading
 import time
-import tomllib
 import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -1319,7 +1318,7 @@ class ServiceTests(Sandbox):
     def test_disable_reports_incomplete_cleanup_for_invalid_optional_asset_backup(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("managed theme")
+        source.write_text("# thpm:cliamp-use-native\nmanaged theme")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
@@ -1337,13 +1336,15 @@ class ServiceTests(Sandbox):
         self.assertIn(str(state_file), payload["retainedPaths"])
         self.assertNotIn(str(backup), payload["retainedPaths"])
         self.assertFalse(load(self.paths)["cliamp"])
-        self.assertEqual(target.read_text(), "managed theme")
+        self.assertEqual(
+            target.read_text(), "# thpm:cliamp-use-native\nmanaged theme"
+        )
         self.assertTrue(self.paths.managed_asset_state_dir.exists())
 
     def test_uninstall_retains_recovery_data_for_invalid_optional_asset_backup(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("managed theme")
+        source.write_text("# thpm:cliamp-use-native\nmanaged theme")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
@@ -1364,14 +1365,16 @@ class ServiceTests(Sandbox):
         self.assertIn(str(state_file), payload["retainedPaths"])
         self.assertNotIn(str(backup), payload["retainedPaths"])
         self.assertTrue(payload["residuals"])
-        self.assertEqual(target.read_text(), "managed theme")
+        self.assertEqual(
+            target.read_text(), "# thpm:cliamp-use-native\nmanaged theme"
+        )
         self.assertTrue(self.paths.managed_asset_state_dir.exists())
         self.assertTrue(self.paths.install_metadata.exists())
 
     def test_uninstall_preserves_user_modified_asset_as_successful_cleanup(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("managed theme")
+        source.write_text("# thpm:cliamp-use-native\nmanaged theme")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
@@ -1453,7 +1456,7 @@ class ServiceTests(Sandbox):
     def test_disabling_optional_asset_restores_previous_file(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("theme")
+        source.write_text("# thpm:cliamp-use-native\ntheme")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
@@ -4179,60 +4182,24 @@ class CavaTests(Sandbox):
 
 
 class IntegrationTests(Sandbox):
-    def test_cliamp_generates_tokyo_night_theme_from_colors_only(self):
-        self.paths.current_theme.mkdir(parents=True)
-        (self.paths.current_theme / "colors.toml").write_text(
-            """mode = "dark"
-accent = "#7aa2f7"
-selection = "#292e42"
-muted = "#414868"
-background = "#1a1b26"
-dark_background = "#13141c"
-darker_background = "#0e0e14"
-lighter_background = "#24283b"
-foreground = "#a9b1d6"
-dark_foreground = "#565f89"
-light_foreground = "#b4bee6"
-bright_foreground = "#c0caf5"
-red = "#f7768e"
-yellow = "#e0af68"
-orange = "#eb927b"
-green = "#9ece6a"
-cyan = "#449dab"
-blue = "#7aa2f7"
-magenta = "#ad8ee6"
-brown = "#75493d"
-bright_red = "#ff7a93"
-bright_yellow = "#ff9e64"
-bright_green = "#b9f27c"
-bright_cyan = "#0db9d7"
-bright_blue = "#7da6ff"
-bright_magenta = "#bb9af7"
-"""
-        )
+    def test_cliamp_colors_only_preserves_native_theme_selection(self):
+        self.write_palette()
+        config = self.paths.config_home / "cliamp/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme = "miasma"\nvolume = 75\n')
 
-        with patch("thpm.palette.shutil.which", return_value=None):
-            result = apply("cliamp", self.paths)
+        result = apply("cliamp", self.paths)
 
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
-        self.assertEqual(result.status, "applied")
-        self.assertEqual(
-            tomllib.loads(target.read_text()),
-            {
-                "bg": "#1a1b26",
-                "accent": "#7aa2f7",
-                "bright_fg": "#c0caf5",
-                "fg": "#a9b1d6",
-                "green": "#9ece6a",
-                "yellow": "#e0af68",
-                "red": "#f7768e",
-            },
-        )
+        self.assertEqual(result.status, "unchanged")
+        self.assertFalse(target.exists())
+        self.assertEqual(config.read_text(), 'theme = "miasma"\nvolume = 75\n')
 
     def test_cliamp_authored_theme_takes_precedence_over_invalid_palette(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
         source.write_text(
+            '# thpm:cliamp-use-native\n'
             'bg = "#010101"\naccent = "#020202"\nbright_fg = "#030303"\n'
             'fg = "#040404"\ngreen = "#050505"\nyellow = "#060606"\nred = "#070707"\n'
         )
@@ -4246,24 +4213,126 @@ bright_magenta = "#bb9af7"
         self.assertEqual(second.status, "unchanged")
         self.assertEqual(target.read_bytes(), source.read_bytes())
 
+    def test_cliamp_unmarked_authored_file_preserves_native_theme(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            'bg = "#010101"\naccent = "#020202"\nbright_fg = "#030303"\n'
+            'fg = "#040404"\ngreen = "#050505"\nyellow = "#060606"\nred = "#070707"\n'
+        )
+        config = self.paths.config_home / "cliamp/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme = "miasma"\n')
+
+        result = apply("cliamp", self.paths)
+
+        self.assertEqual(result.status, "unchanged")
+        self.assertFalse((self.paths.config_home / "cliamp/themes/omarchy.toml").exists())
+        self.assertEqual(config.read_text(), 'theme = "miasma"\n')
+
+    def test_cliamp_authored_override_selects_and_restores_previous_theme(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            '# thpm:cliamp-use-native\n'
+            'accent = "#020202"\nbright_fg = "#030303"\nfg = "#040404"\n'
+            'green = "#050505"\nyellow = "#060606"\nred = "#070707"\n'
+        )
+        config = self.paths.config_home / "cliamp/config.toml"
+        config.parent.mkdir(parents=True)
+        original = 'theme = "miasma" # keep\nvolume = 75\n'
+        config.write_text(original)
+
+        applied = apply("cliamp", self.paths)
+
+        self.assertEqual(applied.status, "applied")
+        self.assertEqual(config.read_text(), 'theme = "omarchy" # keep\nvolume = 75\n')
+
+        source.unlink()
+        restored = apply("cliamp", self.paths)
+
+        self.assertEqual(restored.status, "applied")
+        self.assertEqual(config.read_text(), original)
+        self.assertFalse((self.paths.config_home / "cliamp/themes/omarchy.toml").exists())
+
+    def test_cliamp_malformed_config_rolls_back_authored_asset(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("# thpm:cliamp-use-native\naccent = \"#020202\"\n")
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        target.parent.mkdir(parents=True)
+        target.write_text("user theme\n")
+        config = self.paths.config_home / "cliamp/config.toml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("theme = [broken\n")
+
+        with self.assertRaisesRegex(RuntimeError, "malformed top-level theme selector"):
+            apply("cliamp", self.paths)
+
+        self.assertEqual(target.read_text(), "user theme\n")
+
+    def test_cliamp_interrupted_selector_write_removes_false_state(self):
+        from thpm.files import atomic_text as real_atomic_text
+
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("# thpm:cliamp-use-native\naccent = \"#020202\"\n")
+        config = self.paths.config_home / "cliamp/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme = "miasma"\n')
+
+        def interrupted(path, content, **kwargs):
+            if Path(path) == config:
+                raise OSError("interrupted selector write")
+            return real_atomic_text(path, content, **kwargs)
+
+        with patch("thpm.cliamp.atomic_text", side_effect=interrupted), self.assertRaisesRegex(
+            OSError, "interrupted selector write"
+        ):
+            apply("cliamp", self.paths)
+
+        self.assertEqual(config.read_text(), 'theme = "miasma"\n')
+        self.assertFalse(
+            (self.paths.managed_asset_state_dir / "cliamp-selection.json").exists()
+        )
+
     def test_cliamp_colors_only_second_run_is_unchanged(self):
         self.write_palette()
 
-        with patch("thpm.palette.shutil.which", return_value=None):
-            first = apply("cliamp", self.paths)
-            target = self.paths.config_home / "cliamp/themes/omarchy.toml"
-            first_stat = target.stat()
-            second = apply("cliamp", self.paths)
+        first = apply("cliamp", self.paths)
+        second = apply("cliamp", self.paths)
 
-        self.assertEqual(first.status, "applied")
+        self.assertEqual(first.status, "unchanged")
         self.assertEqual(second.status, "unchanged")
-        self.assertEqual(target.stat().st_ino, first_stat.st_ino)
-        self.assertEqual(target.stat().st_mtime_ns, first_stat.st_mtime_ns)
+        self.assertFalse((self.paths.config_home / "cliamp/themes/omarchy.toml").exists())
 
-    def test_cliamp_colors_only_theme_remains_actionable(self):
+    def test_cliamp_colors_only_cleanup_remains_actionable_without_cliamp(self):
         self.write_palette()
 
-        unavailable, missing, _warnings = inspect_readiness(
+        ready, missing, _warnings = inspect_readiness(
+            "cliamp", self.paths, which=lambda _command: None
+        )
+
+        self.assertTrue(ready)
+        self.assertEqual(missing, [])
+
+    def test_cliamp_readiness_ignores_palette_and_requires_app_only_for_marked_override(self):
+        self.write_palette()
+        colors = self.paths.current_theme / "colors.toml"
+        colors.write_text(colors.read_text().replace('red = "#cc4444"', 'red = "not-a-color"'))
+
+        native_ready, native_missing, _warnings = inspect_readiness(
+            "cliamp", self.paths, which=lambda _command: None
+        )
+        self.assertTrue(native_ready)
+        self.assertEqual(native_missing, [])
+
+        (self.paths.current_theme / "cliamp.toml").write_text(
+            '# thpm:cliamp-use-native\n'
+            'accent = "#020202"\nbright_fg = "#030303"\nfg = "#040404"\n'
+            'green = "#050505"\nyellow = "#060606"\nred = "#070707"\n'
+        )
+        unavailable, authored_missing, _warnings = inspect_readiness(
             "cliamp", self.paths, which=lambda _command: None
         )
         available, ready_missing, _warnings = inspect_readiness(
@@ -4271,41 +4340,11 @@ bright_magenta = "#bb9af7"
         )
 
         self.assertFalse(unavailable)
-        self.assertEqual(missing, ["cliamp"])
+        self.assertEqual(authored_missing, ["cliamp"])
         self.assertTrue(available)
         self.assertEqual(ready_missing, [])
 
-    def test_cliamp_readiness_reports_invalid_palette_but_authored_theme_bypasses_it(self):
-        self.write_palette()
-        colors = self.paths.current_theme / "colors.toml"
-        colors.write_text(colors.read_text().replace('red = "#cc4444"', 'red = "not-a-color"'))
-
-        with patch("thpm.palette.shutil.which", return_value=None):
-            unavailable, missing, _warnings = inspect_readiness(
-                "cliamp", self.paths, which=lambda _command: "/usr/bin/cliamp"
-            )
-
-        self.assertFalse(unavailable)
-        self.assertIn("invalid semantic colors: red", missing)
-
-        (self.paths.current_theme / "cliamp.toml").write_text(
-            'bg = "#010101"\n'
-            'accent = "#020202"\n'
-            'bright_fg = "#030303"\n'
-            'fg = "#040404"\n'
-            'green = "#050505"\n'
-            'yellow = "#060606"\n'
-            'red = "#070707"\n'
-        )
-        with patch("thpm.palette.shutil.which", return_value=None):
-            available, authored_missing, _warnings = inspect_readiness(
-                "cliamp", self.paths, which=lambda _command: "/usr/bin/cliamp"
-            )
-
-        self.assertTrue(available)
-        self.assertEqual(authored_missing, [])
-
-    def test_cliamp_invalid_palette_is_actionable_and_preserves_user_theme(self):
+    def test_cliamp_invalid_palette_is_ignored_and_preserves_user_theme(self):
         self.write_palette()
         colors = self.paths.current_theme / "colors.toml"
         colors.write_text(colors.read_text().replace('red = "#cc4444"', 'red = "invalid"'))
@@ -4313,40 +4352,50 @@ bright_magenta = "#bb9af7"
         target.parent.mkdir(parents=True)
         target.write_text("user theme\n")
 
-        with patch("thpm.palette.shutil.which", return_value=None), self.assertRaisesRegex(
-            ValueError, "invalid semantic colors: red"
-        ):
-            apply("cliamp", self.paths)
+        result = apply("cliamp", self.paths)
 
+        self.assertEqual(result.status, "unchanged")
         self.assertEqual(target.read_text(), "user theme\n")
 
-    def test_cliamp_generated_theme_cleanup_restores_prior_file(self):
-        self.write_palette()
+    def test_cliamp_authored_theme_cleanup_restores_prior_file(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            '# thpm:cliamp-use-native\n'
+            'accent = "#020202"\nbright_fg = "#030303"\nfg = "#040404"\n'
+            'green = "#050505"\nyellow = "#060606"\nred = "#070707"\n'
+        )
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user theme\n")
 
-        with patch("thpm.palette.shutil.which", return_value=None):
-            apply("cliamp", self.paths)
-        (self.paths.current_theme / "colors.toml").unlink()
+        apply("cliamp", self.paths)
+        source.unlink()
         result = apply("cliamp", self.paths)
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(target.read_text(), "user theme\n")
 
-    def test_cliamp_generated_theme_cleanup_preserves_later_user_edit(self):
-        self.write_palette()
+    def test_cliamp_authored_theme_cleanup_preserves_later_user_edit(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            '# thpm:cliamp-use-native\n'
+            'accent = "#020202"\nbright_fg = "#030303"\nfg = "#040404"\n'
+            'green = "#050505"\nyellow = "#060606"\nred = "#070707"\n'
+        )
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
 
-        with patch("thpm.palette.shutil.which", return_value=None):
-            apply("cliamp", self.paths)
-        target.write_text("user changed generated theme\n")
-        (self.paths.current_theme / "colors.toml").unlink()
+        apply("cliamp", self.paths)
+        target.write_text("user changed authored theme\n")
+        source.unlink()
         result = apply("cliamp", self.paths)
 
-        self.assertEqual(result.status, "unchanged")
-        self.assertEqual(target.read_text(), "user changed generated theme\n")
-        self.assertIn("preserved user-modified file", result.warnings[0])
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(target.read_text(), "user changed authored theme\n")
+        self.assertTrue(
+            any("preserved user-modified file" in warning for warning in result.warnings)
+        )
 
     def test_obsidian_terminal_updates_discovered_vault_and_preserves_settings(self):
         self.write_palette()
@@ -5006,11 +5055,14 @@ bright_magenta = "#bb9af7"
                 with self.subTest(plugin=plugin_id):
                     source = self.paths.current_theme / asset_name
                     source.parent.mkdir(parents=True, exist_ok=True)
-                    source.write_text(f"{plugin_id} theme")
+                    managed = f"{plugin_id} theme"
+                    if plugin_id == "cliamp":
+                        managed = f"# thpm:cliamp-use-native\n{managed}"
+                    source.write_text(managed)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(f"{plugin_id} user default")
                     apply(plugin_id, self.paths)
-                    self.assertEqual(target.read_text(), f"{plugin_id} theme")
+                    self.assertEqual(target.read_text(), managed)
                     source.unlink()
                     result = apply(plugin_id, self.paths)
                     self.assertEqual(target.read_text(), f"{plugin_id} user default")
@@ -5137,7 +5189,7 @@ bright_magenta = "#bb9af7"
     def test_optional_asset_without_previous_file_is_removed_when_absent(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("theme")
+        source.write_text("# thpm:cliamp-use-native\ntheme")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         apply("cliamp", self.paths)
         source.unlink()
@@ -5148,12 +5200,12 @@ bright_magenta = "#bb9af7"
     def test_optional_asset_interrupted_update_keeps_original_backup(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("theme a")
+        source.write_text("# thpm:cliamp-use-native\ntheme a")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
         apply("cliamp", self.paths)
-        source.write_text("theme b")
+        source.write_text("# thpm:cliamp-use-native\ntheme b")
         with patch(
             "thpm.integrations.atomic_copy", side_effect=RuntimeError("interrupted")
         ), self.assertRaisesRegex(RuntimeError, "interrupted"):
@@ -5165,10 +5217,10 @@ bright_magenta = "#bb9af7"
     def test_optional_asset_equal_bytes_normalizes_mode_and_cleans_up(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("same")
+        source.write_text("# thpm:cliamp-use-native\nsame")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
-        target.write_text("same")
+        target.write_text("# thpm:cliamp-use-native\nsame")
         target.chmod(0o600)
         apply("cliamp", self.paths)
         self.assertEqual(target.stat().st_mode & 0o777, 0o644)
@@ -5179,7 +5231,7 @@ bright_magenta = "#bb9af7"
     def test_optional_asset_missing_backup_fails_closed(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("theme")
+        source.write_text("# thpm:cliamp-use-native\ntheme")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
@@ -5187,13 +5239,13 @@ bright_magenta = "#bb9af7"
         (self.paths.managed_asset_state_dir / "cliamp.backup").unlink()
         source.unlink()
         result = apply("cliamp", self.paths)
-        self.assertEqual(target.read_text(), "theme")
+        self.assertEqual(target.read_text(), "# thpm:cliamp-use-native\ntheme")
         self.assertIn("backup is missing", result.warnings[0])
 
     def test_optional_asset_corrupt_backup_and_state_schema_fail_closed(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("theme")
+        source.write_text("# thpm:cliamp-use-native\ntheme")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         target.parent.mkdir(parents=True)
         target.write_text("user default")
@@ -5202,19 +5254,19 @@ bright_magenta = "#bb9af7"
         backup.write_text("corrupted")
         source.unlink()
         corrupted = apply("cliamp", self.paths)
-        self.assertEqual(target.read_text(), "theme")
+        self.assertEqual(target.read_text(), "# thpm:cliamp-use-native\ntheme")
         self.assertIn("backup is missing or invalid", corrupted.warnings[0])
 
         state = self.paths.managed_asset_state_dir / "cliamp.json"
         state.write_text(json.dumps({"existed": True, "priorType": "bad"}))
         invalid = apply("cliamp", self.paths)
-        self.assertEqual(target.read_text(), "theme")
+        self.assertEqual(target.read_text(), "# thpm:cliamp-use-native\ntheme")
         self.assertIn("state is invalid", invalid.warnings[0])
 
     def test_optional_asset_restores_previous_symlink(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("theme")
+        source.write_text("# thpm:cliamp-use-native\ntheme")
         original = self.paths.home / "my-cliamp.toml"
         original.write_text("user default")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
@@ -5230,7 +5282,7 @@ bright_magenta = "#bb9af7"
     def test_optional_asset_cleanup_preserves_a_user_modified_target(self):
         source = self.paths.current_theme / "cliamp.toml"
         source.parent.mkdir(parents=True)
-        source.write_text("theme")
+        source.write_text("# thpm:cliamp-use-native\ntheme")
         target = self.paths.config_home / "cliamp/themes/omarchy.toml"
         apply("cliamp", self.paths)
         target.write_text("user changed this after THPM")

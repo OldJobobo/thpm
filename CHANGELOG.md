@@ -7,6 +7,7 @@
 - Promote the opt-in fzf integration to Supported after complete automated, lifecycle, restoration, and visual certification on Omarchy Quattro, with explicit maintainer signoff.
 - Reintroduce Typora as an Experimental, default-disabled integration with a restorable generated custom theme, change-sensitive restart reporting, and a monochrome print-media treatment separate from the Omarchy screen palette.
 - Ensure Obsidian Terminal profiles render THPM's semantic xterm palette by disabling their overriding Follow Theme behavior while preserving unrelated profile settings.
+- Report a restart for running same-user Zellij processes when disable or uninstall actually restores/removes managed configuration, without flagging no-op cleanup.
 
 ## 1.0.0rc22 - 2026-08-21
 

@@ -43,12 +43,11 @@ def enforce_cava_opt_in(paths: Paths, enabled: dict[str, bool]) -> None:
         enabled["cava"] = False
 
 
-def load(paths: Paths) -> dict[str, bool]:
-    enabled = defaults()
+def _saved_plugins(paths: Paths) -> dict[str, object] | None:
     try:
         raw = tomllib.loads(paths.state_file.read_text())
     except FileNotFoundError:
-        return enabled
+        return None
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise StateError(f"invalid THPM state at {paths.state_file}: {exc}") from exc
     version = raw.get("version")
@@ -61,6 +60,20 @@ def load(paths: Paths) -> dict[str, bool]:
     saved = raw.get("plugins", {})
     if not isinstance(saved, dict):
         raise StateError(f"invalid THPM plugin state at {paths.state_file}")
+    return saved
+
+
+def persisted_enabled(paths: Paths, plugin_id: str) -> bool:
+    """Read an explicit saved value, including IDs retired from the registry."""
+    saved = _saved_plugins(paths)
+    return saved is not None and saved.get(plugin_id) is True
+
+
+def load(paths: Paths) -> dict[str, bool]:
+    enabled = defaults()
+    saved = _saved_plugins(paths)
+    if saved is None:
+        return enabled
     for plugin_id in enabled:
         if isinstance(saved.get(plugin_id), bool):
             enabled[plugin_id] = saved[plugin_id]

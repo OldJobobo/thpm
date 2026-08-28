@@ -93,11 +93,10 @@ ZELLIJ_THEME_DIR_OPTION = re.compile(
 UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[^{}]+?\s*\}\}")
 OPTIONAL_ASSET_PLUGINS = {
     "branding",
-    "swaync",
     "cliamp",
     "zed-extra",
 }
-RETIRED_OPTIONAL_ASSET_PLUGINS = {"typora", "windsurf"}
+RETIRED_OPTIONAL_ASSET_PLUGINS = {"swaync", "typora", "windsurf"}
 RETIRED_MANAGED_OUTPUT_PLUGINS = {"vicinae"}
 # GENERATED retains historical names needed for guarded retirement cleanup;
 # registry membership remains the authority for active integrations.
@@ -1490,17 +1489,6 @@ def cleanup_managed_outputs(
     return changed, warnings
 
 
-def reload_restored_integration(plugin_id: str, changed: list[str]) -> tuple[list[str], list[str]]:
-    if plugin_id != "swaync" or not changed or not shutil.which("swaync-client"):
-        return [], []
-    try:
-        reload_result = _reload("swaync")
-        actions = reload_result[0] if isinstance(reload_result, tuple) else reload_result
-        return actions, []
-    except RuntimeError as exc:
-        return [], [str(exc)]
-
-
 def _zellij_selected_content(
     content: str,
 ) -> tuple[str, re.Match[str] | None, str]:
@@ -1853,25 +1841,10 @@ def _run_reload_command(plugin_id: str, command: list[str]) -> None:
 def _reload(
     plugin_id: str, *, automatic_restarts: bool = True
 ) -> tuple[list[str], list[str]]:
-    commands = {
-        "spotify": ["spicetify", "refresh"],
-        "swaync": ["swaync-client", "--reload-css"],
-    }
+    commands = {"spotify": ["spicetify", "refresh"]}
     command = commands.get(plugin_id)
     if not command:
         return [], []
-    if plugin_id == "swaync":
-        if not shutil.which("pgrep"):
-            return [], []
-        running = subprocess.run(
-            ["pgrep", "-x", "swaync"],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=2,
-        )
-        if running.returncode != 0:
-            return [], []
     if not shutil.which(command[0]):
         raise RuntimeError(f"{plugin_id}: reload command not found: {command[0]}")
     _run_reload_command(plugin_id, command)
@@ -2167,8 +2140,6 @@ def apply(
                 )
                 changed.extend(item_changed)
                 warnings.extend(item_warnings)
-        if plugin_id == "swaync" and not shutil.which("swaync-client"):
-            return _result(plugin_id, changed, [], warnings)
     elif plugin_id in {"discord", "discord-system24"}:
         source_names = (
             ("vencord.theme.css", GENERATED[plugin_id])

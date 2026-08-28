@@ -82,6 +82,7 @@ from .state import (
     load,
     migration_lock,
     mutation_lock,
+    persisted_enabled,
     save,
 )
 from .templates import reconcile as reconcile_templates
@@ -130,12 +131,17 @@ def _cleanup_warning_path(message: str) -> str | None:
     return None
 
 
-def _cleanup_retired_integrations(paths: Paths) -> tuple[list[str], list[dict[str, str]]]:
+def _cleanup_retired_integrations(
+    paths: Paths, *, legacy_enabled: set[str] | None = None
+) -> tuple[list[str], list[dict[str, str]]]:
     changed: list[str] = []
     warnings: list[dict[str, str]] = []
+    legacy_enabled = legacy_enabled or set()
     for plugin_id in sorted(RETIRED_OPTIONAL_ASSET_PLUGINS):
         cleanup_changed, cleanup_warnings = cleanup_optional_assets(
-            paths, plugin_id, assume_legacy=True
+            paths,
+            plugin_id,
+            assume_legacy=plugin_id != "swaync" or plugin_id in legacy_enabled,
         )
         changed.extend(cleanup_changed)
         warnings.extend(
@@ -1082,10 +1088,15 @@ class Service:
             with mutation_lock(self.paths):
                 self._step("Rendering managed templates")
                 enabled = load(self.paths)
+                legacy_enabled = {
+                    plugin_id
+                    for plugin_id in RETIRED_OPTIONAL_ASSET_PLUGINS
+                    if persisted_enabled(self.paths, plugin_id)
+                }
                 save(self.paths, enabled)
                 changed = reconcile_templates(self.paths, enabled)
                 retired_changed, retired_warnings = _cleanup_retired_integrations(
-                    self.paths
+                    self.paths, legacy_enabled=legacy_enabled
                 )
                 changed.extend(retired_changed)
                 self._step("Installing theme hook")
@@ -1144,12 +1155,17 @@ class Service:
             with mutation_lock(self.paths):
                 self._step("Rendering managed integrations")
                 enabled = load(self.paths)
+                legacy_enabled = {
+                    plugin_id
+                    for plugin_id in RETIRED_OPTIONAL_ASSET_PLUGINS
+                    if persisted_enabled(self.paths, plugin_id)
+                }
                 _merge_migrated_enabled(enabled, migrated)
                 enforce_cava_opt_in(self.paths, enabled)
                 save(self.paths, enabled)
                 changed = reconcile_templates(self.paths, enabled)
                 retired_changed, retired_warnings = _cleanup_retired_integrations(
-                    self.paths
+                    self.paths, legacy_enabled=legacy_enabled
                 )
                 changed.extend(retired_changed)
                 atomic_copy(asset("hooks", "90-thpm"), self.paths.hook_file, 0o755)

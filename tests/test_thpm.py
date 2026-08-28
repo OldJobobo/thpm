@@ -4920,6 +4920,49 @@ class IntegrationTests(Sandbox):
         self.assertNotIn("swaync", {item["id"] for item in payload["plugins"]})
         self.assertIn(str(target), payload["changed"])
 
+    def test_reconcile_preserves_matching_untracked_swaync_without_saved_state(self):
+        installed_theme = self.paths.config_home / "omarchy/themes/old"
+        installed_theme.mkdir(parents=True)
+        (installed_theme / "colors.css").write_text("user-selected colors\n")
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("user-selected colors\n")
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text(
+            "canonical-palette-v1\n"
+        )
+
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).reconcile()
+
+        self.assertEqual(target.read_text(), "user-selected colors\n")
+        self.assertNotIn(str(target), payload["changed"])
+
+    def test_reconcile_preserves_matching_swaync_saved_as_disabled(self):
+        installed_theme = self.paths.config_home / "omarchy/themes/old"
+        installed_theme.mkdir(parents=True)
+        (installed_theme / "colors.css").write_text("user-selected colors\n")
+        target = self.paths.config_home / "swaync/colors.css"
+        target.parent.mkdir(parents=True)
+        target.write_text("user-selected colors\n")
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            "version = 1\n\n[plugins]\nspotify = true\nswaync = false\n"
+        )
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True)
+        self.paths.canonical_palette_migration_marker.write_text(
+            "canonical-palette-v1\n"
+        )
+
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).reconcile()
+
+        self.assertEqual(target.read_text(), "user-selected colors\n")
+        self.assertNotIn(str(target), payload["changed"])
+        self.assertNotIn("swaync", self.paths.state_file.read_text())
+
     def test_reconcile_retires_swaync_and_restores_displaced_stylesheet(self):
         managed = b"retired SwayNC theme\n"
         prior = b"user SwayNC theme\n"

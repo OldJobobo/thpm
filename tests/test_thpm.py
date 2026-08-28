@@ -87,7 +87,7 @@ from thpm.paths import Paths
 from thpm.presentation import Activity, operation_name, render, reporter
 from thpm.registry import PLUGINS
 from thpm.report import MAX_REPORT_BYTES, build_report, write_report
-from thpm.service import Service
+from thpm.service import Service, _zellij_process_running
 from thpm.state import (
     StateError,
     cava_opt_in_completed,
@@ -1475,6 +1475,29 @@ class ServiceTests(Sandbox):
         self.assertEqual(fish_target.read_text(), "user output")
         self.assertFalse(fish_source.exists())
         self.assertNotIn("restart active Zellij sessions", str(payload["warnings"]))
+
+    def test_uninstall_reports_restart_for_a_running_zellij_session(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        apply("zellij", self.paths)
+
+        with patch(
+            "thpm.service._zellij_process_running", return_value=True
+        ), patch("thpm.service.ui.remove", return_value={"installed": False}):
+            payload = Service(self.paths).uninstall()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["restartRequired"], ["Zellij"])
+
+    def test_noop_uninstall_does_not_report_zellij_restart(self):
+        with patch(
+            "thpm.service._zellij_process_running", return_value=True
+        ), patch("thpm.service.ui.remove", return_value={"installed": False}):
+            payload = Service(self.paths).uninstall()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["restartRequired"], [])
 
     def test_disable_reports_incomplete_cleanup_for_invalid_optional_asset_backup(self):
         source = self.paths.current_theme / "cliamp.toml"
@@ -5540,6 +5563,70 @@ class IntegrationTests(Sandbox):
         self.assertEqual(result.status, "unchanged")
         self.assertEqual(result.warnings, [])
         self.assertEqual(config.stat().st_ino, refreshed_inode)
+
+    def test_zellij_process_detection_uses_same_user_proc_comm(self):
+        proc_root = self.paths.home / "proc"
+        process = proc_root / "123"
+        process.mkdir(parents=True)
+        (process / "comm").write_text("zellij\n")
+        self.assertTrue(_zellij_process_running(proc_root))
+        (process / "comm").write_text("foot\n")
+        self.assertFalse(_zellij_process_running(proc_root))
+
+    def test_zellij_process_detection_ignores_other_user(self):
+        proc_root = self.paths.home / "proc-other-user"
+        proc_entry = proc_root / "123"
+        proc_entry.mkdir(parents=True)
+        (proc_entry / "comm").write_text("zellij\n")
+
+        with patch("thpm.service.os.getuid", return_value=os.getuid() + 1):
+            self.assertFalse(_zellij_process_running(proc_root))
+
+    def test_zellij_process_detection_skips_disappearing_entries(self):
+        proc_root = self.paths.home / "proc-disappearing"
+        disappearing = proc_root / "123"
+        active = proc_root / "456"
+        disappearing.mkdir(parents=True)
+        active.mkdir()
+        (disappearing / "comm").write_text("zellij\n")
+        (active / "comm").write_text("zellij\n")
+        original_read_text = Path.read_text
+
+        def flaky_read_text(path, *args, **kwargs):
+            if path == disappearing / "comm":
+                raise FileNotFoundError(path)
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", autospec=True, side_effect=flaky_read_text):
+            self.assertTrue(_zellij_process_running(proc_root))
+
+    def test_zellij_disable_reports_restart_for_a_running_session(self):
+        source = self.paths.current_theme / "zellij.kdl"
+        source.parent.mkdir(parents=True)
+        source.write_text('themes { source { fg "white" } }\n')
+        enabled = load(self.paths)
+        enabled["zellij"] = True
+        save(self.paths, enabled)
+        apply("zellij", self.paths)
+
+        with patch(
+            "thpm.service._zellij_process_running", create=True, return_value=True
+        ):
+            payload = Service(self.paths).set_enabled(
+                "zellij", False, refresh=False
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["restartRequired"], ["Zellij"])
+
+    def test_zellij_noop_disable_does_not_report_restart(self):
+        with patch("thpm.service._zellij_process_running", return_value=True):
+            payload = Service(self.paths).set_enabled(
+                "zellij", False, refresh=False
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["restartRequired"], [])
 
     def test_typora_generated_theme_lifecycle_is_safe_and_idempotent(self):
         plugin = next(plugin for plugin in PLUGINS if plugin.id == "typora")

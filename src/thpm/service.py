@@ -114,6 +114,25 @@ def _typora_process_running() -> bool:
     return completed.returncode == 0
 
 
+def _zellij_process_running(proc_root: Path = Path("/proc")) -> bool:
+    """Return whether this user has a Zellij client or server process."""
+    try:
+        entries = tuple(proc_root.iterdir())
+    except OSError:
+        return False
+    for pid_dir in entries:
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            if pid_dir.stat().st_uid != os.getuid():
+                continue
+            if (pid_dir / "comm").read_text(encoding="utf-8").strip() == "zellij":
+                return True
+        except (OSError, UnicodeError):
+            continue
+    return False
+
+
 def _merge_migrated_enabled(
     enabled: dict[str, bool], updates: dict[str, bool]
 ) -> None:
@@ -785,6 +804,7 @@ class Service:
         retained_paths: list[str] = []
         restart_required: list[str] = []
         typora_output_changed = False
+        zellij_output_changed = False
 
         def record_cleanup(messages: list[str]) -> None:
             warnings.extend(
@@ -811,6 +831,9 @@ class Service:
         typora_was_running = bool(
             not value and plugin_id == "typora" and _typora_process_running()
         )
+        zellij_was_running = bool(
+            not value and plugin_id == "zellij" and _zellij_process_running()
+        )
         self._step("Updating integration state")
         with mutation_lock(self.paths):
             enabled = load(self.paths)
@@ -828,6 +851,7 @@ class Service:
                 changed.extend(cleanup_gtk(self.paths))
             elif not value and plugin_id == "zellij":
                 cleanup_changed, cleanup_warnings = cleanup_zellij(self.paths)
+                zellij_output_changed = bool(cleanup_changed)
                 changed.extend(cleanup_changed)
                 record_cleanup(cleanup_warnings)
             elif not value and plugin_id == "zed-extra":
@@ -920,6 +944,8 @@ class Service:
             restart_required.append("Cava")
         if typora_was_running and typora_output_changed:
             restart_required.append("Typora")
+        if zellij_was_running and zellij_output_changed:
+            restart_required.append("Zellij")
         summary = f"{plugin_id} {'enabled' if value else 'disabled'}"
         if cleanup_errors:
             summary += "; setting was saved, but cleanup is incomplete"
@@ -1278,8 +1304,10 @@ class Service:
                 errors.append({"plugin": plugin_id, "message": message})
 
         typora_output_changed = False
+        zellij_output_changed = False
         cava_was_running = running_cava_requires_restart(self.paths)
         typora_was_running = _typora_process_running()
+        zellij_was_running = _zellij_process_running()
         self._step("Disabling managed integrations")
         with migration_lock(self.paths):
             with mutation_lock(self.paths):
@@ -1350,6 +1378,7 @@ class Service:
                     changed.extend(cleanup_changed)
                     record_cleanup(plugin_id, cleanup_warnings)
                 zellij_changed, zellij_warnings = cleanup_zellij(self.paths)
+                zellij_output_changed = bool(zellij_changed)
                 changed.extend(zellij_changed)
                 record_cleanup("zellij", zellij_warnings)
                 self._step("Removing theme hook and migration state")
@@ -1412,6 +1441,8 @@ class Service:
             restart_required.append("Cava")
         if typora_was_running and typora_output_changed:
             restart_required.append("Typora")
+        if zellij_was_running and zellij_output_changed:
+            restart_required.append("Zellij")
         cleanup_incomplete = bool(errors)
         return envelope(
             "uninstall",

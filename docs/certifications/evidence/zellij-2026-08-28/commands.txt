@@ -1,0 +1,149 @@
+# Zellij certification command record — 2026-08-28
+
+## Live application proof
+
+Development source was synchronized from the canonical repository to `/tmp/thpm-validate-zellij` on the disposable Omarchy Quattro VM. The normal Omarchy lifecycle was invoked with the development `thpm` wrapper first on `PATH`:
+
+```text
+systemd-run --user --wait --collect --pipe \
+  --setenv=PATH=/tmp/thpm-zellij-bin:/usr/local/sbin:/usr/local/bin:/usr/bin \
+  /usr/bin/omarchy-theme-set "Dune"
+
+systemd-run --user --wait --collect --pipe \
+  --setenv=PATH=/tmp/thpm-zellij-bin:/usr/local/sbin:/usr/local/bin:/usr/bin \
+  /usr/bin/omarchy-theme-set "Last Call"
+```
+
+The same `thpm-zellij-evidence` Zellij 0.45.0 session remained running through the transition. Screenshots were captured with `grim` after each normal lifecycle command.
+
+Same-theme metadata stability was checked around another ordinary Dune event:
+
+```text
+for f in ~/.config/zellij/config.kdl ~/.config/zellij/themes/thpm.kdl; do
+  stat -c "%n|%i|%Y|%s|%y" "$f"
+  sha256sum "$f"
+done > /tmp/thpm-zellij-dune-before.stat
+
+systemd-run --user --wait --collect --pipe \
+  --setenv=PATH=/tmp/thpm-zellij-bin:/usr/local/sbin:/usr/local/bin:/usr/bin \
+  /usr/bin/omarchy-theme-set "Dune"
+
+for f in ~/.config/zellij/config.kdl ~/.config/zellij/themes/thpm.kdl; do
+  stat -c "%n|%i|%Y|%s|%y" "$f"
+  sha256sum "$f"
+done > /tmp/thpm-zellij-dune-after.stat
+cmp /tmp/thpm-zellij-dune-before.stat /tmp/thpm-zellij-dune-after.stat
+```
+
+Observed result: `same_theme_noop_metadata_stable=true`.
+
+## Exact merged-source revalidation
+
+Current merged main:
+
+```text
+a08526e43b7b988617873625c45edebea2d3071d
+```
+
+Zellij restart-reporting merge:
+
+```text
+246c3fad459fd815d5bbdf05b5e6606bf1f0968c
+```
+
+Current source was synchronized to `/tmp/thpm-cert-a08526e`. Source provenance:
+
+```text
+/tmp/thpm-cert-a08526e/src/thpm/__init__.py
+/tmp/thpm-cert-a08526e/assets
+```
+
+Canonical/VM hashes matched:
+
+```text
+63c50bafeffe61a4323cf983cecfc56840d9a12013f1e43a9f240a256933169d  src/thpm/service.py
+c5eb692cd280ff22b08aab912bf02d63d8f7fb0514272f5838d0015a082dbb2f  src/thpm/integrations.py
+```
+
+The extracted Zellij adapter function block used for the live screenshots and current merged main matched exactly:
+
+```text
+4d9c6e6db07c348528bca2825abd5b4f5e45900ef63f6c29204c2a8dced0c01f
+```
+
+The exact merged harness was run with:
+
+```text
+cd /tmp/thpm-cert-a08526e
+THPM_PYTHON=/usr/bin/python ./scripts/zellij-live-test.sh --no-launch --keep
+```
+
+Observed output:
+
+```text
+Using checkout: /tmp/thpm-cert-a08526e/src/thpm/integrations.py
+Applying the development theme...
+PASS: local source applied a valid thpm-current theme.
+PASS: a later theme update refreshed watched config.kdl without changing its content.
+Restoring the sandbox through THPM...
+PASS: previous config selection and displaced theme were restored.
+Restored sandbox kept at: /tmp/thpm-zellij-live.mxMqT7
+```
+
+Restored baseline hashes matched byte-for-byte:
+
+```text
+c6a7afa00fd24bfa33feb802a3e250c74256e960ffcb75154a169f8861f294a1  expected-config.kdl
+c6a7afa00fd24bfa33feb802a3e250c74256e960ffcb75154a169f8861f294a1  config/zellij/config.kdl
+eb62137a455598423d1bc76ef71e162d83b4eadbe42f7bc18319147070d6e0d7  expected-theme.kdl
+eb62137a455598423d1bc76ef71e162d83b4eadbe42f7bc18319147070d6e0d7  config/zellij/themes/thpm.kdl
+```
+
+Versions:
+
+```text
+Omarchy 4.0.1-1
+Zellij 0.45.0
+```
+
+Fixture hashes:
+
+```text
+aa95316a9b95b7855512e6b9da30de03a4ca1ff3d384cd0dd1c62def87d878c3  Dune colors.toml
+2fa96820d96b7cac89a90b4f4726ca019a27608250e83d3a370845496ad856cb  Last Call colors.toml
+```
+
+The VM's original `Last Call` theme and absent Zellij config/theme baseline were restored after evaluation.
+
+## User-modification and uninstall gates on exact merged source
+
+A second exact-source sidecar used Zellij's own `setup --check` parser before and after cleanup.
+
+User-modification gate:
+
+```text
+user_edit_preserved=true
+selection_restored=true
+parser_before_after=true
+sandbox=/tmp/thpm-zellij-user-edit2.NVl0oq
+```
+
+THPM preserved the recognizable edit to `themes/thpm.kdl`, emitted `preserved user-modified file`, restored the prior `theme "default"` selection in `config.kdl`, and removed the `thpm-current` selection. Zellij 0.45.0 accepted the configuration both before and after disable.
+
+Uninstall gate:
+
+```text
+uninstall_restored_config=true
+uninstall_restored_theme=true
+parser_before_after=true
+sandbox=/tmp/thpm-zellij-uninstall3.3SJ52g
+```
+
+The exact merged uninstall response had `ok: true`, `cleanupIncomplete: false`, no residuals, no errors, and no warnings. Both displaced files matched their baselines byte-for-byte after uninstall:
+
+```text
+2013736b9c17c7f43d49dd669464939df24ff6681bd2c321bb4b209471c34229  config.kdl baseline/restored
+2af600e71f396a8224247adcab29122bce725e8a830465fc90c6ade9b929fa60  themes/thpm.kdl baseline/restored
+```
+
+Zellij 0.45.0 reported `[CONFIG FILE]: Well defined.` before application and after uninstall.

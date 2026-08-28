@@ -455,7 +455,7 @@ class StateTests(Sandbox):
             all(
                 plugin.support_status == "experimental"
                 for plugin in PLUGINS
-                if plugin.id != "fzf"
+                if plugin.id not in {"fzf", "zellij"}
             )
         )
 
@@ -505,6 +505,37 @@ class StateTests(Sandbox):
         self.assertIn("thpm-fzf-post-disable", commands)
         self.assertIn("Post-uninstall application restoration gate:", commands)
         self.assertIn("thpm-fzf-post-uninstall", commands)
+
+    def test_zellij_is_supported_after_complete_live_certification_and_signoff(self):
+        zellij = next(plugin for plugin in PLUGINS if plugin.id == "zellij")
+        root = Path(__file__).parents[1]
+        support = (root / "docs/integration-support.md").read_text()
+
+        self.assertEqual(zellij.support_status, "supported")
+        self.assertRegex(
+            support,
+            r"(?m)^\| `zellij` \| Complete \| Supported \| disabled \|",
+        )
+        record = root / "docs/certifications/zellij-2026-08-28.md"
+        evidence = record.parent / "evidence/zellij-2026-08-28"
+        self.assertTrue(record.is_file())
+        record_text = record.read_text()
+        self.assertIn('omarchy-theme-set "Dune"', record_text)
+        self.assertIn('omarchy-theme-set "Last Call"', record_text)
+        for name in ("commands.txt", "zellij-dune.png", "zellij-last-call.png"):
+            self.assertTrue((evidence / name).is_file(), name)
+        self.assertEqual(
+            hashlib.sha256((evidence / "zellij-dune.png").read_bytes()).hexdigest(),
+            "11eeb389e7f966493f9c972ab27d2f77013120836750ff19e20653898240068c",
+        )
+        self.assertEqual(
+            hashlib.sha256((evidence / "zellij-last-call.png").read_bytes()).hexdigest(),
+            "922b0308f2b0b0d9fa5e4a059d8d9fe2a1421ef659c89b0e637303b45febd9ab",
+        )
+        commands = (evidence / "commands.txt").read_text()
+        self.assertIn("user_edit_preserved=true", commands)
+        self.assertIn("uninstall_restored_config=true", commands)
+        self.assertIn("parser_before_after=true", commands)
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -1366,13 +1397,14 @@ class ServiceTests(Sandbox):
         self.assertTrue(active)
         self.assertTrue(native)
         self.assertEqual(
-            [p["id"] for p in active if p["supportStatus"] == "supported"], ["fzf"]
+            [p["id"] for p in active if p["supportStatus"] == "supported"],
+            ["fzf", "zellij"],
         )
         self.assertTrue(
             all(
                 p["supportStatus"] == "experimental"
                 for p in active
-                if p["id"] != "fzf"
+                if p["id"] not in {"fzf", "zellij"}
             )
         )
         self.assertTrue(all(not p["enabled"] for p in active))

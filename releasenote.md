@@ -1,6 +1,6 @@
-## THPM 1.0.0rc22 is now available
+## THPM 1.0.0rc23 is now available
 
-**THPM is built for Omarchy Quattro and targets Omarchy 4.x. RC22 is a browser-theming and reliability release for Zen, the graphical manager, menu updates, source rollback, Zed setup, and CLI discoverability.**
+**THPM rc23 completes the Quattro application-theme fallback audit with safer ownership, restoration, and semantic palette behavior across GTK, Fish, fzf, Superfile, Typora, Zellij, Obsidian Terminal, and cliamp.**
 
 ### Install or upgrade the latest release
 
@@ -10,32 +10,32 @@ curl -fsSL https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install
 
 The installer resolves the newest published GitHub release, verifies its source archive and checksum, builds the Arch package with `makepkg`, installs it through pacman, and completes THPM's per-user setup.
 
-## What’s new in rc22
+## What’s new in rc23
 
-### Zen follows the active Omarchy palette
+### Safer semantic application themes
 
-The generated Zen fallback now styles modern browser chrome, including Zen palette variables, sidebar controls, navigation surfaces, the URL bar, and the app-content wrapper. Upgraded profiles migrate complete legacy Firefox and Zen hook import blocks while preserving unrelated user CSS.
+GTK now receives a complete generated semantic fallback when an active theme does not provide authored GTK CSS. Fish and Superfile use corrected target-native color contracts, while fzf becomes THPM's first fully certified Supported adapter after complete automated, lifecycle, restoration, fresh-process, visual, and maintainer-signoff gates on Omarchy Quattro.
 
-Firefox and Zen now report a required restart after profile stylesheets change so new `userChrome.css` colors are not mistaken for a failed hook. Removing only an unused rendered source does not produce a false restart notice. The Zen path was also validated live against the current browser release and an active Omarchy palette.
+Typora returns as an opt-in Experimental integration with generated screen colors, neutral print output, restorable file ownership, and change-sensitive restart reporting. Zellij now reports running-session restarts when disable or uninstall changes effective configuration without producing false restart notices for no-ops.
 
-### The graphical manager and menu recover safely
+### Obsidian Terminal recovery fails closed
 
-The Omarchy menu now launches the graphical manager through a stable `thpm ui open` path. THPM can stage and switch stale QML, verify Shell discovery and readiness with bounded retries, and open the TUI as a recovery surface when the graphical path cannot load. An idempotent post-update hook keeps already-installed control panels synchronized.
+THPM can restorably disable the Terminal community plugin's profile-level Follow Theme setting so its semantic xterm palette remains effective. Ownership records cover only true-to-false changes and preserve unrelated settings and later user edits.
 
-Every user-scoped menu writer now shares one per-user lock. Surface changes validate the next JSONC document before committing, restore the previous menu when state persistence fails, and remain coherent across concurrent install, synchronization, repair, removal, and surface-selection operations.
+Settings and private recovery paths reject traversal, malformed state, arbitrary targets, symlink leaves and ancestors, and unsafe relative candidates. Missing or malformed owned profiles, failed writes, uncertain atomic replacement, and incomplete rollback retain structured recovery state instead of falsely reporting successful cleanup.
 
-### Updates, Zed setup, and CLI help are more predictable
+### Native ownership stays native
 
-Source-update rollback now preserves relative, absolute, and dangling symlinks exactly. Snapshot ownership comes from the staged runtime's complete template registry, including obsolete outputs that the next version must remove.
+cliamp keeps its contrast-checked built-in or terminal-ANSI theme by default. THPM installs an authored override only when the theme explicitly opts in with `# thpm:cliamp-use-native`, and restores both file and selector state conservatively.
 
-Direct `thpm zed setup` preserves the user's existing `zed-extra` synchronization state instead of silently enabling ongoing synchronization. Normal enable operations through the CLI, TUI, and GUI still opt into that behavior explicitly.
-
-Built-in help now documents every root command, nested action, positional argument, global option, and command-specific flag, making the complete CLI discoverable without external documentation.
+The uncertified SwayNC adapter is retired because its standalone generated file was not consumed by the active stylesheet. Guarded historical cleanup remains available.
 
 ### Verification
 
-The rc22 preparation passes the complete automated suite: 385 tests, Python 3.11 through 3.14, and clean stable and VCS Arch package builds.
+The exact merged release tree passes 456 automated tests, release metadata validation, Python compilation, Ruff and ShellCheck static checks, wheel content and isolated-install smoke tests, Python 3.11 through 3.14 CI, and clean stable and VCS Arch package builds. Every adapter change landed through an independently validated pull request with 7/7 successful checks.
 
-This remains a release candidate. Please report Zen theming, graphical-manager recovery, menu synchronization, source rollback, Zed setup, or packaging issues.
+Only fzf is promoted to Supported. Other active adapters remain visibly opt-in Experimental until their complete real-application certification records and maintainer signoff are retained.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc22)
+This remains a release candidate. Please report application-theme ownership, restoration, migration, or visual compatibility issues.
+
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc23)

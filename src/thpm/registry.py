@@ -14,6 +14,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("qt6ct", "Qt6ct", "Desktop", "Generate a Qt6 color scheme.", "hybrid", ("qt6ct",), templates=("thpm-qt6ct.conf.tpl",)),
     Plugin("spotify", "Spotify / Spicetify", "Media", "Update Spicetify colors and apply them.", "hybrid", ("spicetify",), templates=("thpm-spicetify.ini.tpl",)),
     Plugin("superfile", "Superfile", "Terminal", "Install a semantic Superfile theme.", "hybrid", ("spf",), theme_assets=("superfile.toml",), templates=("thpm-superfile.toml.tpl",)),
+    Plugin("typora", "Typora", "Writing", "Install a generated semantic Typora theme, preferring an authored typora.css override.", "hybrid", ("typora",), theme_assets=("typora.css",), templates=("thpm-typora.css.tpl",), default_enabled=False),
     Plugin("zellij", "Zellij", "Terminal", "Generate Zellij colors from the active palette, preferring an authored zellij.kdl override.", "apply", ("zellij",), theme_assets=("zellij.kdl",), default_enabled=False),
     Plugin("obsidian-terminal", "Obsidian Terminal", "Editors", "Synchronize the Obsidian Terminal community plugin's xterm.js palette.", "action"),
     Plugin("nwg-dock", "nwg-dock-hyprland", "Desktop", "Install dock colors; restart the dock to apply them.", "hybrid", ("nwg-dock-hyprland",), templates=("thpm-nwg-dock.css.tpl",)),

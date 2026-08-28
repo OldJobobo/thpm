@@ -5503,6 +5503,217 @@ class IntegrationTests(Sandbox):
         self.assertEqual(result.warnings, [])
         self.assertEqual(config.stat().st_ino, refreshed_inode)
 
+    def test_typora_generated_theme_lifecycle_is_safe_and_idempotent(self):
+        plugin = next(plugin for plugin in PLUGINS if plugin.id == "typora")
+        self.assertEqual(plugin.templates, ("thpm-typora.css.tpl",))
+        self.assertEqual(plugin.theme_assets, ("typora.css",))
+        self.assertFalse(plugin.default_enabled)
+
+        source = self.paths.current_theme / "thpm-typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text(":root { --bg-color: #101820; --text-color: #f0f0e8; }\n")
+        target = self.paths.config_home / "Typora/themes/thpm.css"
+
+        first = apply("typora", self.paths)
+        self.assertEqual(target.read_bytes(), source.read_bytes())
+        self.assertIn(str(target), first.changed)
+        before = (
+            target.stat().st_ino,
+            target.stat().st_mtime_ns,
+            target.stat().st_size,
+            hashlib.sha256(target.read_bytes()).hexdigest(),
+        )
+
+        second = apply("typora", self.paths)
+        after = (
+            target.stat().st_ino,
+            target.stat().st_mtime_ns,
+            target.stat().st_size,
+            hashlib.sha256(target.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(before, after)
+        self.assertEqual(second.status, "unchanged")
+
+        source.unlink()
+        changed, warnings = cleanup_managed_outputs(self.paths, "typora")
+        self.assertFalse(target.exists())
+        self.assertIn(str(target), changed)
+        self.assertEqual(warnings, [])
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("/* prior user theme */\n")
+        source.write_text(":root { --bg-color: #101820; }\n")
+        apply("typora", self.paths)
+        source.unlink()
+        changed, warnings = cleanup_managed_outputs(self.paths, "typora")
+        self.assertEqual(target.read_text(), "/* prior user theme */\n")
+        self.assertIn(str(target), changed)
+        self.assertEqual(warnings, [])
+
+        source.write_text(":root { --bg-color: #101820; }\n")
+        apply("typora", self.paths)
+        target.write_text("/* user changed the managed theme */\n")
+        source.unlink()
+        changed, warnings = cleanup_managed_outputs(self.paths, "typora")
+        self.assertEqual(target.read_text(), "/* user changed the managed theme */\n")
+        self.assertEqual(changed, [])
+        self.assertIn("preserved user-modified file", str(warnings))
+
+    def test_typora_prefers_authored_theme_over_generated_output(self):
+        authored = self.paths.current_theme / "typora.css"
+        generated = self.paths.current_theme / "thpm-typora.css"
+        authored.parent.mkdir(parents=True)
+        authored.write_text("/* authored Typora theme */\n")
+        generated.write_text("/* generated Typora theme */\n")
+
+        result = apply("typora", self.paths)
+
+        target = self.paths.config_home / "Typora/themes/thpm.css"
+        self.assertEqual(target.read_text(), authored.read_text())
+        self.assertIn(str(target), result.changed)
+
+    def test_typora_apply_reports_restart_only_when_changed_and_running(self):
+        source = self.paths.current_theme / "thpm-typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text(":root { --bg-color: #101820; }\n")
+
+        with patch("thpm.integrations.shutil.which", return_value="/usr/bin/pgrep"), patch(
+            "thpm.integrations.subprocess.run",
+            return_value=subprocess.CompletedProcess(["pgrep"], 0, "123\n", ""),
+        ):
+            first = apply("typora", self.paths)
+            second = apply("typora", self.paths)
+
+        self.assertEqual(first.restartRequired, ["Typora"])
+        self.assertEqual(second.status, "unchanged")
+        self.assertEqual(second.restartRequired, [])
+
+    def test_typora_disable_and_uninstall_report_running_app_restart(self):
+        source = self.paths.current_theme / "thpm-typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text(":root { --bg-color: #101820; }\n")
+        service = Service(self.paths)
+
+        with patch("thpm.service._typora_process_running", return_value=True), patch(
+            "thpm.integrations._reload", return_value=([], [])
+        ):
+            service.set_enabled("typora", True)
+            apply("typora", self.paths)
+            disabled = service.set_enabled("typora", False)
+            service.set_enabled("typora", True)
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(":root { --bg-color: #101820; }\n")
+            apply("typora", self.paths)
+            uninstalled = service.uninstall()
+
+        self.assertEqual(disabled["restartRequired"], ["Typora"])
+        self.assertEqual(uninstalled["restartRequired"], ["Typora"])
+        self.assertFalse((self.paths.config_home / "Typora/themes/thpm.css").exists())
+
+    def test_typora_noop_disable_does_not_report_restart(self):
+        service = Service(self.paths)
+
+        with patch("thpm.service._typora_process_running", return_value=True):
+            disabled = service.set_enabled("typora", False)
+
+        self.assertEqual(disabled["restartRequired"], [])
+        self.assertEqual(disabled["stateChanged"], False)
+
+    def test_typora_disable_reports_restart_despite_cleanup_error(self):
+        source = self.paths.current_theme / "thpm-typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("/* managed Typora theme */\n")
+        with patch("thpm.integrations._reload", return_value=([], [])):
+            apply("typora", self.paths)
+
+        def cleanup_with_error(paths, plugin_id, *, assume_legacy=False):
+            changed, warnings = cleanup_managed_outputs(
+                paths, plugin_id, assume_legacy=assume_legacy
+            )
+            warnings.append("simulated cleanup failure")
+            return changed, warnings
+
+        with patch("thpm.service._typora_process_running", return_value=True), patch(
+            "thpm.service.cleanup_managed_outputs", side_effect=cleanup_with_error
+        ):
+            disabled = Service(self.paths).set_enabled("typora", False)
+
+        self.assertTrue(disabled["errors"])
+        self.assertEqual(disabled["restartRequired"], ["Typora"])
+
+    def test_typora_noop_uninstall_does_not_report_restart(self):
+        with patch("thpm.service._typora_process_running", return_value=True):
+            uninstalled = Service(self.paths).uninstall()
+
+        self.assertEqual(uninstalled["restartRequired"], [])
+
+    def test_typora_uninstall_reports_restart_despite_unrelated_cleanup_error(self):
+        source = self.paths.current_theme / "thpm-typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("/* managed Typora theme */\n")
+        with patch("thpm.integrations._reload", return_value=([], [])):
+            apply("typora", self.paths)
+
+        def cleanup_with_unrelated_error(paths, plugin_id, *, assume_legacy=False):
+            changed, warnings = cleanup_managed_outputs(
+                paths, plugin_id, assume_legacy=assume_legacy
+            )
+            if plugin_id == "vicinae":
+                warnings.append("simulated unrelated cleanup failure")
+            return changed, warnings
+
+        with patch("thpm.service._typora_process_running", return_value=True), patch(
+            "thpm.service.cleanup_managed_outputs",
+            side_effect=cleanup_with_unrelated_error,
+        ):
+            uninstalled = Service(self.paths).uninstall()
+
+        self.assertTrue(uninstalled["errors"])
+        self.assertEqual(uninstalled["restartRequired"], ["Typora"])
+
+    def test_typora_preserved_user_edit_does_not_report_restart(self):
+        source = self.paths.current_theme / "thpm-typora.css"
+        source.parent.mkdir(parents=True)
+        source.write_text("/* managed Typora theme */\n")
+        with patch("thpm.integrations._reload", return_value=([], [])):
+            apply("typora", self.paths)
+        target = self.paths.config_home / "Typora/themes/thpm.css"
+        target.write_text("/* user-modified Typora theme */\n")
+
+        with patch("thpm.service._typora_process_running", return_value=True):
+            disabled = Service(self.paths).set_enabled("typora", False)
+
+        self.assertEqual(target.read_text(), "/* user-modified Typora theme */\n")
+        self.assertEqual(disabled["restartRequired"], [])
+        self.assertIn("preserved user-modified file", str(disabled["warnings"]))
+
+    def test_typora_process_probe_failures_do_not_fail_changed_apply(self):
+        source = self.paths.current_theme / "thpm-typora.css"
+        source.parent.mkdir(parents=True)
+        scenarios = (
+            (None, None),
+            ("/usr/bin/pgrep", subprocess.TimeoutExpired("pgrep", 2)),
+            ("/usr/bin/pgrep", subprocess.CompletedProcess(["pgrep"], 1, "", "")),
+            ("/usr/bin/pgrep", OSError("pgrep disappeared")),
+        )
+
+        for index, (pgrep, outcome) in enumerate(scenarios):
+            with self.subTest(index=index):
+                source.write_text(f"/* managed Typora theme {index} */\n")
+                with patch("thpm.integrations.shutil.which", return_value=pgrep):
+                    if isinstance(outcome, BaseException):
+                        runner = patch(
+                            "thpm.integrations.subprocess.run", side_effect=outcome
+                        )
+                    else:
+                        runner = patch(
+                            "thpm.integrations.subprocess.run", return_value=outcome
+                        )
+                    with runner:
+                        result = apply("typora", self.paths)
+                self.assertEqual(result.status, "applied")
+                self.assertEqual(result.restartRequired, [])
+
     def test_optional_assets_restore_the_files_they_displaced(self):
         cases = {
             "cliamp": ("cliamp.toml", self.paths.config_home / "cliamp/themes/omarchy.toml"),
@@ -5655,7 +5866,7 @@ class IntegrationTests(Sandbox):
         self.assertIn(str(target), payload["changed"])
         self.assertNotIn("windsurf", {item["id"] for item in payload["plugins"]})
 
-    def test_reconcile_retires_typora_and_restores_displaced_stylesheet(self):
+    def test_reconcile_migrates_legacy_typora_output_without_retiring_plugin(self):
         managed = b"retired Typora theme\n"
         prior = b"user Typora theme\n"
         target = self.paths.config_home / "Typora/themes/omarchy.css"
@@ -5693,8 +5904,11 @@ class IntegrationTests(Sandbox):
         self.assertEqual(target.read_bytes(), prior)
         self.assertFalse(state.exists())
         self.assertFalse(backup.exists())
-        self.assertNotIn("typora", self.paths.state_file.read_text())
-        self.assertNotIn("typora", {item["id"] for item in payload["plugins"]})
+        self.assertIn("typora = true", self.paths.state_file.read_text())
+        self.assertIn("typora", {item["id"] for item in payload["plugins"]})
+        self.assertTrue(
+            (self.paths.themed_dir / "thpm-typora.css.tpl").is_file()
+        )
         self.assertIn(str(target), payload["changed"])
 
     def test_reconcile_retires_vicinae_and_cleans_historical_outputs(self):
@@ -6846,6 +7060,19 @@ class IntegrationTests(Sandbox):
             ["discord", "discord-system24"],
         )
         apply_plugin.assert_called_once()
+
+    def test_typora_template_keeps_print_output_monochrome(self):
+        template = (Path(__file__).parents[1] / "assets/templates/thpm-typora.css.tpl").read_text()
+        self.assertIn("@media print", template)
+        for rule in (
+            "color: #000 !important;",
+            "background: #fff !important;",
+            "background: transparent !important;",
+            "text-shadow: none !important;",
+            "box-shadow: none !important;\n    border-color: #777 !important;",
+        ):
+            self.assertIn(rule, template)
+        self.assertIn("text-decoration: underline !important;", template)
 
     def test_hermes_template_matches_desktop_theme_contract(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()

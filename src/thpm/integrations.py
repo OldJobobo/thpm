@@ -67,6 +67,7 @@ GENERATED = {
     "qt6ct": "thpm-qt6ct.conf",
     "spotify": "thpm-spicetify.ini",
     "superfile": "thpm-superfile.toml",
+    "typora": "thpm-typora.css",
     "vicinae": "thpm-vicinae.toml",
     "nwg-dock": "thpm-nwg-dock.css",
     "cava": "thpm-cava.ini",
@@ -96,7 +97,8 @@ OPTIONAL_ASSET_PLUGINS = {
     "cliamp",
     "zed-extra",
 }
-RETIRED_OPTIONAL_ASSET_PLUGINS = {"swaync", "typora", "windsurf"}
+RETIRED_OPTIONAL_ASSET_PLUGINS = {"swaync", "windsurf"}
+LEGACY_OPTIONAL_ASSET_PLUGINS = {"typora"}
 RETIRED_MANAGED_OUTPUT_PLUGINS = {"vicinae"}
 # GENERATED retains historical names needed for guarded retirement cleanup;
 # registry membership remains the authority for active integrations.
@@ -141,6 +143,7 @@ def _standard_output_targets(paths: Paths) -> dict[str, Path]:
         "qt6ct": config / "qt6ct/colors/thpm.conf",
         "spotify": config / "spicetify/Themes/omarchy/color.ini",
         "superfile": config / "superfile/theme/thpm.toml",
+        "typora": config / "Typora/themes/thpm.css",
         "vicinae": paths.data_home / "vicinae/themes/thpm.toml",
         "nwg-dock": config / "nwg-dock-hyprland/thpm.css",
         "cava": config / "cava/themes/thpm",
@@ -1841,6 +1844,20 @@ def _run_reload_command(plugin_id: str, command: list[str]) -> None:
 def _reload(
     plugin_id: str, *, automatic_restarts: bool = True
 ) -> tuple[list[str], list[str]]:
+    if plugin_id == "typora":
+        if not shutil.which("pgrep"):
+            return [], []
+        try:
+            running = subprocess.run(
+                ["pgrep", "-x", "Typora"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return [], []
+        return [], ["Typora"] if running.returncode == 0 else []
     commands = {"spotify": ["spicetify", "refresh"]}
     command = commands.get(plugin_id)
     if not command:
@@ -1957,6 +1974,7 @@ def apply(
     targets = _standard_output_targets(paths)
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),
+        "typora": ("typora.css", GENERATED["typora"]),
     }
 
     if plugin_id == "obsidian-terminal":

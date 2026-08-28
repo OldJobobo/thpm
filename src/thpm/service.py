@@ -52,6 +52,7 @@ from .config import load as load_config
 from .config import save as save_config
 from .files import atomic_copy, atomic_text
 from .integrations import (
+    LEGACY_OPTIONAL_ASSET_PLUGINS,
     MANAGED_OUTPUT_PLUGINS,
     OPTIONAL_ASSET_PLUGINS,
     RETIRED_MANAGED_OUTPUT_PLUGINS,
@@ -97,6 +98,22 @@ SCHEMA_VERSION = 1
 CANONICAL_PALETTE_MIGRATION = "canonical-palette-v1"
 
 
+def _typora_process_running() -> bool:
+    if not shutil.which("pgrep"):
+        return False
+    try:
+        completed = subprocess.run(
+            ["pgrep", "-x", "Typora"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
 def _merge_migrated_enabled(
     enabled: dict[str, bool], updates: dict[str, bool]
 ) -> None:
@@ -138,7 +155,9 @@ def _cleanup_retired_integrations(
     changed: list[str] = []
     warnings: list[dict[str, str]] = []
     legacy_enabled = legacy_enabled or set()
-    for plugin_id in sorted(RETIRED_OPTIONAL_ASSET_PLUGINS):
+    for plugin_id in sorted(
+        RETIRED_OPTIONAL_ASSET_PLUGINS | LEGACY_OPTIONAL_ASSET_PLUGINS
+    ):
         cleanup_changed, cleanup_warnings = cleanup_optional_assets(
             paths,
             plugin_id,
@@ -763,6 +782,7 @@ class Service:
         residuals: list[dict[str, object]] = []
         retained_paths: list[str] = []
         restart_required: list[str] = []
+        typora_output_changed = False
 
         def record_cleanup(messages: list[str]) -> None:
             warnings.extend(
@@ -785,6 +805,9 @@ class Service:
             not value
             and plugin_id == "cava"
             and running_cava_requires_restart(self.paths)
+        )
+        typora_was_running = bool(
+            not value and plugin_id == "typora" and _typora_process_running()
         )
         self._step("Updating integration state")
         with mutation_lock(self.paths):
@@ -857,6 +880,10 @@ class Service:
                     cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
                         self.paths, plugin_id, assume_legacy=True
                     )
+                    if plugin_id == "typora":
+                        typora_output_changed = str(
+                            self.paths.config_home / "Typora/themes/thpm.css"
+                        ) in cleanup_changed
                     changed.extend(cleanup_changed)
                     record_cleanup(cleanup_warnings)
                     browser_profile_changed = plugin_id in {"firefox", "zen"} and any(
@@ -880,6 +907,8 @@ class Service:
             self._step("Verifying integration state")
         if cava_was_running and not errors:
             restart_required.append("Cava")
+        if typora_was_running and typora_output_changed:
+            restart_required.append("Typora")
         summary = f"{plugin_id} {'enabled' if value else 'disabled'}"
         if cleanup_errors:
             summary += "; setting was saved, but cleanup is incomplete"
@@ -1091,7 +1120,10 @@ class Service:
                 enabled = load(self.paths)
                 legacy_enabled = {
                     plugin_id
-                    for plugin_id in RETIRED_OPTIONAL_ASSET_PLUGINS
+                    for plugin_id in (
+                        RETIRED_OPTIONAL_ASSET_PLUGINS
+                        | LEGACY_OPTIONAL_ASSET_PLUGINS
+                    )
                     if persisted_enabled(self.paths, plugin_id)
                 }
                 save(self.paths, enabled)
@@ -1158,7 +1190,10 @@ class Service:
                 enabled = load(self.paths)
                 legacy_enabled = {
                     plugin_id
-                    for plugin_id in RETIRED_OPTIONAL_ASSET_PLUGINS
+                    for plugin_id in (
+                        RETIRED_OPTIONAL_ASSET_PLUGINS
+                        | LEGACY_OPTIONAL_ASSET_PLUGINS
+                    )
                     if persisted_enabled(self.paths, plugin_id)
                 }
                 _merge_migrated_enabled(enabled, migrated)
@@ -1231,7 +1266,9 @@ class Service:
                 residuals.append(residual)
                 errors.append({"plugin": plugin_id, "message": message})
 
+        typora_output_changed = False
         cava_was_running = running_cava_requires_restart(self.paths)
+        typora_was_running = _typora_process_running()
         self._step("Disabling managed integrations")
         with migration_lock(self.paths):
             with mutation_lock(self.paths):
@@ -1240,7 +1277,9 @@ class Service:
                 changed.extend(cleanup_gtk(self.paths))
                 self._step("Restoring managed application files")
                 for plugin_id in sorted(
-                    OPTIONAL_ASSET_PLUGINS | RETIRED_OPTIONAL_ASSET_PLUGINS
+                    OPTIONAL_ASSET_PLUGINS
+                    | RETIRED_OPTIONAL_ASSET_PLUGINS
+                    | LEGACY_OPTIONAL_ASSET_PLUGINS
                 ):
                     if plugin_id == "zed-extra":
                         cleanup_changed, cleanup_warnings = cleanup_zed_assets(
@@ -1289,6 +1328,10 @@ class Service:
                         plugin_id,
                         assume_legacy=True,
                     )
+                    if plugin_id == "typora":
+                        typora_output_changed = str(
+                            self.paths.config_home / "Typora/themes/thpm.css"
+                        ) in cleanup_changed
                     changed.extend(cleanup_changed)
                     record_cleanup(plugin_id, cleanup_warnings)
                 zellij_changed, zellij_warnings = cleanup_zellij(self.paths)
@@ -1352,6 +1395,8 @@ class Service:
                 retained_paths.append(str(self.paths.install_metadata))
         if cava_was_running and not blocking_selector_warnings:
             restart_required.append("Cava")
+        if typora_was_running and typora_output_changed:
+            restart_required.append("Typora")
         cleanup_incomplete = bool(errors)
         return envelope(
             "uninstall",

@@ -6011,6 +6011,27 @@ class IntegrationTests(Sandbox):
                 ],
             )
 
+    def test_gtk_compat_generates_css_from_palette_without_theme_asset(self):
+        self.write_palette()
+
+        result = apply("gtk-css-compat", self.paths)
+
+        self.assertEqual(result.status, "applied")
+        self.assertIn("generated from colors.toml", result.message)
+        for version in ("gtk-3.0", "gtk-4.0"):
+            main = self.paths.config_home / version / "gtk.css"
+            managed = main.with_name("thpm-theme.css")
+            self.assertIn('@import url("thpm-theme.css")', main.read_text())
+            css = managed.read_text()
+            self.assertIn("@define-color window_bg_color #111111;", css)
+            self.assertIn("@define-color window_fg_color #dddddd;", css)
+            self.assertIn("@define-color accent_bg_color #4477cc;", css)
+            self.assertIn("@define-color accent_fg_color #ffffff;", css)
+
+        second = apply("gtk-css-compat", self.paths)
+        self.assertEqual(second.status, "unchanged")
+        self.assertEqual(second.changed, [])
+
     def test_gtk_compat_preserves_user_css_and_removes_only_managed_content(self):
         source = self.paths.current_theme / "gtk.css"
         source.parent.mkdir(parents=True)

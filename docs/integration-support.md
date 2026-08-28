@@ -10,7 +10,7 @@ THPM uses the lifecycle defined in the [PRD](PRD.md#fr-16-integration-support-li
 - **Experimental** is visible and opt-in while end-to-end validation is incomplete. It must still preserve user files and support safe disable and uninstall.
 - **Retired** is absent from the active registry. Apply is disabled, while guarded cleanup remains.
 
-**Incomplete** in the register is a certification audit result, not a lifecycle stage. Every active adapter is currently **Experimental**, visibly labeled, and default-disabled for new state until complete evidence supports promotion. Schema 1 serialized every inherited default, so an existing `true` cannot be distinguished from a later explicit re-enable. Those values are grandfathered to avoid silently disabling adapters while leaving application effects behind; they are **not** treated as proof of opt-in or certification. Existing users should review the Experimental labels and disable integrations they do not want. Cava remains the deliberate exception and still requires its separate consent marker. An adapter must be certified and reviewed before its lifecycle changes to Supported or its new-install default can become enabled.
+**Incomplete** in the register is a certification audit result, not a lifecycle stage. Uncertified active adapters remain **Experimental**, visibly labeled, and default-disabled for new state until complete evidence and explicit maintainer signoff support promotion. `fzf` is the first adapter promoted to **Supported** after completing its technical, automated, lifecycle, restoration, visual, and signoff gates; it remains opt-in. Schema 1 serialized every inherited default, so an existing `true` cannot be distinguished from a later explicit re-enable. Those values are grandfathered to avoid silently disabling adapters while leaving application effects behind; they are **not** treated as proof of opt-in or certification. Existing users should review the Experimental labels and disable integrations they do not want. Cava remains the deliberate exception and still requires its separate consent marker. An adapter must be certified and reviewed before its lifecycle changes to Supported or its new-install default can become enabled.
 
 Automated sandbox tests prove portions of parsing, rendering, shared generated-output machinery, ownership, restoration, and failure handling. Coverage depth varies by adapter and does not by itself prove a complete lifecycle. A copied file alone never proves that a real application imports, selects, or displays it.
 
@@ -25,7 +25,7 @@ This audit was refreshed on **2026-08-16** against the following available platf
 - Textual package: 8.2.8
 - Parent CI run: [PR #20 run 31965007250](https://github.com/OldJobobo/thpm/actions/runs/31965007250), with successful Python 3.11–3.14 and clean stable/VCS Arch package jobs
 
-This baseline records the host used to audit contracts and the successful parent CI run. It is **not** application certification. No active integration currently has a complete repository record containing a real-application version, successful loader observation, and maintainer signoff.
+This baseline records the host used to audit contracts and the successful parent CI run. It is **not** application certification. The complete `fzf` certification is recorded separately in `docs/certifications/fzf-2026-08-28.md`; every other active integration still lacks a complete repository record containing a real-application version, successful loader observation, and maintainer signoff.
 
 ## Repeatable certification procedure
 
@@ -84,7 +84,7 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | `vscode-local-compat` | Incomplete | Experimental | disabled | For every claimed installed editor command (`code`, `code-insiders`, `codium`, or `cursor`), install the fixture's data-only extension, select its theme, and prove it renders. |
 | `pi-hot-reload` | Incomplete | Experimental | disabled | Keep a recorded `pi` session using `omarchy-system` open across both fixture changes and prove its watcher repaints without rewriting the native file. |
 | `fish` | Incomplete | Experimental | disabled | Start a recorded `fish` login session after each change and inspect Fish's effective color variables. |
-| `fzf` | Incomplete | Experimental | disabled | Launch recorded `fzf` from Fish after each change and prove it consumes the rendered `FZF_DEFAULT_OPTS` palette. |
+| `fzf` | Complete | Supported | disabled | Certified on Omarchy 4.0.1 with fzf 0.74.3 and Fish 4.8.1: real `omarchy-theme-set` transitions visibly recolored the complete fzf surface; automated/no-op/disable/user-edit/uninstall/restoration evidence and maintainer signoff are retained in `docs/certifications/fzf-2026-08-28.md`. |
 | `branding` | Incomplete | Experimental | disabled | Run `omarchy-launch-about` and `omarchy-launch-screensaver`; prove each authored asset is displayed and independently restored. |
 | `discord` | Incomplete | Experimental | disabled | Launch the chosen recorded Vencord client, enable `vencord.theme.css`, and prove both authored and generated Midnight paths render. |
 | `discord-system24` | Incomplete | Experimental | disabled | Launch the chosen recorded Vencord client, enable `vencord.theme.css`, and prove both authored and generated System24 paths render. |

@@ -1,0 +1,26 @@
+fzf visual certification commands — 2026-08-28
+
+Development hook PATH:
+  /tmp/thpm-fzf-bin:/usr/local/sbin:/usr/local/bin:/usr/bin
+Development module:
+  /tmp/thpm-fzf-dev/src/thpm/__init__.py
+
+Theme transitions:
+  /usr/bin/omarchy-theme-set "Dune"
+  /usr/bin/omarchy-theme-set "Dune"
+  /usr/bin/omarchy-theme-set "Last Call"
+
+Dune fixture launch:
+systemd-run --user --unit=thpm-fzf-evidence --collect /usr/bin/foot --app-id=thpm-fzf-evidence --title="THPM fzf — Dune" --window-size-chars=100x32 /usr/bin/fish -lc 'printf "%s\n" "theme-dune-background" "theme-dune-selection" "theme-dune-foreground" "theme-dune-highlight" "theme-dune-information" "theme-dune-prompt" "theme-dune-pointer" "theme-dune-marker" "theme-dune-spinner" "theme-dune-header" "semantic-red" "semantic-green" "semantic-blue" "semantic-cyan" "semantic-magenta" "semantic-yellow" | fzf --multi --layout=reverse --border=rounded --padding=1 --header="THPM · omarchy-theme-set Dune · fzf 0.74.3" --prompt="Search Dune › " --pointer="▶" --marker="✓" --info=inline-right --query=theme-dune'
+
+Last Call fixture launch:
+systemd-run --user --unit=thpm-fzf-evidence --collect /usr/bin/foot --app-id=thpm-fzf-evidence --title="THPM fzf — Last Call" --window-size-chars=100x32 /usr/bin/fish -lc 'printf "%s\n" "theme-last-call-background" "theme-last-call-selection" "theme-last-call-foreground" "theme-last-call-highlight" "theme-last-call-information" "theme-last-call-prompt" "theme-last-call-pointer" "theme-last-call-marker" "theme-last-call-spinner" "theme-last-call-header" "semantic-red" "semantic-green" "semantic-blue" "semantic-cyan" "semantic-magenta" "semantic-yellow" | fzf --multi --layout=reverse --border=rounded --padding=1 --header="THPM · omarchy-theme-set Last Call · fzf 0.74.3" --prompt="Search Last Call › " --pointer="▶" --marker="✓" --info=inline-right --query=theme-last-call'
+
+Multi-select marker exposure:
+  wtype -P Tab -p Tab
+
+Capture:
+  grim /tmp/thpm-fzf-<theme>-marked.png
+
+Report:
+  thpm report fzf --output /tmp/thpm-fzf-certification-report.json

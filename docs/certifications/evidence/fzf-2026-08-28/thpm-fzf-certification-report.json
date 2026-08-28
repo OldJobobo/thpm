@@ -1,0 +1,92 @@
+{
+  "reportSchemaVersion": 1,
+  "generatedAt": "2026-08-28T01:28:23.167196Z",
+  "reportId": "31e46f25-1faa-4b32-98d9-5239556ebe24",
+  "scope": "fzf",
+  "thpm": {
+    "version": "1.0.0rc22",
+    "install": {
+      "origin": "unsupported",
+      "package": "",
+      "repository": "oldjobobo/thpm"
+    }
+  },
+  "runtime": {
+    "python": "3.14.7",
+    "system": "Linux",
+    "architecture": "x86_64"
+  },
+  "application": {
+    "id": "fzf",
+    "version": "not-collected"
+  },
+  "activeTheme": "last-call",
+  "plugin": {
+    "id": "fzf",
+    "label": "fzf",
+    "category": "Terminal",
+    "description": "Provide an Omarchy-colored fzf palette.",
+    "kind": "hybrid",
+    "ownership": "thpm",
+    "enabled": true,
+    "available": true,
+    "applicable": true,
+    "commands": [
+      "fzf"
+    ],
+    "missing": [],
+    "themeAssets": [],
+    "templates": [
+      "thpm-fzf.fish.tpl"
+    ],
+    "warnings": [],
+    "confirmationRequired": false,
+    "supportStatus": "experimental"
+  },
+  "doctor": {
+    "ok": true,
+    "summary": "0 errors, 0 warnings",
+    "checks": [],
+    "diagnostics": {}
+  },
+  "files": [],
+  "recentOperations": [
+    {
+      "journalSchemaVersion": 1,
+      "timestamp": "2026-08-28T01:28:22.140339Z",
+      "runId": "9e14f949-baa6-4443-8fba-8daf7168336a",
+      "thpmVersion": "1.0.0rc22",
+      "operation": "hook-run",
+      "plugin": "fzf",
+      "status": "applied",
+      "reasonCode": "integration.applied",
+      "durationMs": 2,
+      "changed": [
+        "~/.config/fish/conf.d/thpm-fzf.fish"
+      ],
+      "actions": [],
+      "warnings": [],
+      "restartRequired": [],
+      "failureDetail": ""
+    }
+  ],
+  "privacy": {
+    "omitted": [
+      "hostname and machine identifiers",
+      "raw process environment",
+      "configuration and theme file contents",
+      "unrelated process arguments",
+      "unbounded stdout and stderr"
+    ],
+    "redacted": [
+      "token/password/secret-like keys and values, including authorization headers",
+      "URL userinfo, query strings, and fragments",
+      "home directory paths normalized to ~ wherever they appear"
+    ],
+    "limits": {
+      "maxBytes": 262144,
+      "maxRecentOperations": 50
+    },
+    "truncated": false
+  }
+}

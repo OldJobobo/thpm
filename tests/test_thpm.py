@@ -569,7 +569,57 @@ class StateTests(Sandbox):
                 if item.startswith(f"set -g {variable} ")
             )
             self.assertIn("--background={{ selection }}", line)
-
+    def test_superfile_template_covers_the_complete_v1_6_theme_contract(self):
+        template = (
+            Path(__file__).parents[1] / "assets/templates/thpm-superfile.toml.tpl"
+        ).read_text()
+        keys = set(re.findall(r"(?m)^([a-z_]+)\s*=", template))
+        required = {
+            "code_syntax_highlight",
+            "full_screen_fg",
+            "full_screen_bg",
+            "gradient_color",
+            "file_panel_fg",
+            "file_panel_bg",
+            "file_panel_border",
+            "file_panel_border_active",
+            "file_panel_top_directory_icon",
+            "file_panel_top_path",
+            "file_panel_item_selected_fg",
+            "file_panel_item_selected_bg",
+            "footer_fg",
+            "footer_bg",
+            "footer_border",
+            "footer_border_active",
+            "sidebar_fg",
+            "sidebar_bg",
+            "sidebar_title",
+            "sidebar_border",
+            "sidebar_border_active",
+            "sidebar_item_selected_fg",
+            "sidebar_item_selected_bg",
+            "sidebar_divider",
+            "modal_fg",
+            "modal_bg",
+            "modal_border_active",
+            "modal_cancel_fg",
+            "modal_cancel_bg",
+            "modal_confirm_fg",
+            "modal_confirm_bg",
+            "help_menu_hotkey",
+            "help_menu_title",
+            "cursor",
+            "correct",
+            "error",
+            "hint",
+            "cancel",
+        }
+        self.assertEqual(keys, required)
+        self.assertIn('code_syntax_highlight = "catppuccin-mocha"', template)
+        self.assertTrue(
+            {"directory_icon", "footer", "metadata"}.isdisjoint(keys),
+            "obsolete partial-theme keys must not masquerade as Superfile v1.6 fields",
+        )
     def test_vencord_fallback_uses_owned_licensed_midnight_base(self):
         root = Path(__file__).parents[1]
         template = (root / "assets/templates/thpm-vencord.theme.css.tpl").read_text()
@@ -1650,6 +1700,69 @@ class ServiceTests(Sandbox):
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(rendered)
         apply("fish", self.paths)
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            uninstalled = Service(self.paths).uninstall()
+        self.assertTrue(uninstalled["ok"])
+        self.assertFalse(uninstalled["cleanupIncomplete"])
+        self.assertFalse(target.exists())
+        self.assertFalse(source.exists())
+
+    def test_superfile_generated_output_lifecycle_is_safe_and_idempotent(self):
+        assets = Path(__file__).parents[1] / "assets"
+        source = self.paths.current_theme / "thpm-superfile.toml"
+        target = self.paths.config_home / "superfile/theme/thpm.toml"
+        rendered = (
+            "# THPM Superfile v1.6 fixture\n"
+            'code_syntax_highlight = "catppuccin-mocha"\n'
+            'full_screen_fg = "#d8e6e7"\n'
+            'full_screen_bg = "#101820"\n'
+            'file_panel_border_active = "#668ca9"\n'
+            'file_panel_item_selected_bg = "#42686f"\n'
+            'sidebar_bg = "#0a1115"\n'
+            'modal_border_active = "#668ca9"\n'
+        )
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        source.write_text(rendered)
+        target.write_text("user baseline\n")
+
+        changed = apply("superfile", self.paths)
+        metadata = target.stat()
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        unchanged = apply("superfile", self.paths)
+
+        self.assertEqual(changed.status, "applied")
+        self.assertEqual(changed.restartRequired, [])
+        self.assertEqual(target.read_text(), rendered)
+        self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(unchanged.restartRequired, [])
+        self.assertEqual(target.stat().st_ino, metadata.st_ino)
+        self.assertEqual(target.stat().st_mtime_ns, metadata.st_mtime_ns)
+        self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), digest)
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            disabled = Service(self.paths).set_enabled(
+                "superfile", False, refresh=False
+            )
+        self.assertTrue(disabled["ok"])
+        self.assertEqual(target.read_text(), "user baseline\n")
+        self.assertFalse(source.exists())
+
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(rendered)
+        apply("superfile", self.paths)
+        target.write_text("synthetic user modification\n")
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            preserved = Service(self.paths).set_enabled(
+                "superfile", False, refresh=False
+            )
+        self.assertEqual(target.read_text(), "synthetic user modification\n")
+        self.assertIn("preserved user-modified file", str(preserved["warnings"]))
+
+        target.unlink()
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(rendered)
+        apply("superfile", self.paths)
         with patch("thpm.service.ui.remove", return_value={"installed": False}):
             uninstalled = Service(self.paths).uninstall()
         self.assertTrue(uninstalled["ok"])

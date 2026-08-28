@@ -30,6 +30,19 @@
   --lwt-toolbarbutton-icon-fill-attention: {{ blue }} !important;
 }
 
+/* #navigation-toolbox (the outer chrome window's menu bar / unified
+   toolbar / tab strip container) only reads --lwt-accent-color or
+   --toolbar-background-color under :root[lwtheme]; otherwise it falls
+   back straight to the native -moz-headerbar/ActiveCaption system color
+   and ignores every --layout-*/--toolbar-background-color variable
+   above entirely. It has to be overridden directly, unconditionally.
+   Toolbar buttons themselves are transparent in their idle state (also
+   unconditional, see widgets.css), so this is what actually colors them. */
+#navigation-toolbox {
+  background-color: {{ background }} !important;
+  color: {{ foreground }} !important;
+}
+
 @-moz-document url("about:3pane"), url("about:message") {
   :root {
     --layout-background-0: {{ background }} !important;

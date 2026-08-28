@@ -273,7 +273,7 @@ already-satisfied guarantees:
 - ownership is currently conflated with availability in snapshot presentation;
 - confirmation metadata is a Boolean and does not yet carry a common risk
   description or reversibility class;
-- SwayNC output needs an end-to-end loader and isolated visual validation path;
+- retired integrations need explicit lifecycle metadata and support-window policy;
 - Arch package, executable QML, locking, and complete installed-artifact tests are
   not current CI gates.
 
@@ -568,17 +568,12 @@ that can drift.
 The following classes require real-application validation before 1.0 support is
 considered complete:
 
-- reload-based integrations such as SwayNC and Spicetify;
+- reload-based integrations such as Spicetify;
 - application selection integrations such as Zed;
 - profile-based browser integrations;
 - local editor extension installation;
 - integrations that require process restart rather than reload;
 - action integrations with effects THPM cannot reverse.
-
-SwayNC is a concrete support-definition test: deploying `colors.css` is not enough
-unless an active stylesheet imports it and a real or isolated SwayNC process loads
-that stylesheet. SwayNC shall be labeled experimental and disabled by default until
-that import path and isolated visual validation are complete.
 
 ### 11.4 Retired integrations
 
@@ -587,7 +582,10 @@ in the active registry after replacement by a product with a different command,
 profile, and extension lifecycle. THPM retains guarded cleanup for its historical
 `.windsurf` managed destination. Vicinae follows that precedent: it is absent from
 the active registry while reconciliation and uninstall retain guarded cleanup for
-both historical managed theme destinations.
+both historical managed theme destinations. SwayNC follows the same precedent: it
+is absent from the active registry, while reconciliation and uninstall retain
+guarded cleanup and restoration for historical `~/.config/swaync/colors.css`
+outputs.
 
 The current implementation is an initial precedent, not yet a complete generic
 retirement framework. Retirement metadata, state migration, retention dates,
@@ -763,8 +761,8 @@ integrations remain visible but disabled by default.
   instructions.
 - Windsurf no longer appears as an active integration and legacy cleanup remains
   tested.
-- SwayNC is visibly experimental and disabled by default until its stylesheet import
-  and isolated visual validation are verified.
+- SwayNC no longer appears as an active integration and guarded historical cleanup
+  and restoration remain tested.
 
 ### 14.2 Reliability metrics
 
@@ -865,8 +863,7 @@ retains the recovery data needed for that retry.
 - Enforce conflicts at load and apply time.
 - Separate ownership from availability.
 - Validate every active integration end to end.
-- Mark SwayNC experimental and disabled by default until stylesheet import and
-  isolated visual validation are complete.
+- Finish SwayNC retirement and guarded historical cleanup.
 - Finish Windsurf retirement and legacy cleanup.
 - Add registry/effect validation.
 

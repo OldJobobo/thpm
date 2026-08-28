@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retire the uncertified SwayNC integration because its standalone `colors.css` output was not loaded by SwayNC's active stylesheet, while retaining guarded cleanup for historical managed output.
+
 ## 1.0.0rc22 - 2026-08-21
 
 - Theme modern Zen Browser chrome with the generated semantic palette, migrate complete legacy Firefox and Zen hook imports without disturbing user CSS, and report browser restarts only when profile files actually change.

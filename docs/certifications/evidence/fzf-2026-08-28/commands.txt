@@ -24,3 +24,21 @@ Capture:
 
 Report:
   thpm report fzf --output /tmp/thpm-fzf-certification-report.json
+
+Post-disable application restoration gate:
+  thpm disable fzf --json
+  test ! -e ~/.config/fish/conf.d/thpm-fzf.fish
+  fish -lc 'printf "FZF_DEFAULT_OPTS=%s\n" "$FZF_DEFAULT_OPTS"; not string match -q "*--color=bg:*" -- "$FZF_DEFAULT_OPTS"'
+  systemd-run --user --unit=thpm-fzf-post-disable --collect /usr/bin/foot --app-id=thpm-fzf-post-disable --title="THPM fzf — post-disable" --window-size-chars=100x32 /usr/bin/fish -lc 'if string match -q "*--color=bg:*" -- "$FZF_DEFAULT_OPTS"; echo "STALE THPM COLOR OPTIONS"; exit 97; end; printf "%s\n" post-disable-fresh-fish default-fzf-colors no-thpm-conf-d semantic-red semantic-green semantic-blue semantic-cyan semantic-magenta semantic-yellow | fzf --multi --layout=reverse --border=rounded --padding=1 --header="POST-DISABLE · fresh Fish · no THPM --color in FZF_DEFAULT_OPTS" --prompt="Fresh default › " --pointer="▶" --marker="✓" --info=inline-right --query=post-disable'
+  wtype -P Tab -p Tab
+  grim /tmp/thpm-fzf-review-evidence/post-disable-fresh-fzf.png
+
+Post-uninstall application restoration gate:
+  thpm enable fzf --json
+  thpm uninstall --json
+  test ! -e ~/.config/fish/conf.d/thpm-fzf.fish
+  test ! -e ~/.config/omarchy/themed/thpm-fzf.fish.tpl
+  fish -lc 'printf "FZF_DEFAULT_OPTS=%s\n" "$FZF_DEFAULT_OPTS"; not string match -q "*--color=bg:*" -- "$FZF_DEFAULT_OPTS"'
+  systemd-run --user --unit=thpm-fzf-post-uninstall --collect /usr/bin/foot --app-id=thpm-fzf-post-uninstall --title="THPM fzf — post-uninstall" --window-size-chars=100x32 /usr/bin/fish -lc 'if string match -q "*--color=bg:*" -- "$FZF_DEFAULT_OPTS"; echo "STALE THPM COLOR OPTIONS"; exit 97; end; printf "%s\n" post-uninstall-fresh-fish default-fzf-colors no-thpm-install semantic-red semantic-green semantic-blue semantic-cyan semantic-magenta semantic-yellow | fzf --multi --layout=reverse --border=rounded --padding=1 --header="POST-UNINSTALL · fresh Fish · no THPM --color in FZF_DEFAULT_OPTS" --prompt="Fresh default › " --pointer="▶" --marker="✓" --info=inline-right --query=post-uninstall'
+  wtype -P Tab -p Tab
+  grim /tmp/thpm-fzf-review-evidence/post-uninstall-fresh-fzf.png

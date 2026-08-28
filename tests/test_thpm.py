@@ -478,6 +478,10 @@ class StateTests(Sandbox):
             "thpm-fzf-certification-report.json",
             "thpm-fzf-dune-marked.png",
             "thpm-fzf-last-call-marked.png",
+            "thpm-fzf-post-disable-fresh.png",
+            "thpm-fzf-post-uninstall-fresh.png",
+            "post-disable-env.txt",
+            "post-uninstall-env.txt",
         ):
             self.assertTrue((evidence / name).is_file(), name)
         report = json.loads((evidence / "thpm-fzf-certification-report.json").read_text())
@@ -487,9 +491,20 @@ class StateTests(Sandbox):
             "thpm-fzf-certification-report.json": "bd7e81b11fc9b06319abaeaa0fed08c1e0640375ed67d1659a327c1690ed6612",
             "thpm-fzf-dune-marked.png": "01ad616802cd912a866805abe6366e388e61499f67ca0ce3af5d2d0662b2072c",
             "thpm-fzf-last-call-marked.png": "bca5e6567cf1ef7fd7c57f0f0929fe930d319d7bce5eef8993eac803cdca4aae",
+            "thpm-fzf-post-disable-fresh.png": "636b2a98c366f0249b32d3123378215ba17c816848badfee25f85e765a7341e3",
+            "thpm-fzf-post-uninstall-fresh.png": "a8402e8f049209fbbc9f64d039c3c44459a88452042c5a3e00ca7acbe2a9d4d6",
+            "post-disable-env.txt": "7d59b8c9e994c3c4ef516f6f35941b846e714cd40159f7b1e4bccc63ac0c18a1",
+            "post-uninstall-env.txt": "7d59b8c9e994c3c4ef516f6f35941b846e714cd40159f7b1e4bccc63ac0c18a1",
         }
         for name, expected in expected_hashes.items():
             self.assertEqual(hashlib.sha256((evidence / name).read_bytes()).hexdigest(), expected)
+        self.assertEqual((evidence / "post-disable-env.txt").read_text(), "FZF_DEFAULT_OPTS=\n")
+        self.assertEqual((evidence / "post-uninstall-env.txt").read_text(), "FZF_DEFAULT_OPTS=\n")
+        commands = (evidence / "commands.txt").read_text()
+        self.assertIn("Post-disable application restoration gate:", commands)
+        self.assertIn("thpm-fzf-post-disable", commands)
+        self.assertIn("Post-uninstall application restoration gate:", commands)
+        self.assertIn("thpm-fzf-post-uninstall", commands)
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"

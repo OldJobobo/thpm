@@ -1992,9 +1992,17 @@ def apply(
         for path, document in documents:
             options = document.setdefault("terminalOptions", {})
             assert isinstance(options, dict)
-            if options.get("theme") == theme:
+            document_changed = options.get("theme") != theme
+            if document_changed:
+                options["theme"] = theme
+            profiles = document.get("profiles")
+            if isinstance(profiles, dict):
+                for profile in profiles.values():
+                    if isinstance(profile, dict) and profile.get("followTheme") is True:
+                        profile["followTheme"] = False
+                        document_changed = True
+            if not document_changed:
                 continue
-            options["theme"] = theme
             mode = path.stat(follow_symlinks=False).st_mode & 0o777
             atomic_text(path, json.dumps(document, indent=2) + "\n", mode)
             changed.append(str(path))

@@ -2,11 +2,15 @@
 
 ## Unreleased
 
+## 1.0.0rc23 - 2026-08-28
+
+- Generate a complete semantic GTK fallback when a theme does not provide authored GTK CSS, while preserving managed imports, user CSS, and restart-only guidance.
 - Preserve cliamp's contrast-checked built-in or terminal-ANSI theming by default; install and select an authored `cliamp.toml` override only with explicit `# thpm:cliamp-use-native` author opt-in, with guarded selector and file restoration.
 - Retire the uncertified SwayNC integration because its standalone `colors.css` output was not loaded by SwayNC's active stylesheet, while retaining guarded cleanup for historical managed output.
+- Correct Fish and Superfile semantic palette contracts, including lifecycle-safe generated output and fresh-process behavior.
 - Promote the opt-in fzf integration to Supported after complete automated, lifecycle, restoration, and visual certification on Omarchy Quattro, with explicit maintainer signoff.
 - Reintroduce Typora as an Experimental, default-disabled integration with a restorable generated custom theme, change-sensitive restart reporting, and a monochrome print-media treatment separate from the Omarchy screen palette.
-- Ensure Obsidian Terminal profiles render THPM's semantic xterm palette by restorably disabling their overriding Follow Theme behavior while preserving unrelated profile settings.
+- Ensure Obsidian Terminal profiles render THPM's semantic xterm palette by restorably disabling their overriding Follow Theme behavior while preserving unrelated profile settings; validate settings and private recovery paths against traversal, malformed state, symlink redirection, races, uncertain writes, and incomplete rollback.
 - Report a restart for running same-user Zellij processes when disable or uninstall actually restores/removes managed configuration, without flagging no-op cleanup.
 
 ## 1.0.0rc22 - 2026-08-21

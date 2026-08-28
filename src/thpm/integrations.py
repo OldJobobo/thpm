@@ -706,13 +706,30 @@ def _read_pi_theme(path: Path) -> bytes:
         return stream.read()
 
 
+def _validate_obsidian_terminal_data_path(path: Path) -> Path:
+    if (
+        not path.is_absolute()
+        or ".." in path.parts
+        or tuple(path.parts[-4:])
+        != (".obsidian", "plugins", "terminal", "data.json")
+    ):
+        raise ValueError(f"unsafe Obsidian Terminal settings path: {path}")
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"unsafe Obsidian Terminal settings path: {path}")
+    return path
+
+
 def _obsidian_terminal_data_files(paths: Paths) -> tuple[Path, ...]:
     candidates: list[Path] = []
 
     def add(candidate: Path) -> None:
         expanded = Path(os.path.expandvars(str(candidate))).expanduser()
         if not expanded.is_absolute():
-            expanded = (Path.cwd() / expanded).resolve()
+            expanded = Path.cwd() / expanded
+        _validate_obsidian_terminal_data_path(expanded)
         if expanded.is_file() and expanded not in candidates:
             candidates.append(expanded)
 
@@ -755,6 +772,7 @@ def _obsidian_terminal_data_files(paths: Paths) -> tuple[Path, ...]:
 
 
 def _read_obsidian_terminal_data(path: Path) -> dict[str, object]:
+    _validate_obsidian_terminal_data_path(path)
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"refusing unsafe Obsidian Terminal settings file: {path}")
     try:
@@ -766,7 +784,175 @@ def _read_obsidian_terminal_data(path: Path) -> dict[str, object]:
     options = document.get("terminalOptions")
     if options is not None and not isinstance(options, dict):
         raise TypeError(f"Obsidian Terminal terminalOptions is not an object: {path}")
+    profiles = document.get("profiles")
+    if profiles is not None and not isinstance(profiles, dict):
+        raise TypeError(f"Obsidian Terminal profiles is not an object: {path}")
     return document
+
+
+def _obsidian_terminal_follow_theme_state_path(paths: Paths) -> Path:
+    return paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+
+
+def _validate_obsidian_terminal_follow_theme_state_path(paths: Paths) -> Path:
+    state_path = _obsidian_terminal_follow_theme_state_path(paths)
+    if not state_path.is_absolute() or ".." in state_path.parts:
+        raise RuntimeError(
+            f"unsafe Obsidian Terminal restoration state path: {state_path}"
+        )
+    current = Path(state_path.anchor)
+    for component in state_path.parts[1:]:
+        current /= component
+        if current.is_symlink():
+            raise RuntimeError(
+                f"unsafe Obsidian Terminal restoration state path: {state_path}"
+            )
+    return state_path
+
+
+def _read_obsidian_terminal_follow_theme_state(paths: Paths) -> dict[str, list[str]]:
+    state_path = _validate_obsidian_terminal_follow_theme_state_path(paths)
+    if not state_path.exists() and not state_path.is_symlink():
+        return {}
+    if state_path.is_symlink() or not state_path.is_file():
+        raise RuntimeError(f"invalid Obsidian Terminal restoration state: {state_path}")
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"invalid Obsidian Terminal restoration state: {state_path}"
+        ) from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("version") != 1
+        or not isinstance(payload.get("files"), dict)
+    ):
+        raise RuntimeError(f"invalid Obsidian Terminal restoration state: {state_path}")
+    files = payload["files"]
+    result: dict[str, list[str]] = {}
+    for raw_path, raw_profiles in files.items():
+        if (
+            not isinstance(raw_path, str)
+            or not Path(raw_path).is_absolute()
+            or not isinstance(raw_profiles, list)
+            or not raw_profiles
+            or any(not isinstance(profile, str) or not profile for profile in raw_profiles)
+        ):
+            raise RuntimeError(
+                f"invalid Obsidian Terminal restoration state: {state_path}"
+            )
+        try:
+            _validate_obsidian_terminal_data_path(Path(raw_path))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"invalid Obsidian Terminal restoration state: {state_path}"
+            ) from exc
+        result[raw_path] = list(dict.fromkeys(raw_profiles))
+    return result
+
+
+def _write_obsidian_terminal_follow_theme_state(
+    paths: Paths, files: dict[str, list[str]]
+) -> None:
+    state_path = _validate_obsidian_terminal_follow_theme_state_path(paths)
+    atomic_text(
+        state_path,
+        json.dumps({"version": 1, "files": files}, indent=2, sort_keys=True) + "\n",
+        0o600,
+    )
+
+
+def cleanup_obsidian_terminal(paths: Paths) -> tuple[list[str], list[str]]:
+    state_path = _obsidian_terminal_follow_theme_state_path(paths)
+    try:
+        _validate_obsidian_terminal_follow_theme_state_path(paths)
+    except RuntimeError as exc:
+        return [], [f"cleanup incomplete: {exc}"]
+    if not state_path.exists() and not state_path.is_symlink():
+        return [], []
+    try:
+        saved = _read_obsidian_terminal_follow_theme_state(paths)
+    except RuntimeError as exc:
+        return [], [f"cleanup incomplete: {exc}"]
+
+    changed: list[str] = []
+    warnings: list[str] = []
+    retained: dict[str, list[str]] = {}
+    for raw_path, profile_names in saved.items():
+        path = Path(raw_path)
+        if not path.exists():
+            warnings.append(
+                f"cleanup incomplete for missing Obsidian Terminal settings: {path}"
+            )
+            retained[raw_path] = profile_names
+            continue
+        try:
+            document = _read_obsidian_terminal_data(path)
+        except (OSError, TypeError, ValueError) as exc:
+            warnings.append(f"cleanup incomplete for {path}: {exc}")
+            retained[raw_path] = profile_names
+            continue
+        profiles = document.get("profiles")
+        document_changed = False
+        profiles_to_restore: list[str] = []
+        unresolved_profiles: list[str] = []
+        if isinstance(profiles, dict):
+            for profile_name in profile_names:
+                profile = profiles.get(profile_name)
+                if not isinstance(profile, dict):
+                    unresolved_profiles.append(profile_name)
+                    warnings.append(
+                        f"cleanup incomplete for missing or malformed Obsidian "
+                        f"Terminal profile {profile_name}: {path}"
+                    )
+                    continue
+                if profile.get("followTheme") is False:
+                    profile["followTheme"] = True
+                    document_changed = True
+                    profiles_to_restore.append(profile_name)
+                elif profile.get("followTheme") is not True:
+                    warnings.append(
+                        f"preserved user-modified Obsidian Terminal profile: "
+                        f"{path}#{profile_name}"
+                    )
+        if document_changed:
+            try:
+                _validate_obsidian_terminal_data_path(path)
+            except ValueError as exc:
+                retained[raw_path] = profiles_to_restore + unresolved_profiles
+                warnings.append(
+                    f"cleanup incomplete while restoring Obsidian Terminal "
+                    f"settings ({exc}): {path}"
+                )
+                continue
+            try:
+                mode = path.stat(follow_symlinks=False).st_mode & 0o777
+                atomic_text(path, json.dumps(document, indent=2) + "\n", mode)
+            except OSError as exc:
+                if str(path) not in changed:
+                    changed.append(str(path))
+                retained[raw_path] = profiles_to_restore + unresolved_profiles
+                warnings.append(
+                    f"cleanup incomplete while restoring Obsidian Terminal "
+                    f"settings ({exc}): {path}"
+                )
+                continue
+            changed.append(str(path))
+        if unresolved_profiles:
+            retained[raw_path] = unresolved_profiles
+
+    try:
+        if retained:
+            _write_obsidian_terminal_follow_theme_state(paths, retained)
+        else:
+            _validate_obsidian_terminal_follow_theme_state_path(paths)
+            state_path.unlink(missing_ok=True)
+    except (OSError, RuntimeError) as exc:
+        warnings.append(
+            f"cleanup incomplete while updating Obsidian Terminal restoration "
+            f"state ({exc}): {state_path}"
+        )
+    return changed, warnings
 
 
 def _obsidian_terminal_theme(colors: dict[str, str]) -> dict[str, str]:
@@ -1989,6 +2175,12 @@ def apply(
         theme = _obsidian_terminal_theme(
             load_palette(paths.current_theme / "colors.toml")
         )
+        state_path = _validate_obsidian_terminal_follow_theme_state_path(paths)
+        state_existed = state_path.is_file() and not state_path.is_symlink()
+        state_before = state_path.read_text(encoding="utf-8") if state_existed else None
+        saved = _read_obsidian_terminal_follow_theme_state(paths)
+        prepared: list[tuple[Path, dict[str, object], str, int]] = []
+        state_changed = False
         for path, document in documents:
             options = document.setdefault("terminalOptions", {})
             assert isinstance(options, dict)
@@ -1996,16 +2188,69 @@ def apply(
             if document_changed:
                 options["theme"] = theme
             profiles = document.get("profiles")
+            owned_profiles = saved.setdefault(str(path), [])
             if isinstance(profiles, dict):
-                for profile in profiles.values():
+                for profile_name, profile in profiles.items():
                     if isinstance(profile, dict) and profile.get("followTheme") is True:
+                        if profile_name not in owned_profiles:
+                            owned_profiles.append(profile_name)
+                            state_changed = True
                         profile["followTheme"] = False
                         document_changed = True
-            if not document_changed:
-                continue
-            mode = path.stat(follow_symlinks=False).st_mode & 0o777
-            atomic_text(path, json.dumps(document, indent=2) + "\n", mode)
-            changed.append(str(path))
+            if not owned_profiles:
+                saved.pop(str(path), None)
+            if document_changed:
+                prepared.append(
+                    (
+                        path,
+                        document,
+                        path.read_text(encoding="utf-8"),
+                        path.stat(follow_symlinks=False).st_mode & 0o777,
+                    )
+                )
+        written: list[tuple[Path, str, int]] = []
+        try:
+            if state_changed:
+                _write_obsidian_terminal_follow_theme_state(paths, saved)
+            for path, document, original, mode in prepared:
+                _validate_obsidian_terminal_data_path(path)
+                written.append((path, original, mode))
+                atomic_text(path, json.dumps(document, indent=2) + "\n", mode)
+                changed.append(str(path))
+        except Exception as exc:
+            rollback_failures: list[tuple[Path, Exception]] = []
+            for path, original, mode in reversed(written):
+                try:
+                    _validate_obsidian_terminal_data_path(path)
+                    atomic_text(path, original, mode)
+                except Exception as rollback_exc:
+                    rollback_failures.append((path, rollback_exc))
+            state_failure: Exception | None = None
+            if not rollback_failures:
+                try:
+                    _validate_obsidian_terminal_follow_theme_state_path(paths)
+                    if state_existed and state_before is not None:
+                        atomic_text(state_path, state_before, 0o600)
+                    else:
+                        state_path.unlink(missing_ok=True)
+                except Exception as rollback_exc:
+                    state_failure = rollback_exc
+            if rollback_failures or state_failure is not None:
+                affected_paths = [str(path) for path, _error in rollback_failures]
+                details = [
+                    f"{path}: {error}" for path, error in rollback_failures
+                ]
+                if state_failure is not None:
+                    affected_paths.append(str(state_path))
+                    details.append(f"{state_path}: {state_failure}")
+                raise ApplyFailure(
+                    f"Obsidian Terminal apply failed ({exc}); rollback incomplete: "
+                    + "; ".join(details),
+                    changed=affected_paths,
+                    warnings=["restoration state was retained for recovery"],
+                    restart_required=["Obsidian"] if rollback_failures else [],
+                ) from exc
+            raise
         if changed:
             restart_required.append("Obsidian")
     elif plugin_id == "zellij":

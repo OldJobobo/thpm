@@ -4959,6 +4959,918 @@ class IntegrationTests(Sandbox):
         self.assertEqual(document["profiles"]["invalidProfile"], "preserve me")
         self.assertEqual(document["terminalOptions"]["fontSize"], 14)
 
+    def test_disabling_obsidian_terminal_restores_follow_theme_and_preserves_later_edits(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {
+                            "followTheme": True,
+                            "terminalOptions": {"fontFamily": "monospace"},
+                        },
+                        "userOwnedFalse": {"followTheme": False},
+                    },
+                    "terminalOptions": {"fontSize": 14},
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+            document = json.loads(settings.read_text())
+            document["preferredRenderer"] = "webgl"
+            settings.write_text(json.dumps(document))
+            payload = Service(self.paths).set_enabled(
+                "obsidian-terminal", False, refresh=False
+            )
+
+        restored = json.loads(settings.read_text())
+        self.assertTrue(restored["profiles"]["linuxIntegratedDefault"]["followTheme"])
+        self.assertFalse(restored["profiles"]["userOwnedFalse"]["followTheme"])
+        self.assertEqual(restored["preferredRenderer"], "webgl")
+        self.assertIn(str(settings), payload["changed"])
+        self.assertEqual(payload["restartRequired"], ["Obsidian"])
+
+    def test_disabling_obsidian_terminal_retains_state_for_missing_vault(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+            state_before = restoration_state.read_bytes()
+            settings.unlink()
+            payload = Service(self.paths).set_enabled(
+                "obsidian-terminal", False, refresh=False
+            )
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertIn(str(settings), payload["retainedPaths"])
+        self.assertTrue(any(str(settings) in str(item) for item in payload["residuals"]))
+        self.assertEqual(restoration_state.read_bytes(), state_before)
+        self.assertEqual(payload["restartRequired"], [])
+
+    def test_disabling_obsidian_terminal_reports_restoration_write_failure(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+            state_before = restoration_state.read_bytes()
+            with patch(
+                "thpm.integrations.atomic_text", side_effect=OSError("disk full")
+            ):
+                payload = Service(self.paths).set_enabled(
+                    "obsidian-terminal", False, refresh=False
+                )
+
+        current = json.loads(settings.read_text())
+        self.assertFalse(current["profiles"]["linuxIntegratedDefault"]["followTheme"])
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertIn(str(settings), payload["changed"])
+        self.assertIn(str(settings), payload["retainedPaths"])
+        self.assertEqual(restoration_state.read_bytes(), state_before)
+        self.assertEqual(payload["restartRequired"], ["Obsidian"])
+
+    def test_disabling_obsidian_terminal_reports_post_replace_restoration_failure(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        self.assertTrue(restoration_state.is_file())
+        from thpm import integrations as integrations_module
+
+        real_atomic_text = integrations_module.atomic_text
+        settings_writes = 0
+
+        def raise_after_restoration_replace(path, text, mode=0o644):
+            nonlocal settings_writes
+            result = real_atomic_text(path, text, mode)
+            if path == settings:
+                settings_writes += 1
+                if settings_writes == 1:
+                    raise OSError("post-replace restoration failure")
+            return result
+
+        self.paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        with patch(
+            "thpm.integrations.atomic_text",
+            side_effect=raise_after_restoration_replace,
+        ):
+            payload = Service(self.paths).set_enabled(
+                "obsidian-terminal", False, refresh=False
+            )
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertIn(str(settings), payload["changed"])
+        self.assertIn(str(settings), payload["retainedPaths"])
+        self.assertEqual(payload["restartRequired"], ["Obsidian"])
+        self.assertTrue(restoration_state.is_file())
+
+    def test_obsidian_terminal_apply_reports_incomplete_rollback(self):
+        self.write_palette()
+        first = self.paths.home / "first/.obsidian/plugins/terminal/data.json"
+        second = self.paths.home / "second/.obsidian/plugins/terminal/data.json"
+        for settings in (first, second):
+            settings.parent.mkdir(parents=True)
+            settings.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "linuxIntegratedDefault": {"followTheme": True}
+                        },
+                        "terminalOptions": {},
+                    }
+                )
+            )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        from thpm import integrations as integrations_module
+
+        real_atomic_text = integrations_module.atomic_text
+        first_writes = 0
+
+        def fail_second_write_and_first_rollback(path, text, mode=0o644):
+            nonlocal first_writes
+            if path == first:
+                first_writes += 1
+                if first_writes == 2:
+                    raise OSError("rollback blocked")
+            if path == second:
+                raise OSError("second write blocked")
+            return real_atomic_text(path, text, mode)
+
+        with patch.dict(
+            os.environ,
+            {"OBSIDIAN_TERMINAL_DATA_JSON": os.pathsep.join((str(first), str(second)))},
+        ), patch(
+            "thpm.integrations.atomic_text",
+            side_effect=fail_second_write_and_first_rollback,
+        ), self.assertRaisesRegex(ApplyFailure, "rollback incomplete") as raised:
+            apply("obsidian-terminal", self.paths)
+
+        current = json.loads(first.read_text())
+        self.assertFalse(current["profiles"]["linuxIntegratedDefault"]["followTheme"])
+        self.assertEqual(raised.exception.changed, [str(second), str(first)])
+        self.assertEqual(raised.exception.restart_required, ["Obsidian"])
+        self.assertTrue(restoration_state.is_file())
+        self.assertIn(str(first), restoration_state.read_text())
+
+    def test_obsidian_terminal_apply_reports_state_only_rollback_failure(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        restoration_state.parent.mkdir(parents=True, exist_ok=True)
+        restoration_state.write_text('{"version": 1, "files": {}}\n')
+        state_before = restoration_state.read_bytes()
+        from thpm import integrations as integrations_module
+
+        real_atomic_text = integrations_module.atomic_text
+        state_writes = 0
+        settings_writes = 0
+
+        def fail_settings_and_state_rollback(path, text, mode=0o644):
+            nonlocal settings_writes, state_writes
+            if path == restoration_state:
+                state_writes += 1
+                if state_writes == 2:
+                    raise OSError("state rollback blocked")
+            if path == settings:
+                settings_writes += 1
+                if settings_writes == 1:
+                    raise OSError("settings write blocked")
+            return real_atomic_text(path, text, mode)
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ), patch(
+            "thpm.integrations.atomic_text",
+            side_effect=fail_settings_and_state_rollback,
+        ), self.assertRaisesRegex(ApplyFailure, "rollback incomplete") as raised:
+            apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(raised.exception.changed, [str(restoration_state)])
+        self.assertEqual(raised.exception.restart_required, [])
+        self.assertNotEqual(restoration_state.read_bytes(), state_before)
+        self.assertIn(str(settings), restoration_state.read_text())
+
+    def test_disabling_obsidian_terminal_preserves_user_modified_follow_theme(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+            document = json.loads(settings.read_text())
+            document["profiles"]["linuxIntegratedDefault"]["followTheme"] = "manual"
+            settings.write_text(json.dumps(document))
+            before = settings.read_bytes()
+            payload = Service(self.paths).set_enabled(
+                "obsidian-terminal", False, refresh=False
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertFalse(restoration_state.exists())
+        self.assertEqual(payload["restartRequired"], [])
+        self.assertTrue(
+            any(
+                "preserved user-modified Obsidian Terminal profile"
+                in warning["message"]
+                for warning in payload["warnings"]
+            )
+        )
+
+    def test_corrupt_obsidian_terminal_state_blocks_apply_and_cleanup(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+            restoration_state.write_text("not json\n")
+            settings_before = settings.read_bytes()
+            with self.assertRaisesRegex(
+                RuntimeError, "invalid Obsidian Terminal restoration state"
+            ):
+                apply("obsidian-terminal", self.paths)
+            payload = Service(self.paths).set_enabled(
+                "obsidian-terminal", False, refresh=False
+            )
+
+        self.assertEqual(settings.read_bytes(), settings_before)
+        self.assertEqual(restoration_state.read_text(), "not json\n")
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertIn(str(restoration_state), payload["retainedPaths"])
+        self.assertEqual(payload["restartRequired"], [])
+
+    def test_obsidian_terminal_state_cannot_target_arbitrary_json(self):
+        target = self.paths.home / "other-application.json"
+        target.write_text(
+            json.dumps(
+                {
+                    "profiles": {"default": {"followTheme": False}},
+                    "sentinel": "unrelated",
+                }
+            )
+        )
+        before = target.read_bytes()
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        restoration_state.parent.mkdir(parents=True, exist_ok=True)
+        restoration_state.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "files": {str(target): ["default"]},
+                }
+            )
+        )
+
+        payload = Service(self.paths).set_enabled(
+            "obsidian-terminal", False, refresh=False
+        )
+
+        self.assertEqual(target.read_bytes(), before)
+        self.assertEqual(json.loads(target.read_text())["sentinel"], "unrelated")
+        self.assertEqual(
+            json.loads(target.read_text())["profiles"]["default"]["followTheme"],
+            False,
+        )
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertTrue(restoration_state.is_file())
+        self.assertIn(str(restoration_state), payload["retainedPaths"])
+        self.assertEqual(payload["restartRequired"], [])
+
+    def test_obsidian_terminal_apply_refuses_dangling_state_symlink(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        before = settings.read_bytes()
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        restoration_state.parent.mkdir(parents=True, exist_ok=True)
+        restoration_state.symlink_to(restoration_state.parent / "missing-state.json")
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ), self.assertRaisesRegex(
+            RuntimeError, "unsafe Obsidian Terminal restoration state path"
+        ):
+            apply("obsidian-terminal", self.paths)
+
+        self.assertTrue(restoration_state.is_symlink())
+        self.assertEqual(settings.read_bytes(), before)
+
+    def test_obsidian_terminal_apply_rejects_symlinked_state_ancestor(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        before = settings.read_bytes()
+        external_state = self.paths.home / "external-state"
+        external_state.mkdir()
+        self.paths.thpm_state_dir.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.thpm_state_dir.symlink_to(external_state, target_is_directory=True)
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ), self.assertRaisesRegex(
+            RuntimeError, "unsafe Obsidian Terminal restoration state path"
+        ):
+            apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertFalse((external_state / restoration_state.name).exists())
+        self.assertTrue(self.paths.thpm_state_dir.is_symlink())
+
+    def test_disabling_obsidian_terminal_rejects_symlinked_state_ancestor(self):
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": False}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        before = settings.read_bytes()
+        external_state = self.paths.home / "external-state"
+        external_state.mkdir()
+        self.paths.thpm_state_dir.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.thpm_state_dir.symlink_to(external_state, target_is_directory=True)
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        restoration_state.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "files": {str(settings): ["linuxIntegratedDefault"]},
+                }
+            )
+        )
+        state_before = restoration_state.read_bytes()
+        self.paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+
+        payload = Service(self.paths).set_enabled(
+            "obsidian-terminal", False, refresh=False
+        )
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertIn(str(restoration_state), payload["retainedPaths"])
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertEqual(restoration_state.read_bytes(), state_before)
+        self.assertEqual(payload["restartRequired"], [])
+        self.assertTrue(self.paths.thpm_state_dir.is_symlink())
+
+    def test_obsidian_terminal_apply_rejects_nonconforming_direct_override(self):
+        self.write_palette()
+        settings = self.paths.home / "custom-terminal-settings.json"
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        before = settings.read_bytes()
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ), self.assertRaisesRegex(
+            ValueError, "unsafe Obsidian Terminal settings path"
+        ):
+            apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertFalse(restoration_state.exists())
+
+    def test_obsidian_terminal_apply_rejects_symlinked_path_ancestor(self):
+        self.write_palette()
+        external = self.paths.home / "external-obsidian"
+        settings = external / "plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        before = settings.read_bytes()
+        vault = self.paths.home / "vault"
+        vault.mkdir()
+        (vault / ".obsidian").symlink_to(external, target_is_directory=True)
+        redirected = vault / ".obsidian/plugins/terminal/data.json"
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(redirected)}
+        ), self.assertRaisesRegex(
+            ValueError, "unsafe Obsidian Terminal settings path"
+        ):
+            apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertFalse(restoration_state.exists())
+
+    def test_obsidian_terminal_apply_rejects_relative_override_traversal(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        before = settings.read_bytes()
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        relative = os.path.relpath(settings, Path.cwd())
+        self.assertIn("..", Path(relative).parts)
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": relative}
+        ), self.assertRaisesRegex(ValueError, "unsafe Obsidian Terminal settings path"):
+            apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertFalse(restoration_state.exists())
+
+    def test_obsidian_terminal_apply_rolls_back_write_that_raises_after_replace(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        before = settings.read_bytes()
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        from thpm import integrations as integrations_module
+
+        real_atomic_text = integrations_module.atomic_text
+        settings_writes = 0
+
+        def raise_after_settings_replace(path, text, mode=0o644):
+            nonlocal settings_writes
+            result = real_atomic_text(path, text, mode)
+            if path == settings:
+                settings_writes += 1
+                if settings_writes == 1:
+                    raise OSError("post-replace settings failure")
+            return result
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ), patch(
+            "thpm.integrations.atomic_text",
+            side_effect=raise_after_settings_replace,
+        ), self.assertRaisesRegex(OSError, "post-replace settings failure"):
+            apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertFalse(restoration_state.exists())
+
+    def test_obsidian_terminal_apply_rolls_back_state_write_that_raises_after_replace(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        before = settings.read_bytes()
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        from thpm import integrations as integrations_module
+
+        real_atomic_text = integrations_module.atomic_text
+        state_writes = 0
+
+        def raise_after_state_replace(path, text, mode=0o644):
+            nonlocal state_writes
+            result = real_atomic_text(path, text, mode)
+            if path == restoration_state:
+                state_writes += 1
+                if state_writes == 1:
+                    raise OSError("post-replace state failure")
+            return result
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ), patch(
+            "thpm.integrations.atomic_text",
+            side_effect=raise_after_state_replace,
+        ), self.assertRaisesRegex(OSError, "post-replace state failure"):
+            apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertFalse(restoration_state.exists())
+
+    def test_obsidian_terminal_apply_revalidates_path_before_write(self):
+        self.write_palette()
+        vault = self.paths.home / "vault"
+        settings = vault / ".obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        original_before = settings.read_bytes()
+        external = self.paths.home / "external-obsidian"
+        redirected = external / "plugins/terminal/data.json"
+        redirected.parent.mkdir(parents=True)
+        redirected.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                    "sentinel": "external",
+                }
+            )
+        )
+        redirected_before = redirected.read_bytes()
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        from thpm import integrations as integrations_module
+
+        real_atomic_text = integrations_module.atomic_text
+
+        def swap_ancestor_after_state_write(path, text, mode=0o644):
+            result = real_atomic_text(path, text, mode)
+            if path == restoration_state:
+                (vault / ".obsidian").rename(vault / ".obsidian-original")
+                (vault / ".obsidian").symlink_to(external, target_is_directory=True)
+            return result
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ), patch(
+            "thpm.integrations.atomic_text",
+            side_effect=swap_ancestor_after_state_write,
+        ), self.assertRaisesRegex(
+            ValueError, "unsafe Obsidian Terminal settings path"
+        ):
+            apply("obsidian-terminal", self.paths)
+
+        self.assertEqual(redirected.read_bytes(), redirected_before)
+        self.assertEqual(
+            (vault / ".obsidian-original/plugins/terminal/data.json").read_bytes(),
+            original_before,
+        )
+        self.assertFalse(restoration_state.exists())
+
+    def test_disabling_obsidian_terminal_retains_state_for_malformed_profiles(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+            document = json.loads(settings.read_text())
+            document["profiles"] = []
+            settings.write_text(json.dumps(document))
+            before = settings.read_bytes()
+            state_before = restoration_state.read_bytes()
+            payload = Service(self.paths).set_enabled(
+                "obsidian-terminal", False, refresh=False
+            )
+
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertEqual(restoration_state.read_bytes(), state_before)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertIn(str(settings), payload["retainedPaths"])
+        self.assertEqual(payload["restartRequired"], [])
+
+    def test_disabling_obsidian_terminal_retains_state_for_missing_owned_profile(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+            document = json.loads(settings.read_text())
+            document["profiles"].pop("linuxIntegratedDefault")
+            settings.write_text(json.dumps(document))
+            before = settings.read_bytes()
+            state_before = restoration_state.read_bytes()
+            payload = Service(self.paths).set_enabled(
+                "obsidian-terminal", False, refresh=False
+            )
+
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertEqual(restoration_state.read_bytes(), state_before)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertIn(str(settings), payload["retainedPaths"])
+        self.assertEqual(payload["restartRequired"], [])
+
+    def test_disabling_obsidian_terminal_reports_dangling_state_symlink(self):
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        restoration_state.symlink_to(restoration_state.parent / "missing-state.json")
+
+        payload = Service(self.paths).set_enabled(
+            "obsidian-terminal", False, refresh=False
+        )
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertTrue(restoration_state.is_symlink())
+        self.assertIn(str(restoration_state), payload["retainedPaths"])
+        self.assertEqual(payload["restartRequired"], [])
+
+    def test_uninstall_reports_dangling_obsidian_terminal_state_symlink(self):
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text(
+            'version = 1\n\n[plugins]\nobsidian-terminal = true\n'
+        )
+        restoration_state = (
+            self.paths.thpm_state_dir / "obsidian-terminal-follow-theme.json"
+        )
+        restoration_state.symlink_to(restoration_state.parent / "missing-state.json")
+
+        payload = Service(self.paths).uninstall()
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertTrue(restoration_state.is_symlink())
+        self.assertIn(str(restoration_state), payload["retainedPaths"])
+        self.assertEqual(payload["restartRequired"], [])
+
+    def test_uninstall_restores_obsidian_terminal_follow_theme(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {"followTheme": True}
+                    },
+                    "terminalOptions": {},
+                }
+            )
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            apply("obsidian-terminal", self.paths)
+            with patch("thpm.service.ui.remove", return_value={"installed": False}):
+                payload = Service(self.paths).uninstall()
+
+        restored = json.loads(settings.read_text())
+        self.assertTrue(restored["profiles"]["linuxIntegratedDefault"]["followTheme"])
+        self.assertIn(str(settings), payload["changed"])
+        self.assertEqual(payload["restartRequired"], ["Obsidian"])
+
     def test_obsidian_terminal_readiness_reports_missing_or_invalid_settings(self):
         ready, missing, warnings = inspect_readiness(
             "obsidian-terminal", self.paths, which=lambda _command: "/bin/true"

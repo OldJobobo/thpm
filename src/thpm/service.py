@@ -59,6 +59,7 @@ from .integrations import (
     RETIRED_OPTIONAL_ASSET_PLUGINS,
     apply_enabled,
     cleanup_managed_outputs,
+    cleanup_obsidian_terminal,
     cleanup_optional_assets,
     cleanup_zed_assets,
     cleanup_zellij,
@@ -160,6 +161,10 @@ def _cleanup_warning_path(message: str) -> str | None:
         return None
     path = Path(candidate)
     if path.exists() or path.is_symlink():
+        return str(path)
+    if message.startswith(
+        "cleanup incomplete for missing Obsidian Terminal settings: "
+    ):
         return str(path)
     if path.suffix == ".backup":
         state_path = path.with_suffix(".json")
@@ -849,6 +854,14 @@ class Service:
             changed = reconcile_templates(self.paths, enabled)
             if not value and plugin_id == "gtk-css-compat":
                 changed.extend(cleanup_gtk(self.paths))
+            elif not value and plugin_id == "obsidian-terminal":
+                cleanup_changed, cleanup_warnings = cleanup_obsidian_terminal(
+                    self.paths
+                )
+                changed.extend(cleanup_changed)
+                record_cleanup(cleanup_warnings)
+                if cleanup_changed:
+                    restart_required.append("Obsidian")
             elif not value and plugin_id == "zellij":
                 cleanup_changed, cleanup_warnings = cleanup_zellij(self.paths)
                 zellij_output_changed = bool(cleanup_changed)
@@ -1381,6 +1394,13 @@ class Service:
                 zellij_output_changed = bool(zellij_changed)
                 changed.extend(zellij_changed)
                 record_cleanup("zellij", zellij_warnings)
+                obsidian_changed, obsidian_warnings = cleanup_obsidian_terminal(
+                    self.paths
+                )
+                changed.extend(obsidian_changed)
+                record_cleanup("obsidian-terminal", obsidian_warnings)
+                if obsidian_changed:
+                    restart_required.append("Obsidian")
                 self._step("Removing theme hook and migration state")
                 for hook_file in (
                     self.paths.hook_file,

@@ -114,7 +114,6 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | Integration | Lifecycle | Retained behavior |
 |---|---|---|
 | SwayNC | Retired | Guarded restoration or removal of the former managed `colors.css` output. |
-| Typora | Retired | Guarded restoration or removal of the former managed stylesheet. |
 | Windsurf | Retired | Guarded cleanup of the historical local theme extension after the editor's replacement. |
 | Vicinae | Retired | Guarded cleanup of both historical managed theme destinations. |
 

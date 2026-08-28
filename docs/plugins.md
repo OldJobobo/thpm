@@ -31,7 +31,7 @@ cliamp owns its normal theming through contrast-checked built-in themes or its t
 
 SwayNC support is retired because the former adapter copied `colors.css` without proving that SwayNC's loaded `style.css` imported or consumed it. It no longer appears in the active registry. Reconciliation and uninstall retain guarded cleanup for the historical `~/.config/swaync/colors.css` destination, preserving unknown and user-modified files.
 
-Typora support is retired and no longer appears in the active integration registry. Reconciliation and uninstall retain guarded cleanup for THPM's former `~/.config/Typora/themes/omarchy.css` destination, restoring tracked displaced content and preserving unknown or user-modified files.
+Typora is an Experimental, default-disabled active integration. It installs the current Omarchy theme as `~/.config/Typora/themes/thpm.css`, preferring an authored `typora.css` and otherwise using the generated `thpm-typora.css`. Guarded legacy cleanup remains for the historical `~/.config/Typora/themes/omarchy.css` destination, restoring tracked displaced content and preserving unknown or user-modified files.
 
 Windsurf support is retired and no longer appears in the active integration registry. The editor was replaced by Devin Desktop, whose command, profile, and extension lifecycle no longer match the former Windsurf contract. Reconciliation and uninstall retain guarded legacy cleanup for THPM's old `.windsurf/extensions/local.omarchy-theme/themes/omarchy.json` destination; unknown and user-modified files remain preserved.
 

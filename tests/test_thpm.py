@@ -7132,6 +7132,17 @@ class IntegrationTests(Sandbox):
         )
         apply_plugin.assert_called_once()
 
+    def test_typora_docs_describe_reintroduced_active_integration(self):
+        root = Path(__file__).parents[1]
+        support = (root / "docs/integration-support.md").read_text()
+        plugins = (root / "docs/plugins.md").read_text()
+
+        self.assertNotIn("| Typora | Retired |", support)
+        self.assertNotIn("Typora support is retired", plugins)
+        self.assertIn("Typora is an Experimental", plugins)
+        self.assertIn("historical", plugins)
+        self.assertIn("omarchy.css", plugins)
+
     def test_typora_template_keeps_print_output_monochrome(self):
         template = (Path(__file__).parents[1] / "assets/templates/thpm-typora.css.tpl").read_text()
         self.assertIn("@media print", template)

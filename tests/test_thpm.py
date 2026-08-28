@@ -4898,6 +4898,44 @@ class IntegrationTests(Sandbox):
         self.assertEqual(theme["selectionForeground"], "#654321")
         self.assertEqual(theme["brightWhite"], COLORS["bright_fg"])
 
+    def test_obsidian_terminal_disables_profile_follow_theme_that_overrides_palette(self):
+        self.write_palette()
+        settings = self.paths.home / "vault/.obsidian/plugins/terminal/data.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "linuxIntegratedDefault": {
+                            "type": "integrated",
+                            "followTheme": True,
+                            "terminalOptions": {"fontFamily": "monospace"},
+                        },
+                        "invalidProfile": "preserve me",
+                    },
+                    "terminalOptions": {"fontSize": 14},
+                }
+            )
+        )
+
+        with patch.dict(
+            os.environ, {"OBSIDIAN_TERMINAL_DATA_JSON": str(settings)}
+        ):
+            result = apply("obsidian-terminal", self.paths)
+            applied_stat = settings.stat()
+            unchanged = apply("obsidian-terminal", self.paths)
+
+        document = json.loads(settings.read_text())
+        profile = document["profiles"]["linuxIntegratedDefault"]
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(settings.stat().st_ino, applied_stat.st_ino)
+        self.assertEqual(settings.stat().st_mtime_ns, applied_stat.st_mtime_ns)
+        self.assertFalse(profile["followTheme"])
+        self.assertEqual(profile["terminalOptions"], {"fontFamily": "monospace"})
+        self.assertEqual(document["profiles"]["invalidProfile"], "preserve me")
+        self.assertEqual(document["terminalOptions"]["fontSize"], 14)
+
     def test_obsidian_terminal_readiness_reports_missing_or_invalid_settings(self):
         ready, missing, warnings = inspect_readiness(
             "obsidian-terminal", self.paths, which=lambda _command: "/bin/true"

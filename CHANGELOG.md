@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an Experimental, default-disabled Thunderbird integration that themes the outer chrome window and the `about:3pane`/`about:message` content documents from one generated stylesheet, scoped per document type and imported into both `userChrome.css` and `userContent.css` with guarded restoration on disable/uninstall.
+
 ## 1.0.0rc24 - 2026-08-28
 
 - Promote the opt-in Zellij integration to Supported after exact merged-source lifecycle, parser, restoration, live-transition, visual-evidence, and maintainer-signoff gates passed on Omarchy Quattro.

@@ -934,7 +934,11 @@ class Service:
                         )
                         changed.extend(legacy_changed)
                         record_cleanup(legacy_warnings)
-                    browser_profile_changed = plugin_id in {"firefox", "zen"} and any(
+                    browser_profile_changed = plugin_id in {
+                        "firefox",
+                        "zen",
+                        "thunderbird",
+                    } and any(
                         Path(path)
                         != self.paths.current_theme / f"thpm-{plugin_id}.css"
                         for path in cleanup_changed

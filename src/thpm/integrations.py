@@ -73,6 +73,7 @@ GENERATED = {
     "cava": "thpm-cava.ini",
     "firefox": "thpm-firefox.css",
     "zen": "thpm-zen.css",
+    "thunderbird": "thpm-thunderbird.css",
     "hermes": "thpm-hermes.json",
     "qutebrowser": "thpm-qutebrowser.py",
     "heroic": "thpm-heroic.css",
@@ -1201,6 +1202,12 @@ def inspect_readiness(
             missing.append(str(base / "profiles.ini"))
         elif not _browser_default_profile(base):
             missing.append("default browser install profile")
+    elif plugin_id == "thunderbird":
+        base = paths.home / ".thunderbird"
+        if not (base / "profiles.ini").is_file():
+            missing.append(str(base / "profiles.ini"))
+        elif not _browser_default_profile(base):
+            missing.append("default browser install profile")
     elif plugin_id == "steam":
         installer = paths.home / ".local/share/steam-adwaita/install.py"
         if not installer.is_file():
@@ -1295,6 +1302,109 @@ def _browser_import(paths: Paths, plugin_id: str, base: Path) -> tuple[list[str]
     if import_changed:
         changed.append(str(user_chrome))
     return changed, bool(changed)
+
+
+def _thunderbird_import_blocks() -> tuple[tuple[str, str], ...]:
+    return (("/* THPM Thunderbird hook start */", "/* THPM Thunderbird hook end */"),)
+
+
+def _thunderbird_import(paths: Paths, base: Path) -> tuple[list[str], bool]:
+    plugin_id = "thunderbird"
+    candidates = ("thunderbird.css", GENERATED[plugin_id])
+    source = next(
+        (
+            paths.current_theme / name
+            for name in candidates
+            if (paths.current_theme / name).is_file()
+        ),
+        None,
+    )
+    if source is None:
+        raise RuntimeError(f"{plugin_id}: no theme asset or generated CSS was found")
+    profiles = base / "profiles.ini"
+    if not profiles.is_file():
+        raise RuntimeError(f"{plugin_id}: profiles.ini was not found")
+    profile = _browser_default_profile(base)
+    if not profile:
+        raise RuntimeError(f"{plugin_id}: profiles.ini has no default install profile")
+    profile_root = base.resolve()
+    profile_path = (base / profile).resolve()
+    if profile_path == profile_root or profile_root not in profile_path.parents:
+        raise ValueError(f"browser profile escapes its profile root: {profile}")
+    chrome = profile_path / "chrome"
+    managed = chrome / f"thpm-{plugin_id}.css"
+    if source.name in set(GENERATED.values()):
+        _ensure_generated_output_is_rendered(source)
+    css_changed = _install_optional_asset(
+        paths,
+        _target_key(f"browser-{plugin_id}", managed),
+        source,
+        managed,
+        legacy_owned=_matches_sources(
+            managed, _current_plugin_sources(paths, plugin_id)
+        ),
+    )
+    changed = []
+    if css_changed:
+        changed.append(str(managed))
+    start, end = _thunderbird_import_blocks()[0]
+    block = f'{start}\n@import url("{managed.name}");\n{end}\n'
+    # Thunderbird's outer window chrome and its inner about:3pane/about:message
+    # content documents are separate cascades; the same generated stylesheet
+    # is imported into both so either scope picks up what applies to it.
+    for filename in ("userChrome.css", "userContent.css"):
+        target = chrome / filename
+        existing = target.read_text() if target.exists() else ""
+        for managed_start, managed_end in _thunderbird_import_blocks():
+            if managed_start in existing or managed_end in existing:
+                existing = remove_managed_block(existing, managed_start, managed_end)
+        updated = block + existing.lstrip()
+        import_changed = not target.is_file() or target.read_text() != updated
+        if import_changed:
+            atomic_text(target, updated)
+            changed.append(str(target))
+    return changed, bool(changed)
+
+
+def _cleanup_thunderbird(paths: Paths, *, assume_legacy: bool) -> tuple[list[str], list[str]]:
+    plugin_id = "thunderbird"
+    base = paths.home / ".thunderbird"
+    sources = _current_plugin_sources(paths, plugin_id)
+    changed: list[str] = []
+    warnings: list[str] = []
+    blocks = _thunderbird_import_blocks()
+    for chrome in (path for path in base.rglob("chrome") if path.is_dir()):
+        managed = chrome / f"thpm-{plugin_id}.css"
+        item_changed, item_warnings = _cleanup_optional_asset(
+            paths,
+            _target_key(f"browser-{plugin_id}", managed),
+            managed,
+            legacy_owned=assume_legacy and _matches_sources(managed, sources),
+        )
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+        for filename in ("userChrome.css", "userContent.css"):
+            target = chrome / filename
+            if not target.is_file():
+                continue
+            existing = target.read_text()
+            updated = existing
+            incomplete = False
+            for start, end in blocks:
+                if (start in updated) != (end in updated):
+                    incomplete = True
+                    warnings.append(
+                        f"preserved incomplete THPM browser import block: {target}"
+                    )
+                elif start in updated:
+                    updated = remove_managed_block(updated, start, end)
+            if not incomplete and updated != existing:
+                if updated.strip():
+                    atomic_text(target, updated)
+                else:
+                    target.unlink()
+                changed.append(str(target))
+    return changed, warnings
 
 
 def _scan_zellij_kdl(content: str) -> tuple[str, list[int]]:
@@ -1666,6 +1776,12 @@ def cleanup_managed_outputs(
     elif plugin_id in {"firefox", "zen"}:
         item_changed, item_warnings = _cleanup_browser(
             paths, plugin_id, assume_legacy=assume_legacy
+        )
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+    elif plugin_id == "thunderbird":
+        item_changed, item_warnings = _cleanup_thunderbird(
+            paths, assume_legacy=assume_legacy
         )
         changed.extend(item_changed)
         warnings.extend(item_warnings)
@@ -2455,6 +2571,12 @@ def apply(
     elif plugin_id in {"firefox", "zen"}:
         base = home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
         browser_paths, browser_changed = _browser_import(paths, plugin_id, base)
+        if browser_changed:
+            changed.extend(browser_paths)
+            restart_required.append(BY_ID[plugin_id].label)
+    elif plugin_id == "thunderbird":
+        base = home / ".thunderbird"
+        browser_paths, browser_changed = _thunderbird_import(paths, base)
         if browser_changed:
             changed.extend(browser_paths)
             restart_required.append(BY_ID[plugin_id].label)

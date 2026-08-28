@@ -22,6 +22,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("cava", "Cava", "Media", "Install, select, and safely reload a Cava gradient.", "hybrid", ("cava",), theme_assets=("cava_theme",), templates=("thpm-cava.ini.tpl",), default_enabled=False, confirmation=True),
     Plugin("firefox", "Firefox", "Browsers", "Manage Firefox userChrome imports and generated CSS.", "hybrid", ("firefox",), theme_assets=("firefox.css",), templates=("thpm-firefox.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("zen", "Zen Browser", "Browsers", "Manage Zen userChrome imports and generated CSS.", "hybrid", ("zen-browser",), theme_assets=("zen.css",), templates=("thpm-zen.css.tpl",), default_enabled=False, confirmation=True),
+    Plugin("thunderbird", "Thunderbird", "Mail", "Manage Thunderbird userChrome/userContent imports and generated CSS.", "hybrid", ("thunderbird",), theme_assets=("thunderbird.css",), templates=("thpm-thunderbird.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("hermes", "Hermes", "Editors", "Generate the Hermes Omarchy theme descriptor.", "hybrid", ("Hermes",), templates=("thpm-hermes.json.tpl",)),
     Plugin("qutebrowser", "Qutebrowser", "Browsers", "Install generated Qutebrowser colors.", "hybrid", ("qutebrowser",), templates=("thpm-qutebrowser.py.tpl",)),
     Plugin("steam", "Steam", "Games", "Apply the Omarchy color theme through steam-adwaita.", "action", ("steam", "python"), default_enabled=False, confirmation=True),

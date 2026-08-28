@@ -20,6 +20,14 @@
   --color-surface-subtle: {{ lighter_background }} !important;
   --color-text-base: {{ foreground }} !important;
   --color-surface-border-intense: {{ selection }} !important;
+
+  /* Unlike most --lwt-* variables (gated behind the lwtheme JS-set root
+     attribute, unreachable from CSS alone), these three are consumed as
+     plain var() fallbacks in shared/variables.css, so they color toolbar
+     button hover/active states and icon-fill-attention unconditionally. */
+  --lwt-toolbarbutton-hover-background: {{ selection }} !important;
+  --lwt-toolbarbutton-active-background: {{ blue }} !important;
+  --lwt-toolbarbutton-icon-fill-attention: {{ blue }} !important;
 }
 
 @-moz-document url("about:3pane"), url("about:message") {
@@ -45,5 +53,9 @@
     --color-surface-subtle: {{ lighter_background }} !important;
     --color-text-base: {{ foreground }} !important;
     --color-surface-border-intense: {{ selection }} !important;
+
+    --lwt-toolbarbutton-hover-background: {{ selection }} !important;
+    --lwt-toolbarbutton-active-background: {{ blue }} !important;
+    --lwt-toolbarbutton-icon-fill-attention: {{ blue }} !important;
   }
 }

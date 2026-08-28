@@ -1,6 +1,6 @@
-## THPM 1.0.0rc23 is now available
+## THPM 1.0.0rc24 is now available
 
-**THPM rc23 completes the Quattro application-theme fallback audit with safer ownership, restoration, and semantic palette behavior across GTK, Fish, fzf, Superfile, Typora, Zellij, Obsidian Terminal, and cliamp.**
+**THPM rc24 completes the Quattro application-theme fallback audit and publishes retained certification for both fzf and Zellij alongside the ownership, restoration, and semantic palette repairs from rc23.**
 
 ### Install or upgrade the latest release
 
@@ -10,13 +10,13 @@ curl -fsSL https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install
 
 The installer resolves the newest published GitHub release, verifies its source archive and checksum, builds the Arch package with `makepkg`, installs it through pacman, and completes THPM's per-user setup.
 
-## What’s new in rc23
+## What’s new in rc24
 
 ### Safer semantic application themes
 
-GTK now receives a complete generated semantic fallback when an active theme does not provide authored GTK CSS. Fish and Superfile use corrected target-native color contracts, while fzf becomes THPM's first fully certified Supported adapter after complete automated, lifecycle, restoration, fresh-process, visual, and maintainer-signoff gates on Omarchy Quattro.
+GTK receives a complete generated semantic fallback when a theme does not provide authored GTK CSS. Fish and Superfile use corrected target-native color contracts, while fzf remains fully certified after complete automated, lifecycle, restoration, fresh-process, visual, and maintainer-signoff gates on Omarchy Quattro.
 
-Typora returns as an opt-in Experimental integration with generated screen colors, neutral print output, restorable file ownership, and change-sensitive restart reporting. Zellij now reports running-session restarts when disable or uninstall changes effective configuration without producing false restart notices for no-ops.
+Typora remains an opt-in Experimental integration with generated screen colors, neutral print output, restorable file ownership, and change-sensitive restart reporting. Zellij is now Supported after exact merged-source parser, no-op, disable, user-edit, uninstall, restoration, restart-reporting, and real Dune/Last Call transition gates passed with retained evidence and maintainer signoff.
 
 ### Obsidian Terminal recovery fails closed
 
@@ -32,10 +32,10 @@ The uncertified SwayNC adapter is retired because its standalone generated file 
 
 ### Verification
 
-The exact merged release tree passes 456 automated tests, release metadata validation, Python compilation, Ruff and ShellCheck static checks, wheel content and isolated-install smoke tests, Python 3.11 through 3.14 CI, and clean stable and VCS Arch package builds. Every adapter change landed through an independently validated pull request with 7/7 successful checks.
+The exact merged release tree passes 457 automated tests, release metadata validation, Python compilation, Ruff and ShellCheck static checks, wheel content and isolated-install smoke tests, Python 3.11 through 3.14 CI, and clean stable and VCS Arch package builds. Zellij certification PR #56 passed all 7 required checks and merged.
 
-Only fzf is promoted to Supported. Other active adapters remain visibly opt-in Experimental until their complete real-application certification records and maintainer signoff are retained.
+fzf and Zellij are Supported. Other active adapters remain visibly opt-in Experimental until their complete real-application certification records and maintainer signoff are retained.
 
 This remains a release candidate. Please report application-theme ownership, restoration, migration, or visual compatibility issues.
 
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc23)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc24)

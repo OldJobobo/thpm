@@ -110,6 +110,7 @@ def _merge_migrated_enabled(
 def _cleanup_warning_is_incomplete(message: str) -> bool:
     successful_preservation = (
         "preserved user-modified ",
+        "preserved user-selected cliamp theme file ",
         "preserved non-file legacy output path: ",
         "preserved untracked Zellij theme instead of deleting it: ",
         "Cava theme selection changed outside THPM; ",

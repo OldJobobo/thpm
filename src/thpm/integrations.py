@@ -36,6 +36,10 @@ from .cava import (
 from .cava import (
     theme_target as cava_theme_target,
 )
+from .cliamp import restore_selection as restore_cliamp_selection
+from .cliamp import select_override as select_cliamp_override
+from .cliamp import selected_theme as selected_cliamp_theme
+from .cliamp import selector_state_path as cliamp_selector_state_path
 from .compat import (
     apply_gtk,
     apply_vscode_local,
@@ -464,9 +468,42 @@ def _cleanup_optional_asset(
     return changed, []
 
 
+def _cleanup_cliamp_theme(
+    paths: Paths, *, assume_legacy: bool = False
+) -> tuple[list[str], list[str]]:
+    try:
+        changed, warnings = restore_cliamp_selection(paths)
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        return [], [f"could not restore cliamp theme selection: {exc}"]
+    if cliamp_selector_state_path(paths).exists():
+        return changed, warnings
+    try:
+        selected = selected_cliamp_theme(paths)
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        warnings.append(
+            f"could not verify cliamp theme selection before cleanup: {exc}"
+        )
+        return changed, warnings
+    if selected == "omarchy":
+        warnings.append("preserved user-selected cliamp theme file while it remains selected")
+        return changed, warnings
+    target = paths.config_home / "cliamp/themes/omarchy.toml"
+    legacy_owned = assume_legacy and _matches_installed_theme_asset(
+        paths, target, "cliamp.toml"
+    )
+    item_changed, item_warnings = _cleanup_optional_asset(
+        paths, "cliamp", target, legacy_owned=legacy_owned
+    )
+    changed.extend(item_changed)
+    warnings.extend(item_warnings)
+    return changed, warnings
+
+
 def cleanup_optional_assets(
     paths: Paths, plugin_id: str, *, assume_legacy: bool = False
 ) -> tuple[list[str], list[str]]:
+    if plugin_id == "cliamp":
+        return _cleanup_cliamp_theme(paths, assume_legacy=assume_legacy)
     changed: list[str] = []
     warnings: list[str] = []
     for key, asset_name, target in _optional_asset_targets(paths, plugin_id):
@@ -539,6 +576,32 @@ def _apply_zed_asset(paths: Paths) -> ApplyResult:
     if changed:
         paths_changed.append(str(zed_target(paths)))
     return _result("zed-extra", paths_changed, [], warnings)
+
+
+CLIAMP_NATIVE_OPT_IN = "# thpm:cliamp-use-native"
+
+
+def _cliamp_authored_override(source: Path) -> bool:
+    if not source.is_file() or source.is_symlink():
+        return False
+    return CLIAMP_NATIVE_OPT_IN in source.read_text(encoding="utf-8").splitlines()
+
+
+def _apply_cliamp_theme(paths: Paths) -> ApplyResult:
+    target = paths.config_home / "cliamp/themes/omarchy.toml"
+    source = paths.current_theme / "cliamp.toml"
+    if _cliamp_authored_override(source):
+        changed = _install_optional_asset(paths, "cliamp", source, target)
+        paths_changed = [str(target)] if changed else []
+        try:
+            selection_changed, warnings = select_cliamp_override(paths)
+        except Exception:
+            _cleanup_optional_asset(paths, "cliamp", target)
+            raise
+        paths_changed.extend(selection_changed)
+        return _result("cliamp", paths_changed, [], warnings)
+    changed, warnings = _cleanup_cliamp_theme(paths)
+    return _result("cliamp", changed, [], warnings)
 
 
 def _ensure_generated_output_is_rendered(source: Path) -> None:
@@ -876,6 +939,12 @@ def inspect_readiness(
                 normalized_zed_theme(source)
             except ZedThemeError as exc:
                 missing.append(str(exc))
+    elif plugin_id == "cliamp" and not _cliamp_authored_override(
+        paths.current_theme / "cliamp.toml"
+    ):
+        # No explicit authored opt-in means relinquish THPM ownership and let
+        # cliamp keep its contrast-checked built-in or terminal ANSI theme.
+        missing = []
     elif plugin_id in OPTIONAL_ASSET_PLUGINS and not assets:
         # Missing opt-in assets mean "restore defaults", not "unavailable".
         missing = []
@@ -1877,6 +1946,8 @@ def apply(
         )
     if plugin_id == "zed-extra":
         return _apply_zed_asset(paths)
+    if plugin_id == "cliamp":
+        return _apply_cliamp_theme(paths)
     paths.current_theme.mkdir(parents=True, exist_ok=True)
     changed: list[str] = []
     warnings: list[str] = []

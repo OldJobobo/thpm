@@ -158,6 +158,8 @@ def _cleanup_retired_integrations(
     for plugin_id in sorted(
         RETIRED_OPTIONAL_ASSET_PLUGINS | LEGACY_OPTIONAL_ASSET_PLUGINS
     ):
+        if plugin_id == "typora" and plugin_id in legacy_enabled:
+            continue
         cleanup_changed, cleanup_warnings = cleanup_optional_assets(
             paths,
             plugin_id,

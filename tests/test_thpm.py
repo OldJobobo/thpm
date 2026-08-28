@@ -5866,7 +5866,7 @@ class IntegrationTests(Sandbox):
         self.assertIn(str(target), payload["changed"])
         self.assertNotIn("windsurf", {item["id"] for item in payload["plugins"]})
 
-    def test_reconcile_migrates_legacy_typora_output_without_retiring_plugin(self):
+    def test_reconcile_preserves_legacy_typora_output_while_enabled(self):
         managed = b"retired Typora theme\n"
         prior = b"user Typora theme\n"
         target = self.paths.config_home / "Typora/themes/omarchy.css"
@@ -5888,6 +5888,8 @@ class IntegrationTests(Sandbox):
                 }
             )
         )
+        state_before = state.read_bytes()
+        backup_before = backup.read_bytes()
         self.paths.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.paths.state_file.write_text(
             "version = 1\n\n[plugins]\nspotify = true\ntypora = true\n"
@@ -5901,15 +5903,16 @@ class IntegrationTests(Sandbox):
         with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
             payload = Service(self.paths).reconcile()
 
-        self.assertEqual(target.read_bytes(), prior)
-        self.assertFalse(state.exists())
-        self.assertFalse(backup.exists())
+        self.assertEqual(target.read_bytes(), managed)
+        self.assertEqual(state.read_bytes(), state_before)
+        self.assertEqual(backup.read_bytes(), backup_before)
         self.assertIn("typora = true", self.paths.state_file.read_text())
         self.assertIn("typora", {item["id"] for item in payload["plugins"]})
         self.assertTrue(
             (self.paths.themed_dir / "thpm-typora.css.tpl").is_file()
         )
-        self.assertIn(str(target), payload["changed"])
+        self.assertNotIn(str(target), payload["changed"])
+        self.assertEqual(payload.get("restartRequired", []), [])
 
     def test_typora_disable_restores_legacy_managed_output(self):
         managed = b"legacy managed Typora theme\n"

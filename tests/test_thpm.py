@@ -451,7 +451,60 @@ class StateTests(Sandbox):
     def test_experimental_plugins_are_opt_in_by_default(self):
         enabled = load(self.paths)
         self.assertTrue(all(not enabled[plugin.id] for plugin in PLUGINS))
-        self.assertTrue(all(plugin.support_status == "experimental" for plugin in PLUGINS))
+        self.assertTrue(
+            all(
+                plugin.support_status == "experimental"
+                for plugin in PLUGINS
+                if plugin.id != "fzf"
+            )
+        )
+
+    def test_fzf_is_supported_after_complete_live_certification_and_signoff(self):
+        fzf = next(plugin for plugin in PLUGINS if plugin.id == "fzf")
+        support = (Path(__file__).parents[1] / "docs/integration-support.md").read_text()
+
+        self.assertEqual(fzf.support_status, "supported")
+        self.assertRegex(
+            support,
+            r"(?m)^\| `fzf` \| Complete \| Supported \| disabled \|",
+        )
+        record = Path(__file__).parents[1] / "docs/certifications/fzf-2026-08-28.md"
+        evidence = record.parent / "evidence/fzf-2026-08-28"
+        self.assertTrue(record.is_file())
+        self.assertIn('omarchy-theme-set "Dune"', record.read_text())
+        self.assertIn('omarchy-theme-set "Last Call"', record.read_text())
+        for name in (
+            "commands.txt",
+            "thpm-fzf-certification-report.json",
+            "thpm-fzf-dune-marked.png",
+            "thpm-fzf-last-call-marked.png",
+            "thpm-fzf-post-disable-fresh.png",
+            "thpm-fzf-post-uninstall-fresh.png",
+            "post-disable-env.txt",
+            "post-uninstall-env.txt",
+        ):
+            self.assertTrue((evidence / name).is_file(), name)
+        report = json.loads((evidence / "thpm-fzf-certification-report.json").read_text())
+        self.assertEqual(report["scope"], "fzf")
+        self.assertTrue(report["privacy"]["redacted"])
+        expected_hashes = {
+            "thpm-fzf-certification-report.json": "bd7e81b11fc9b06319abaeaa0fed08c1e0640375ed67d1659a327c1690ed6612",
+            "thpm-fzf-dune-marked.png": "01ad616802cd912a866805abe6366e388e61499f67ca0ce3af5d2d0662b2072c",
+            "thpm-fzf-last-call-marked.png": "bca5e6567cf1ef7fd7c57f0f0929fe930d319d7bce5eef8993eac803cdca4aae",
+            "thpm-fzf-post-disable-fresh.png": "636b2a98c366f0249b32d3123378215ba17c816848badfee25f85e765a7341e3",
+            "thpm-fzf-post-uninstall-fresh.png": "a8402e8f049209fbbc9f64d039c3c44459a88452042c5a3e00ca7acbe2a9d4d6",
+            "post-disable-env.txt": "7d59b8c9e994c3c4ef516f6f35941b846e714cd40159f7b1e4bccc63ac0c18a1",
+            "post-uninstall-env.txt": "7d59b8c9e994c3c4ef516f6f35941b846e714cd40159f7b1e4bccc63ac0c18a1",
+        }
+        for name, expected in expected_hashes.items():
+            self.assertEqual(hashlib.sha256((evidence / name).read_bytes()).hexdigest(), expected)
+        self.assertEqual((evidence / "post-disable-env.txt").read_text(), "FZF_DEFAULT_OPTS=\n")
+        self.assertEqual((evidence / "post-uninstall-env.txt").read_text(), "FZF_DEFAULT_OPTS=\n")
+        commands = (evidence / "commands.txt").read_text()
+        self.assertIn("Post-disable application restoration gate:", commands)
+        self.assertIn("thpm-fzf-post-disable", commands)
+        self.assertIn("Post-uninstall application restoration gate:", commands)
+        self.assertIn("thpm-fzf-post-uninstall", commands)
 
     def test_every_registered_template_is_packaged(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -477,12 +530,13 @@ class StateTests(Sandbox):
                 documented[plugin.id][2],
                 "enabled" if plugin.default_enabled else "disabled",
             )
-        self.assertEqual(
-            [plugin_id for plugin_id, _, status, _ in rows if status == "Experimental"],
-            [plugin.id for plugin in PLUGINS],
-        )
-        self.assertTrue(all(audit == "Incomplete" for _, audit, _, _ in rows))
-        self.assertFalse(any(status == "Supported" for _, _, status, _ in rows))
+        for plugin_id, audit, disposition, _default in rows:
+            plugin = next(item for item in PLUGINS if item.id == plugin_id)
+            expected_audit = (
+                "Complete" if plugin.support_status == "supported" else "Incomplete"
+            )
+            self.assertEqual(audit, expected_audit)
+            self.assertEqual(disposition.lower(), plugin.support_status)
 
     def test_templates_use_canonical_palette_keys_and_render_completely(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -1311,7 +1365,16 @@ class ServiceTests(Sandbox):
         native = [p for p in payload["plugins"] if p["ownership"] == "native"]
         self.assertTrue(active)
         self.assertTrue(native)
-        self.assertTrue(all(p["supportStatus"] == "experimental" for p in active))
+        self.assertEqual(
+            [p["id"] for p in active if p["supportStatus"] == "supported"], ["fzf"]
+        )
+        self.assertTrue(
+            all(
+                p["supportStatus"] == "experimental"
+                for p in active
+                if p["id"] != "fzf"
+            )
+        )
         self.assertTrue(all(not p["enabled"] for p in active))
         self.assertTrue(all(p["supportStatus"] == "native" for p in native))
         self.assertEqual(payload["menuSurface"], "gui")
@@ -1763,6 +1826,62 @@ class ServiceTests(Sandbox):
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(rendered)
         apply("superfile", self.paths)
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            uninstalled = Service(self.paths).uninstall()
+        self.assertTrue(uninstalled["ok"])
+        self.assertFalse(uninstalled["cleanupIncomplete"])
+        self.assertFalse(target.exists())
+        self.assertFalse(source.exists())
+
+    def test_fzf_generated_output_lifecycle_is_safe_and_idempotent(self):
+        assets = Path(__file__).parents[1] / "assets"
+        source = self.paths.current_theme / "thpm-fzf.fish"
+        target = self.paths.config_home / "fish/conf.d/thpm-fzf.fish"
+        rendered = (
+            "# Generated by Omarchy from a THPM-owned template.\n"
+            'set -gx FZF_DEFAULT_OPTS "$FZF_DEFAULT_OPTS '
+            "--color=bg:#101010,bg+:#202020,fg:#d0d0d0,fg+:#ffffff,"
+            "hl:#4488cc,hl+:#66aaff,info:#44cccc,prompt:#cc88cc,"
+            'pointer:#dd8844,marker:#66bb77,spinner:#ddbb55,header:#779999"\n'
+        )
+        source.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True)
+        source.write_text(rendered)
+        target.write_text("user baseline\n")
+
+        changed = apply("fzf", self.paths)
+        metadata = target.stat()
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        unchanged = apply("fzf", self.paths)
+
+        self.assertEqual(changed.status, "applied")
+        self.assertEqual(changed.restartRequired, [])
+        self.assertEqual(target.read_text(), rendered)
+        self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(unchanged.restartRequired, [])
+        self.assertEqual(target.stat().st_ino, metadata.st_ino)
+        self.assertEqual(target.stat().st_mtime_ns, metadata.st_mtime_ns)
+        self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), digest)
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            disabled = Service(self.paths).set_enabled("fzf", False, refresh=False)
+        self.assertTrue(disabled["ok"])
+        self.assertEqual(target.read_text(), "user baseline\n")
+        self.assertFalse(source.exists())
+
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(rendered)
+        apply("fzf", self.paths)
+        target.write_text("synthetic user modification\n")
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            preserved = Service(self.paths).set_enabled("fzf", False, refresh=False)
+        self.assertEqual(target.read_text(), "synthetic user modification\n")
+        self.assertIn("preserved user-modified file", str(preserved["warnings"]))
+
+        target.unlink()
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(rendered)
+        apply("fzf", self.paths)
         with patch("thpm.service.ui.remove", return_value={"installed": False}):
             uninstalled = Service(self.paths).uninstall()
         self.assertTrue(uninstalled["ok"])

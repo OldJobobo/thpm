@@ -7,7 +7,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("vscode-local-compat", "Local VS Code theme compatibility", "Compatibility", "Install validated theme-bundled local editor themes.", "action"),
     Plugin("pi-hot-reload", "Pi live theme reload", "Compatibility", "Emit a reload event for Pi sessions using Omarchy's generated theme.", "action", ("pi",), default_enabled=False),
     Plugin("fish", "Fish", "Terminal", "Synchronize Fish shell colors.", "hybrid", ("fish",), templates=("thpm-fish.fish.tpl",)),
-    Plugin("fzf", "fzf", "Terminal", "Provide an Omarchy-colored fzf palette.", "hybrid", ("fzf",), templates=("thpm-fzf.fish.tpl",)),
+    Plugin("fzf", "fzf", "Terminal", "Provide an Omarchy-colored fzf palette.", "hybrid", ("fzf",), templates=("thpm-fzf.fish.tpl",), support_status="supported"),
     Plugin("branding", "Branding extras", "Desktop", "Synchronize optional branding text and restore prior defaults when absent.", "action", theme_assets=("about.txt", "screensaver.txt"), default_enabled=False),
     Plugin("discord", "Discord / Vencord", "Messaging", "Install a theme-provided or generated Vencord theme.", "hybrid", theme_assets=("vencord.theme.css",), templates=("thpm-vencord.theme.css.tpl",)),
     Plugin("discord-system24", "Discord System24", "Messaging", "Install the System24-flavored Vencord surface.", "hybrid", theme_assets=("vencord-system24.theme.css",), templates=("thpm-vencord-system24.theme.css.tpl",), default_enabled=False),

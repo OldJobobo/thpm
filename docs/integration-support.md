@@ -91,6 +91,7 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | `qt6ct` | Incomplete | Experimental | disabled | Launch recorded `qt6ct`, select the generated scheme in a disposable profile, then prove a Qt 6 test application renders it. |
 | `spotify` | Incomplete | Experimental | disabled | With recorded `spotify` and `spicetify` versions and a completed backup, prove refresh plus both restart policies changes colors without launching a closed client. |
 | `superfile` | Incomplete | Experimental | disabled | Launch recorded `spf` with a disposable config and prove its theme discovery loads both authored and generated outputs. |
+| `typora` | Incomplete | Experimental | disabled | Launch recorded `typora` with a disposable profile, select the generated **THPM** theme, prove Dune/Last Call screen rendering plus neutral print media, and retain restart/restoration evidence. |
 | `zellij` | Incomplete | Experimental | disabled | Run `scripts/zellij-live-test.sh` with a recorded `zellij` version, visually prove a running session repaints, and retain restoration evidence from the harness. |
 | `obsidian-terminal` | Incomplete | Experimental | disabled | Launch recorded `obsidian` and Terminal community-plugin versions in a disposable vault; prove xterm.js colors change after the documented restart. |
 | `nwg-dock` | Incomplete | Experimental | disabled | Record the complete `nwg-dock-hyprland` launch command, restart it with identical flags, and prove the dock loads the installed stylesheet. |
@@ -113,7 +114,6 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | Integration | Lifecycle | Retained behavior |
 |---|---|---|
 | SwayNC | Retired | Guarded restoration or removal of the former managed `colors.css` output. |
-| Typora | Retired | Guarded restoration or removal of the former managed stylesheet. |
 | Windsurf | Retired | Guarded cleanup of the historical local theme extension after the editor's replacement. |
 | Vicinae | Retired | Guarded cleanup of both historical managed theme destinations. |
 

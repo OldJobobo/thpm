@@ -5,6 +5,7 @@
 - Preserve cliamp's contrast-checked built-in or terminal-ANSI theming by default; install and select an authored `cliamp.toml` override only with explicit `# thpm:cliamp-use-native` author opt-in, with guarded selector and file restoration.
 - Retire the uncertified SwayNC integration because its standalone `colors.css` output was not loaded by SwayNC's active stylesheet, while retaining guarded cleanup for historical managed output.
 - Promote the opt-in fzf integration to Supported after complete automated, lifecycle, restoration, and visual certification on Omarchy Quattro, with explicit maintainer signoff.
+- Reintroduce Typora as an Experimental, default-disabled integration with a restorable generated custom theme, change-sensitive restart reporting, and a monochrome print-media treatment separate from the Omarchy screen palette.
 
 ## 1.0.0rc22 - 2026-08-21
 

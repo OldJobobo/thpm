@@ -41,6 +41,13 @@ def selector_state_path(paths: Paths) -> Path:
     return paths.managed_asset_state_dir / "cliamp-selection.json"
 
 
+def selected_theme(paths: Paths) -> str | None:
+    target = _safe_config_target(paths)
+    if not target.exists():
+        return None
+    return parse_selector(target.read_text(encoding="utf-8")).value
+
+
 def parse_selector(text: str) -> Selector:
     matches: list[tuple[int, re.Match[str], str]] = []
     for index, line in enumerate(text.splitlines(keepends=True)):

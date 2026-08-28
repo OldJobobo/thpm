@@ -38,6 +38,8 @@ from .cava import (
 )
 from .cliamp import restore_selection as restore_cliamp_selection
 from .cliamp import select_override as select_cliamp_override
+from .cliamp import selected_theme as selected_cliamp_theme
+from .cliamp import selector_state_path as cliamp_selector_state_path
 from .compat import (
     apply_gtk,
     apply_vscode_local,
@@ -467,9 +469,42 @@ def _cleanup_optional_asset(
     return changed, []
 
 
+def _cleanup_cliamp_theme(
+    paths: Paths, *, assume_legacy: bool = False
+) -> tuple[list[str], list[str]]:
+    try:
+        changed, warnings = restore_cliamp_selection(paths)
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        return [], [f"could not restore cliamp theme selection: {exc}"]
+    if cliamp_selector_state_path(paths).exists():
+        return changed, warnings
+    try:
+        selected = selected_cliamp_theme(paths)
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        warnings.append(
+            f"could not verify cliamp theme selection before cleanup: {exc}"
+        )
+        return changed, warnings
+    if selected == "omarchy":
+        warnings.append("preserved user-selected cliamp theme file while it remains selected")
+        return changed, warnings
+    target = paths.config_home / "cliamp/themes/omarchy.toml"
+    legacy_owned = assume_legacy and _matches_installed_theme_asset(
+        paths, target, "cliamp.toml"
+    )
+    item_changed, item_warnings = _cleanup_optional_asset(
+        paths, "cliamp", target, legacy_owned=legacy_owned
+    )
+    changed.extend(item_changed)
+    warnings.extend(item_warnings)
+    return changed, warnings
+
+
 def cleanup_optional_assets(
     paths: Paths, plugin_id: str, *, assume_legacy: bool = False
 ) -> tuple[list[str], list[str]]:
+    if plugin_id == "cliamp":
+        return _cleanup_cliamp_theme(paths, assume_legacy=assume_legacy)
     changed: list[str] = []
     warnings: list[str] = []
     for key, asset_name, target in _optional_asset_targets(paths, plugin_id):
@@ -481,10 +516,6 @@ def cleanup_optional_assets(
         )
         changed.extend(item_changed)
         warnings.extend(item_warnings)
-    if plugin_id == "cliamp":
-        selection_changed, selection_warnings = restore_cliamp_selection(paths)
-        changed.extend(selection_changed)
-        warnings.extend(selection_warnings)
     return changed, warnings
 
 
@@ -570,10 +601,7 @@ def _apply_cliamp_theme(paths: Paths) -> ApplyResult:
             raise
         paths_changed.extend(selection_changed)
         return _result("cliamp", paths_changed, [], warnings)
-    changed, warnings = _cleanup_optional_asset(paths, "cliamp", target)
-    selection_changed, selection_warnings = restore_cliamp_selection(paths)
-    changed.extend(selection_changed)
-    warnings.extend(selection_warnings)
+    changed, warnings = _cleanup_cliamp_theme(paths)
     return _result("cliamp", changed, [], warnings)
 
 

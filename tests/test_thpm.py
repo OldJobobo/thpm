@@ -4303,6 +4303,7 @@ class IntegrationTests(Sandbox):
         config = self.paths.config_home / "cliamp/config.toml"
         config.parent.mkdir(parents=True)
         config.write_text('theme = "miasma" # original\nvolume = 75\n')
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
 
         apply("cliamp", self.paths)
         config.write_text('theme = "omarchy" # user edited while managed\nvolume = 75\n')
@@ -4313,12 +4314,57 @@ class IntegrationTests(Sandbox):
             config.read_text(),
             'theme = "omarchy" # user edited while managed\nvolume = 75\n',
         )
+        self.assertTrue(target.is_file())
+        self.assertTrue(
+            (self.paths.managed_asset_state_dir / "cliamp-selection.json").is_file()
+        )
         self.assertTrue(
             any(
                 "preserved user-modified cliamp theme selector" in warning
                 for warning in result.warnings
             )
         )
+
+    def test_cliamp_disable_retains_theme_for_edited_managed_selector(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("# thpm:cliamp-use-native\naccent = \"#020202\"\n")
+        config = self.paths.config_home / "cliamp/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme = "miasma" # original\n')
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        apply("cliamp", self.paths)
+        save(self.paths, {"cliamp": True})
+        config.write_text('theme = "omarchy" # user edited while managed\n')
+
+        payload = Service(self.paths).set_enabled("cliamp", False, refresh=False)
+
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["cleanupIncomplete"])
+        self.assertTrue(target.is_file())
+        self.assertTrue(
+            (self.paths.managed_asset_state_dir / "cliamp-selection.json").is_file()
+        )
+
+    def test_cliamp_disable_fails_closed_for_invalid_selector_state(self):
+        source = self.paths.current_theme / "cliamp.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text("# thpm:cliamp-use-native\naccent = \"#020202\"\n")
+        config = self.paths.config_home / "cliamp/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('theme = "miasma"\n')
+        target = self.paths.config_home / "cliamp/themes/omarchy.toml"
+        apply("cliamp", self.paths)
+        save(self.paths, {"cliamp": True})
+        selection_state = self.paths.managed_asset_state_dir / "cliamp-selection.json"
+        selection_state.write_text("not json\n")
+
+        payload = Service(self.paths).set_enabled("cliamp", False, refresh=False)
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["cleanupIncomplete"])
+        self.assertTrue(target.is_file())
+        self.assertTrue(selection_state.is_file())
 
     def test_cliamp_colors_only_second_run_is_unchanged(self):
         self.write_palette()

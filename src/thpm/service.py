@@ -886,6 +886,15 @@ class Service:
                         ) in cleanup_changed
                     changed.extend(cleanup_changed)
                     record_cleanup(cleanup_warnings)
+                    if plugin_id == "typora":
+                        legacy_changed, legacy_warnings = cleanup_optional_assets(
+                            self.paths, "typora", assume_legacy=True
+                        )
+                        typora_output_changed = typora_output_changed or bool(
+                            legacy_changed
+                        )
+                        changed.extend(legacy_changed)
+                        record_cleanup(legacy_warnings)
                     browser_profile_changed = plugin_id in {"firefox", "zen"} and any(
                         Path(path)
                         != self.paths.current_theme / f"thpm-{plugin_id}.css"
@@ -1291,6 +1300,10 @@ class Service:
                             plugin_id,
                             assume_legacy=True,
                         )
+                    if plugin_id == "typora":
+                        typora_output_changed = typora_output_changed or bool(
+                            cleanup_changed
+                        )
                     changed.extend(cleanup_changed)
                     record_cleanup(plugin_id, cleanup_warnings)
                 selector_changed, selector_warnings = restore_cava_selector(self.paths)
@@ -1329,7 +1342,7 @@ class Service:
                         assume_legacy=True,
                     )
                     if plugin_id == "typora":
-                        typora_output_changed = str(
+                        typora_output_changed = typora_output_changed or str(
                             self.paths.config_home / "Typora/themes/thpm.css"
                         ) in cleanup_changed
                     changed.extend(cleanup_changed)

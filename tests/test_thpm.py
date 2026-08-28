@@ -5911,6 +5911,77 @@ class IntegrationTests(Sandbox):
         )
         self.assertIn(str(target), payload["changed"])
 
+    def test_typora_disable_restores_legacy_managed_output(self):
+        managed = b"legacy managed Typora theme\n"
+        prior = b"user Typora theme\n"
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(managed)
+        state = self.paths.managed_asset_state_dir / "typora.json"
+        backup = self.paths.managed_asset_state_dir / "typora.backup"
+        state.parent.mkdir(parents=True)
+        backup.write_bytes(prior)
+        state.write_text(
+            json.dumps(
+                {
+                    "existed": True,
+                    "priorType": "file",
+                    "priorSha256": hashlib.sha256(prior).hexdigest(),
+                    "priorMode": 0o644,
+                    "managedSha256": hashlib.sha256(managed).hexdigest(),
+                    "managedMode": 0o644,
+                }
+            )
+        )
+        self.paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.state_file.write_text(
+            "version = 1\n\n[plugins]\nspotify = true\ntypora = true\n"
+        )
+
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service._typora_process_running", return_value=True
+        ):
+            payload = Service(self.paths).set_enabled(
+                "typora", False, refresh=False
+            )
+
+        self.assertEqual(target.read_bytes(), prior)
+        self.assertFalse(state.exists())
+        self.assertFalse(backup.exists())
+        self.assertIn(str(target), payload["changed"])
+        self.assertEqual(payload["restartRequired"], ["Typora"])
+
+    def test_typora_uninstall_reports_restart_for_legacy_managed_output(self):
+        managed = b"legacy managed Typora theme\n"
+        prior = b"user Typora theme\n"
+        target = self.paths.config_home / "Typora/themes/omarchy.css"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(managed)
+        state = self.paths.managed_asset_state_dir / "typora.json"
+        backup = self.paths.managed_asset_state_dir / "typora.backup"
+        state.parent.mkdir(parents=True)
+        backup.write_bytes(prior)
+        state.write_text(
+            json.dumps(
+                {
+                    "existed": True,
+                    "priorType": "file",
+                    "priorSha256": hashlib.sha256(prior).hexdigest(),
+                    "priorMode": 0o644,
+                    "managedSha256": hashlib.sha256(managed).hexdigest(),
+                    "managedMode": 0o644,
+                }
+            )
+        )
+
+        with patch("thpm.service._typora_process_running", return_value=True):
+            payload = Service(self.paths).uninstall()
+
+        self.assertEqual(target.read_bytes(), prior)
+        self.assertIn(str(target), payload["changed"])
+        self.assertEqual(payload["restartRequired"], ["Typora"])
+
     def test_reconcile_retires_vicinae_and_cleans_historical_outputs(self):
         rendered = self.paths.current_theme / "thpm-vicinae.toml"
         rendered.parent.mkdir(parents=True)

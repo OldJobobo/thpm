@@ -138,9 +138,16 @@ The Omarchy way to install the recommended [AdwSteamGtk](https://github.com/Fold
 omarchy pkg aur add adwsteamgtk
 ```
 
-Open **AdwSteamGtk** from the application launcher to install and manage Adwaita-for-Steam. This is currently independent of THPM.
+After installing AdwSteamGtk, you should:
 
-THPM’s Experimental Steam integration does not yet recognize AdwSteamGtk. It requires the standalone installer at `~/.local/share/steam-adwaita/install.py` and otherwise remains **Unavailable**. Run `thpm report steam` to confirm what THPM detected. After either tool changes Steam’s skin, fully exit and relaunch Steam; THPM never terminates it because doing so could interrupt a game or download.
+1. Open **AdwSteamGtk** from your application launcher, or run `adwaita-steam-gtk`.
+2. Choose your preferred skin options.
+3. Select **Install** to apply Adwaita-for-Steam.
+4. Fully exit and reopen Steam.
+
+You do not need to keep AdwSteamGtk running in the background. AdwSteamGtk is currently independent of THPM.
+
+THPM’s Experimental Steam integration does not yet recognize AdwSteamGtk. It requires the standalone installer at `~/.local/share/steam-adwaita/install.py` and otherwise remains **Unavailable**. Run `thpm report steam` to confirm what THPM detected. THPM never terminates Steam because doing so could interrupt a game or download.
 
 ### Nautilus
 

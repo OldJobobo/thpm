@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0rc24 - 2026-08-28
+
+- Promote the opt-in Zellij integration to Supported after exact merged-source lifecycle, parser, restoration, live-transition, visual-evidence, and maintainer-signoff gates passed on Omarchy Quattro.
+
 ## 1.0.0rc23 - 2026-08-28
 
 - Generate a complete semantic GTK fallback when a theme does not provide authored GTK CSS, while preserving managed imports, user CSS, and restart-only guidance.

@@ -659,6 +659,28 @@ class StateTests(Sandbox):
         self.assertEqual(document["schemaVersion"], 1)
         self.assertIn("brightWhite", document["theme"]["darkTerminal"])
 
+    def test_firefox_selected_tab_is_separated_from_the_tab_strip(self):
+        # Firefox's own default paints the selected tab in
+        # --toolbar-background-color, which is the color this template gives
+        # the strip around it, so the tab would dissolve into the strip. It has
+        # to be raised onto its own surface and ringed in the accent, and the
+        # ring is what stays legible on palettes whose surface step is small.
+        # --tab-selected-outline-color is the ungated stand-in for the
+        # --lwt-tab-line-color only a theme add-on can set.
+        template = (
+            Path(__file__).parents[1] / "assets/templates/thpm-firefox.css.tpl"
+        ).read_text()
+        declarations = dict(
+            re.findall(r"^\s*(--[\w-]+):\s*(.+?)\s*!important;$", template, re.M)
+        )
+        self.assertNotEqual(
+            declarations["--tab-background-color-selected"],
+            declarations["--toolbar-background-color"],
+        )
+        self.assertEqual(
+            declarations["--tab-selected-outline-color"], "var(--thpm-accent)"
+        )
+
     def test_fish_template_sets_effective_syntax_and_pager_colors(self):
         template = (
             Path(__file__).parents[1] / "assets/templates/thpm-fish.fish.tpl"

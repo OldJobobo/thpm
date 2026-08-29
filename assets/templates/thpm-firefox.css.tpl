@@ -55,8 +55,17 @@
   --sidebar-text-color: var(--thpm-fg) !important;
   --sidebar-border-color: var(--thpm-border) !important;
 
-  --tab-background-color-selected: var(--thpm-bg) !important;
+  /* The tab strip and the toolbar share one background here, so Firefox's
+     default of painting the selected tab in --toolbar-background-color makes
+     it disappear into the strip. Firefox's own themes raise it with a
+     translucent overlay, which a semantic palette has no token for, so the tab
+     is raised to the surface color and ringed in the accent. The ring is what
+     carries the signal on palettes whose surface step is small:
+     --tab-selected-outline-color is consumed without :root[lwtheme], unlike
+     the --lwt-tab-line-color an add-on would set for the same effect. */
+  --tab-background-color-selected: var(--thpm-surface) !important;
   --tab-selected-textcolor: var(--thpm-fg) !important;
+  --tab-selected-outline-color: var(--thpm-accent) !important;
 
   --focus-outline-color: var(--thpm-accent) !important;
 }

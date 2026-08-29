@@ -681,6 +681,33 @@ def _browser_import_blocks(plugin_id: str) -> tuple[tuple[str, str], ...]:
     )
 
 
+def _browser_profile_roots(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
+    """Candidate profile roots for a browser, most preferred first.
+
+    Firefox stores profiles under ~/.mozilla/firefox historically and under
+    $XDG_CONFIG_HOME/mozilla/firefox once XDG base directory support is
+    active, which is where recent builds put a freshly created profile. Both
+    layouts exist in the wild, so both are candidates; the legacy location
+    keeps priority, meaning an installation that works today is unaffected.
+    """
+    if plugin_id == "firefox":
+        return (
+            paths.home / ".mozilla/firefox",
+            paths.config_home / "mozilla/firefox",
+        )
+    return (paths.home / ".zen",)
+
+
+def _browser_profile_root(paths: Paths, plugin_id: str) -> Path:
+    """The profile root to operate on: the first candidate holding a
+    profiles.ini, else the preferred one so error messages stay stable."""
+    roots = _browser_profile_roots(paths, plugin_id)
+    for root in roots:
+        if (root / "profiles.ini").is_file():
+            return root
+    return roots[0]
+
+
 def _browser_default_profile(base: Path) -> str:
     profiles = base / "profiles.ini"
     if not profiles.is_file():
@@ -1212,7 +1239,7 @@ def inspect_readiness(
     ):
         missing.append("supported Discord client theme directory")
     elif plugin_id in {"firefox", "zen"}:
-        base = paths.home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
+        base = _browser_profile_root(paths, plugin_id)
         if not (base / "profiles.ini").is_file():
             missing.append(str(base / "profiles.ini"))
         elif not _browser_default_profile(base):
@@ -1591,12 +1618,19 @@ def _current_plugin_sources(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
 
 
 def _cleanup_browser(paths: Paths, plugin_id: str, *, assume_legacy: bool) -> tuple[list[str], list[str]]:
-    base = paths.home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
+    # Clean every candidate root, not only the active one: a profile root
+    # that stopped being selected must still give its managed output back.
+    bases = _browser_profile_roots(paths, plugin_id)
     sources = _current_plugin_sources(paths, plugin_id)
     changed: list[str] = []
     warnings: list[str] = []
     blocks = _browser_import_blocks(plugin_id)
-    for chrome in (path for path in base.rglob("chrome") if path.is_dir()):
+    for chrome in (
+        path
+        for base in bases
+        for path in base.rglob("chrome")
+        if path.is_dir()
+    ):
         managed = chrome / f"thpm-{plugin_id}.css"
         item_changed, item_warnings = _cleanup_optional_asset(
             paths,
@@ -2772,7 +2806,7 @@ def apply(
             ):
                 changed.append(str(target))
     elif plugin_id in {"firefox", "zen"}:
-        base = home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
+        base = _browser_profile_root(paths, plugin_id)
         browser_paths, browser_changed = _browser_import(paths, plugin_id, base)
         if browser_changed:
             changed.extend(browser_paths)

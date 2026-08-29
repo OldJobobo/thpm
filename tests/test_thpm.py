@@ -76,6 +76,7 @@ from thpm.config import save as save_config
 from thpm.integrations import (
     ApplyFailure,
     _browser_import,
+    _browser_profile_root,
     _reload,
     apply,
     apply_enabled,
@@ -7004,6 +7005,55 @@ class IntegrationTests(Sandbox):
         (base / "profiles.ini").write_text("[Install1]\nDefault=../../escape\n")
         with self.assertRaisesRegex(ValueError, "escapes"):
             _browser_import(self.paths, "firefox", base)
+
+    def _firefox_root(self, kind):
+        base = (
+            self.paths.home / ".mozilla/firefox"
+            if kind == "legacy"
+            else self.paths.config_home / "mozilla/firefox"
+        )
+        profile = base / "profile.default"
+        profile.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        return base
+
+    def test_firefox_uses_legacy_profile_root_when_present(self):
+        legacy = self._firefox_root("legacy")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), legacy)
+
+    def test_firefox_finds_profile_root_under_xdg_config_home(self):
+        # Recent Firefox builds create a fresh profile under
+        # $XDG_CONFIG_HOME/mozilla/firefox, where the legacy path does not
+        # exist at all and the integration previously found nothing.
+        xdg = self._firefox_root("xdg")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), xdg)
+
+    def test_firefox_prefers_legacy_profile_root_over_xdg(self):
+        legacy = self._firefox_root("legacy")
+        self._firefox_root("xdg")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), legacy)
+
+    def test_firefox_readiness_accepts_an_xdg_profile_root(self):
+        xdg = self._firefox_root("xdg")
+        _ready, missing, _warnings = inspect_readiness(
+            "firefox", self.paths, which=lambda command: f"/usr/bin/{command}"
+        )
+        self.assertEqual(missing, [])
+        # The legacy root does not exist at all here, so before this change
+        # readiness reported its profiles.ini as the missing prerequisite.
+        self.assertTrue((xdg / "profiles.ini").is_file())
+        self.assertFalse((self.paths.home / ".mozilla/firefox").exists())
+
+    def test_firefox_import_and_cleanup_cover_an_xdg_profile_root(self):
+        generated = self.paths.current_theme / "thpm-firefox.css"
+        generated.parent.mkdir(parents=True, exist_ok=True)
+        generated.write_text("/* generated */\n")
+        xdg = self._firefox_root("xdg")
+        _browser_import(self.paths, "firefox", _browser_profile_root(self.paths, "firefox"))
+        entrypoint = xdg / "profile.default/chrome/userChrome.css"
+        self.assertTrue(entrypoint.is_file())
+        cleanup_managed_outputs(self.paths, "firefox", assume_legacy=True)
+        self.assertFalse(entrypoint.exists())
 
     def test_discord_cleanup_restores_displaced_theme(self):
         source = self.paths.current_theme / "thpm-vencord.theme.css"

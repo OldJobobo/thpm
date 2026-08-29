@@ -1308,6 +1308,33 @@ def _thunderbird_import_blocks() -> tuple[tuple[str, str], ...]:
     return (("/* THPM Thunderbird hook start */", "/* THPM Thunderbird hook end */"),)
 
 
+def _thunderbird_entrypoint_plan(
+    chrome: Path, block: str
+) -> list[tuple[Path, str, int | None]]:
+    """Resolve both Thunderbird entrypoints before any of them is written.
+
+    Returns one (path, content, mode) triple per entrypoint. A malformed
+    managed block or a symlinked entrypoint raises here, while the profile
+    is still untouched, so a failure can never leave the managed stylesheet
+    installed against a half-updated set of entrypoints.
+    """
+    plan: list[tuple[Path, str, int | None]] = []
+    for filename in ("userChrome.css", "userContent.css"):
+        target = chrome / filename
+        if target.is_symlink():
+            raise RuntimeError(
+                f"thunderbird: {target} is a symlink; "
+                "THPM will not replace it with a regular file"
+            )
+        existing = target.read_text() if target.is_file() else ""
+        for managed_start, managed_end in _thunderbird_import_blocks():
+            if managed_start in existing or managed_end in existing:
+                existing = remove_managed_block(existing, managed_start, managed_end)
+        mode = target.stat().st_mode & 0o777 if target.is_file() else None
+        plan.append((target, block + existing.lstrip(), mode))
+    return plan
+
+
 def _thunderbird_import(paths: Paths, base: Path) -> tuple[list[str], bool]:
     plugin_id = "thunderbird"
     candidates = ("thunderbird.css", GENERATED[plugin_id])
@@ -1335,6 +1362,14 @@ def _thunderbird_import(paths: Paths, base: Path) -> tuple[list[str], bool]:
     managed = chrome / f"thpm-{plugin_id}.css"
     if source.name in set(GENERATED.values()):
         _ensure_generated_output_is_rendered(source)
+    start, end = _thunderbird_import_blocks()[0]
+    block = f'{start}\n@import url("{managed.name}");\n{end}\n'
+    # Thunderbird's outer window chrome and its inner about:3pane/about:message
+    # content documents are separate cascades; the same generated stylesheet is
+    # imported into both, and is scoped internally so each rule only applies to
+    # the document type it targets. Both entrypoints are resolved before the
+    # first write so a rejected one cannot leave a partial install behind.
+    plan = _thunderbird_entrypoint_plan(chrome, block)
     css_changed = _install_optional_asset(
         paths,
         _target_key(f"browser-{plugin_id}", managed),
@@ -1347,22 +1382,13 @@ def _thunderbird_import(paths: Paths, base: Path) -> tuple[list[str], bool]:
     changed = []
     if css_changed:
         changed.append(str(managed))
-    start, end = _thunderbird_import_blocks()[0]
-    block = f'{start}\n@import url("{managed.name}");\n{end}\n'
-    # Thunderbird's outer window chrome and its inner about:3pane/about:message
-    # content documents are separate cascades; the same generated stylesheet
-    # is imported into both so either scope picks up what applies to it.
-    for filename in ("userChrome.css", "userContent.css"):
-        target = chrome / filename
-        existing = target.read_text() if target.exists() else ""
-        for managed_start, managed_end in _thunderbird_import_blocks():
-            if managed_start in existing or managed_end in existing:
-                existing = remove_managed_block(existing, managed_start, managed_end)
-        updated = block + existing.lstrip()
-        import_changed = not target.is_file() or target.read_text() != updated
-        if import_changed:
-            atomic_text(target, updated)
-            changed.append(str(target))
+    for target, updated, mode in plan:
+        if target.is_file() and target.read_text() == updated:
+            continue
+        # Preserve the entrypoint's existing permissions so enabling the
+        # integration never silently widens or narrows them.
+        atomic_text(target, updated, mode=mode if mode is not None else 0o644)
+        changed.append(str(target))
     return changed, bool(changed)
 
 
@@ -1385,9 +1411,15 @@ def _cleanup_thunderbird(paths: Paths, *, assume_legacy: bool) -> tuple[list[str
         warnings.extend(item_warnings)
         for filename in ("userChrome.css", "userContent.css"):
             target = chrome / filename
+            if target.is_symlink():
+                warnings.append(
+                    f"preserved symlinked Thunderbird entrypoint: {target}"
+                )
+                continue
             if not target.is_file():
                 continue
             existing = target.read_text()
+            mode = target.stat().st_mode & 0o777
             updated = existing
             incomplete = False
             for start, end in blocks:
@@ -1400,7 +1432,7 @@ def _cleanup_thunderbird(paths: Paths, *, assume_legacy: bool) -> tuple[list[str
                     updated = remove_managed_block(updated, start, end)
             if not incomplete and updated != existing:
                 if updated.strip():
-                    atomic_text(target, updated)
+                    atomic_text(target, updated, mode=mode)
                 else:
                     target.unlink()
                 changed.append(str(target))

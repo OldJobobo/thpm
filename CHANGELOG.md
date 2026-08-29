@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add an Experimental, default-disabled Thunderbird integration that themes the outer chrome window and the `about:3pane`/`about:message` content documents from one generated stylesheet, scoped per document type and imported into both `userChrome.css` and `userContent.css` with guarded restoration on disable/uninstall.
+- Add an Experimental, default-disabled Thunderbird integration that themes the outer chrome window and the `about:3pane`/`about:message` content documents from one generated stylesheet, scoped per document type so neither entrypoint leaks rules into the other, imported into both `userChrome.css` and `userContent.css` with guarded restoration and restart reporting on disable and uninstall. Entrypoints are resolved before any write so a malformed managed block cannot leave a partial install, symlinked entrypoints are refused rather than replaced, and existing permissions are preserved.
 
 ## 1.0.0rc24 - 2026-08-28
 

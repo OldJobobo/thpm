@@ -1392,6 +1392,15 @@ class Service:
                         typora_output_changed = typora_output_changed or str(
                             self.paths.config_home / "Typora/themes/thpm.css"
                         ) in cleanup_changed
+                    # A browser-profile plugin only needs a restart when
+                    # cleanup actually touched a file inside the profile;
+                    # removing the rendered theme output alone changes
+                    # nothing in a running application.
+                    if plugin_id in {"firefox", "zen", "thunderbird"} and any(
+                        Path(path) != self.paths.current_theme / f"thpm-{plugin_id}.css"
+                        for path in cleanup_changed
+                    ):
+                        restart_required.append(BY_ID[plugin_id].label)
                     changed.extend(cleanup_changed)
                     record_cleanup(plugin_id, cleanup_warnings)
                 zellij_changed, zellij_warnings = cleanup_zellij(self.paths)

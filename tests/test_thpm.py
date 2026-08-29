@@ -75,6 +75,7 @@ from thpm.config import load as load_config
 from thpm.config import save as save_config
 from thpm.integrations import (
     ApplyFailure,
+    _browser_default_profile,
     _browser_import,
     _browser_profile_root,
     _reload,
@@ -7054,6 +7055,28 @@ class IntegrationTests(Sandbox):
         self.assertTrue(entrypoint.is_file())
         cleanup_managed_outputs(self.paths, "firefox", assume_legacy=True)
         self.assertFalse(entrypoint.exists())
+
+    def test_zen_finds_profile_root_under_xdg_config_home(self):
+        base = self.paths.config_home / "zen"
+        # Zen profile directories carry spaces and parentheses in practice,
+        # e.g. "k70byiqe.Default (release)".
+        (base / "profile.Default (release)").mkdir(parents=True)
+        (base / "profiles.ini").write_text(
+            "[Install1]\nDefault=profile.Default (release)\n"
+        )
+        self.assertEqual(_browser_profile_root(self.paths, "zen"), base)
+        self.assertEqual(
+            _browser_default_profile(base), "profile.Default (release)"
+        )
+
+    def test_zen_prefers_legacy_profile_root_over_xdg(self):
+        legacy = self.paths.home / ".zen"
+        (legacy / "profile.default").mkdir(parents=True)
+        (legacy / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        xdg = self.paths.config_home / "zen"
+        (xdg / "profile.default").mkdir(parents=True)
+        (xdg / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        self.assertEqual(_browser_profile_root(self.paths, "zen"), legacy)
 
     def test_discord_cleanup_restores_displaced_theme(self):
         source = self.paths.current_theme / "thpm-vencord.theme.css"

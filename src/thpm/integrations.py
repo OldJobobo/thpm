@@ -686,16 +686,17 @@ def _browser_profile_roots(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
 
     Firefox stores profiles under ~/.mozilla/firefox historically and under
     $XDG_CONFIG_HOME/mozilla/firefox once XDG base directory support is
-    active, which is where recent builds put a freshly created profile. Both
-    layouts exist in the wild, so both are candidates; the legacy location
-    keeps priority, meaning an installation that works today is unaffected.
+    active, which is where recent builds put a freshly created profile. Zen
+    has the same split between ~/.zen and $XDG_CONFIG_HOME/zen. Both layouts
+    exist in the wild, so both are candidates; the legacy location keeps
+    priority, meaning an installation that works today is unaffected.
     """
     if plugin_id == "firefox":
         return (
             paths.home / ".mozilla/firefox",
             paths.config_home / "mozilla/firefox",
         )
-    return (paths.home / ".zen",)
+    return (paths.home / ".zen", paths.config_home / "zen")
 
 
 def _browser_profile_root(paths: Paths, plugin_id: str) -> Path:

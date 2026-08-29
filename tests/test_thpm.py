@@ -73,6 +73,7 @@ from thpm.integrations import (
     ApplyFailure,
     _browser_import,
     _reload,
+    _thunderbird_import,
     apply,
     apply_enabled,
     cleanup_managed_outputs,
@@ -578,6 +579,19 @@ class StateTests(Sandbox):
         def substitute(match: re.Match[str]) -> str:
             expression = match.group(1).strip()
             parts = expression.split()
+            if parts and parts[0] == "gradient_start":
+                # Mirrors Omarchy's resolve_theme_ref: the referenced color
+                # wins when the palette defines it, otherwise the fallback
+                # reference does. Either way the token always renders, which
+                # is what lets a template reach an optional semantic color.
+                self.assertEqual(
+                    len(parts), 3, f"unsupported gradient_start form: {expression}"
+                )
+                _, reference, fallback = parts
+                self.assertNotIn(reference, legacy)
+                self.assertNotIn(fallback, legacy)
+                self.assertIn(fallback, CANONICAL_COLORS)
+                return CANONICAL_COLORS.get(reference, CANONICAL_COLORS[fallback])
             self.assertEqual(
                 len(parts), 1, f"test renderer needs explicit coverage for {expression}"
             )
@@ -6078,6 +6092,190 @@ class IntegrationTests(Sandbox):
         (base / "profiles.ini").write_text("[Install1]\nDefault=../../escape\n")
         with self.assertRaisesRegex(ValueError, "escapes"):
             _browser_import(self.paths, "firefox", base)
+
+    def test_thunderbird_import_writes_both_chrome_and_content_stylesheets(self):
+        base = self.paths.home / ".thunderbird"
+        profile = base / "profile.default"
+        profile.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        source = self.paths.current_theme / "thpm-thunderbird.css"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(":root { --layout-background-0: #0c1626 !important; }\n")
+
+        result = apply("thunderbird", self.paths)
+
+        chrome = profile / "chrome"
+        managed = chrome / "thpm-thunderbird.css"
+        self.assertEqual(managed.read_text(), source.read_text())
+        for filename in ("userChrome.css", "userContent.css"):
+            content = (chrome / filename).read_text()
+            self.assertIn("/* THPM Thunderbird hook start */", content)
+            self.assertIn('@import url("thpm-thunderbird.css");', content)
+        self.assertEqual(result.status, "applied")
+        self.assertIn(str(managed), result.changed)
+
+    def test_thunderbird_import_preserves_unrelated_usercontent_rules(self):
+        base = self.paths.home / ".thunderbird"
+        profile = base / "profile.default"
+        profile.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        source = self.paths.current_theme / "thpm-thunderbird.css"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(":root { --layout-background-0: #0c1626 !important; }\n")
+        chrome = profile / "chrome"
+        chrome.mkdir(parents=True)
+        (chrome / "userContent.css").write_text(
+            "/* my own tweak */\nbody { color: red; }\n"
+        )
+
+        apply("thunderbird", self.paths)
+
+        content = (chrome / "userContent.css").read_text()
+        self.assertIn("/* my own tweak */", content)
+        self.assertIn("body { color: red; }", content)
+        self.assertIn("/* THPM Thunderbird hook start */", content)
+
+    def test_thunderbird_profile_cannot_escape_profile_root(self):
+        generated = self.paths.current_theme / "thpm-thunderbird.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("/* generated */\n")
+        base = self.paths.home / ".thunderbird"
+        base.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=../../escape\n")
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            _thunderbird_import(self.paths, base)
+
+    def test_disabling_thunderbird_restores_both_stylesheets_and_reports_restart(self):
+        base = self.paths.home / ".thunderbird"
+        profile = base / "profile.default"
+        profile.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        source = self.paths.current_theme / "thpm-thunderbird.css"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("theme css")
+        managed = profile / "chrome/thpm-thunderbird.css"
+        managed.parent.mkdir(parents=True)
+        managed.write_text("user css")
+        apply("thunderbird", self.paths)
+        enabled = load(self.paths)
+        enabled["thunderbird"] = True
+        save(self.paths, enabled)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).set_enabled(
+                "thunderbird", False, refresh=False
+            )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["restartRequired"], ["Thunderbird"])
+        self.assertEqual(managed.read_text(), "user css")
+        self.assertFalse((profile / "chrome/userChrome.css").exists())
+        self.assertFalse((profile / "chrome/userContent.css").exists())
+        self.assertFalse(source.exists())
+
+    def _thunderbird_profile(self):
+        base = self.paths.home / ".thunderbird"
+        profile = base / "profile.default"
+        profile.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        source = self.paths.current_theme / "thpm-thunderbird.css"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("theme css")
+        return base, profile
+
+    def test_thunderbird_generated_css_scopes_every_rule_to_a_document_type(self):
+        template = (
+            Path(__file__).parents[1]
+            / "assets/templates/thpm-thunderbird.css.tpl"
+        ).read_text()
+        # The same generated stylesheet is imported into userChrome.css and
+        # userContent.css, so an unscoped rule would apply to arbitrary mail
+        # content. Strip comments, then every remaining rule must sit inside
+        # an @-moz-document block naming the documents it is meant for.
+        stripped = re.sub(r"/\*.*?\*/", "", template, flags=re.DOTALL)
+        depth = 0
+        top_level_rules = []
+        current = ""
+        for char in stripped:
+            if char == "{":
+                if depth == 0:
+                    selector = current.strip()
+                    if not selector.startswith("@-moz-document"):
+                        top_level_rules.append(selector)
+                depth += 1
+                current = ""
+            elif char == "}":
+                depth -= 1
+                current = ""
+            elif depth == 0:
+                current += char
+        self.assertEqual(top_level_rules, [], "unscoped rules leak into content")
+        self.assertIn('@-moz-document url-prefix("chrome://")', stripped)
+        self.assertIn('@-moz-document url("about:3pane"), url("about:message")', stripped)
+
+    def test_thunderbird_import_refuses_to_replace_symlinked_entrypoints(self):
+        base, profile = self._thunderbird_profile()
+        chrome = profile / "chrome"
+        chrome.mkdir()
+        real = chrome / "real-userContent.css"
+        real.write_text("user css")
+        (chrome / "userContent.css").symlink_to(real)
+        with self.assertRaises(RuntimeError) as caught:
+            _thunderbird_import(self.paths, base)
+        self.assertIn("symlink", str(caught.exception))
+        # The symlink and its target survive, and the run left nothing behind.
+        self.assertTrue((chrome / "userContent.css").is_symlink())
+        self.assertEqual(real.read_text(), "user css")
+        self.assertFalse((chrome / "userChrome.css").exists())
+        self.assertFalse((chrome / "thpm-thunderbird.css").exists())
+
+    def test_thunderbird_import_preserves_entrypoint_permissions(self):
+        base, profile = self._thunderbird_profile()
+        chrome = profile / "chrome"
+        chrome.mkdir()
+        for name in ("userChrome.css", "userContent.css"):
+            target = chrome / name
+            target.write_text("user css\n")
+            target.chmod(0o600)
+        _thunderbird_import(self.paths, base)
+        for name in ("userChrome.css", "userContent.css"):
+            self.assertEqual((chrome / name).stat().st_mode & 0o777, 0o600, name)
+
+    def test_thunderbird_malformed_content_marker_leaves_profile_untouched(self):
+        base, profile = self._thunderbird_profile()
+        chrome = profile / "chrome"
+        chrome.mkdir()
+        (chrome / "userChrome.css").write_text("chrome css\n")
+        # Only the opening marker: removing the block is impossible, and the
+        # failure must happen before userChrome.css or the managed stylesheet
+        # are written, so no partial install can go unreported.
+        (chrome / "userContent.css").write_text(
+            "/* THPM Thunderbird hook start */\ncontent css\n"
+        )
+        with self.assertRaises(ValueError):
+            _thunderbird_import(self.paths, base)
+        self.assertEqual((chrome / "userChrome.css").read_text(), "chrome css\n")
+        self.assertEqual(
+            (chrome / "userContent.css").read_text(),
+            "/* THPM Thunderbird hook start */\ncontent css\n",
+        )
+        self.assertFalse((chrome / "thpm-thunderbird.css").exists())
+
+    def test_uninstall_reports_thunderbird_restart_after_profile_cleanup(self):
+        base, profile = self._thunderbird_profile()
+        managed = profile / "chrome/thpm-thunderbird.css"
+        managed.parent.mkdir(parents=True)
+        managed.write_text("user css")
+        apply("thunderbird", self.paths)
+        enabled = load(self.paths)
+        enabled["thunderbird"] = True
+        save(self.paths, enabled)
+        assets = Path(__file__).parents[1] / "assets"
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            payload = Service(self.paths).uninstall()
+        self.assertIn("Thunderbird", payload["restartRequired"])
+        self.assertEqual(managed.read_text(), "user css")
+        self.assertFalse((profile / "chrome/userChrome.css").exists())
+        self.assertFalse((profile / "chrome/userContent.css").exists())
 
     def test_discord_cleanup_restores_displaced_theme(self):
         source = self.paths.current_theme / "thpm-vencord.theme.css"

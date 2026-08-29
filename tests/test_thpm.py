@@ -616,6 +616,19 @@ class StateTests(Sandbox):
         def substitute(match: re.Match[str]) -> str:
             expression = match.group(1).strip()
             parts = expression.split()
+            if parts and parts[0] == "gradient_start":
+                # Mirrors Omarchy's resolve_theme_ref: the referenced color
+                # wins when the palette defines it, otherwise the fallback
+                # reference does. Either way the token always renders, which
+                # is what lets a template reach an optional semantic color.
+                self.assertEqual(
+                    len(parts), 3, f"unsupported gradient_start form: {expression}"
+                )
+                _, reference, fallback = parts
+                self.assertNotIn(reference, legacy)
+                self.assertNotIn(fallback, legacy)
+                self.assertIn(fallback, CANONICAL_COLORS)
+                return CANONICAL_COLORS.get(reference, CANONICAL_COLORS[fallback])
             self.assertEqual(
                 len(parts), 1, f"test renderer needs explicit coverage for {expression}"
             )

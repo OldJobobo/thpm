@@ -4,6 +4,7 @@
 
 - Add an Experimental, opt-in Nautilus palette integration with an XDG-aware hot-reloading Python extension, atomic semantic CSS generation, optional dependency diagnostics, and guarded file restoration.
 - Add a separate Experimental GNOME accent compatibility adapter that maps semantic accents to libadwaita's named palette and restores the prior GSettings value only while THPM still owns it.
+- Theme Firefox's toolbars, urlbar, panels, sidebar, selected tab, and icons from the semantic palette instead of only the toolbox background, using the lightweight-theme custom properties Firefox consumes outside `:root[lwtheme]`, and render the accent from the theme's own accent color with a blue fallback.
 
 ## 1.0.0rc24 - 2026-08-28
 

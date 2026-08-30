@@ -146,8 +146,17 @@ class Sandbox(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         self.paths = Paths(root, root / "config", root / "data", root / "state", root / "run")
+        self.host_omarchy_guard = patch(
+            "thpm.service.run",
+            side_effect=AssertionError(
+                "sandbox test attempted to run a host Omarchy command; "
+                "pass refresh=False or stub thpm.service.run explicitly"
+            ),
+        )
+        self.host_omarchy_guard.start()
 
     def tearDown(self):
+        self.host_omarchy_guard.stop()
         self.temp.cleanup()
 
     def write_palette(self):
@@ -377,7 +386,10 @@ class StateTests(Sandbox):
         self.assertFalse(captured["cava"])
 
         assets = Path(__file__).parents[1] / "assets"
-        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}), patch(
+            "thpm.service._refresh_templates",
+            return_value=({"refreshed": False, "pending": False}, []),
+        ):
             Service(self.paths).reconcile()
         self.assertIn("cava = false", self.paths.state_file.read_text())
         self.assertFalse(self.paths.cava_opt_in_marker.exists())
@@ -4491,12 +4503,16 @@ class CavaTests(Sandbox):
         ), patch("thpm.cava.installed_version", return_value=(0, 10, 7)), patch(
             "thpm.integrations.installed_cava_version", return_value=(0, 10, 7)
         ):
-            enabled = Service(self.paths).set_enabled("cava", True, confirmed=True)
+            enabled = Service(self.paths).set_enabled(
+                "cava", True, confirmed=True, refresh=False
+            )
             self.assertTrue(cava_opt_in_completed(self.paths))
             config.write_text(config.read_text() + "\n[input]\nmethod = pipewire\n")
             disabled = Service(self.paths).set_enabled("cava", False)
             self.assertTrue(cava_opt_in_completed(self.paths))
-            reenabled = Service(self.paths).set_enabled("cava", True, confirmed=True)
+            reenabled = Service(self.paths).set_enabled(
+                "cava", True, confirmed=True, refresh=False
+            )
             disabled_again = Service(self.paths).set_enabled("cava", False)
         self.assertTrue(enabled["ok"])
         self.assertTrue(disabled["ok"])
@@ -4616,7 +4632,9 @@ class CavaTests(Sandbox):
         ), patch("thpm.cava.installed_version", return_value=(0, 10, 7)), patch(
             "thpm.integrations.installed_cava_version", return_value=(0, 10, 7)
         ), patch("thpm.service.apply_integration", side_effect=fail_apply):
-            result = Service(self.paths).set_enabled("cava", True, confirmed=True)
+            result = Service(self.paths).set_enabled(
+                "cava", True, confirmed=True, refresh=False
+            )
         self.assertFalse(result["ok"])
         self.assertEqual(config.read_text(), original)
         self.assertFalse(load(self.paths)["cava"])
@@ -6666,10 +6684,10 @@ class IntegrationTests(Sandbox):
         with patch("thpm.service._typora_process_running", return_value=True), patch(
             "thpm.integrations._reload", return_value=([], [])
         ):
-            service.set_enabled("typora", True)
+            service.set_enabled("typora", True, refresh=False)
             apply("typora", self.paths)
             disabled = service.set_enabled("typora", False)
-            service.set_enabled("typora", True)
+            service.set_enabled("typora", True, refresh=False)
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text(":root { --bg-color: #101820; }\n")
             apply("typora", self.paths)

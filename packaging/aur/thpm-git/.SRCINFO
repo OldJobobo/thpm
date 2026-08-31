@@ -18,6 +18,9 @@ pkgbase = thpm-git
 	depends = python-textual>=8.2.8
 	depends = python-textual<9
 	optdepends = omarchy: Omarchy 4 host integration (required for installation and theme operations)
+	optdepends = glib2: GNOME accent compatibility through gsettings
+	optdepends = nautilus: Nautilus palette integration
+	optdepends = nautilus-python: Nautilus Python extension loader
 	provides = thpm
 	provides = theme-hook-plugin-manager
 	conflicts = thpm

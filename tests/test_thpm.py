@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import fcntl
 import hashlib
@@ -17,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +27,8 @@ from unittest.mock import Mock, call, patch
 from rich.console import Console
 from textual.widgets import Button, Link
 
+from thpm import gnome_accent
+from thpm import integrations as integration_adapters
 from thpm import palette, ui
 from thpm import update as updater
 from thpm.audit import (
@@ -154,8 +158,17 @@ class Sandbox(unittest.TestCase):
             ),
         )
         self.host_omarchy_guard.start()
+        self.host_ui_omarchy_guard = patch(
+            "thpm.ui.run",
+            side_effect=AssertionError(
+                "sandbox test attempted to run a host Omarchy UI command; "
+                "stub thpm.ui.run explicitly"
+            ),
+        )
+        self.host_ui_omarchy_guard.start()
 
     def tearDown(self):
+        self.host_ui_omarchy_guard.stop()
         self.host_omarchy_guard.stop()
         self.temp.cleanup()
 
@@ -4640,6 +4653,870 @@ class CavaTests(Sandbox):
         self.assertFalse(load(self.paths)["cava"])
         self.assertFalse(cava_opt_in_completed(self.paths))
         self.assertFalse(load(self.paths)["fish"])
+
+
+class GsettingsFake:
+    def __init__(self, value: str = "blue") -> None:
+        self.value = value
+        self.calls: list[list[str]] = []
+        self.writable = True
+        self.has_key = True
+        self.fail_set = False
+        self.fail_set_calls: set[int] = set()
+        self.set_count = 0
+
+    def __call__(self, command, **_kwargs):
+        args = list(command)
+        self.calls.append(args)
+        operation = args[1]
+        if operation == "list-keys":
+            output = "accent-color\n" if self.has_key else "color-scheme\n"
+        elif operation == "writable":
+            output = "true\n" if self.writable else "false\n"
+        elif operation == "get":
+            output = repr(self.value) + "\n"
+        elif operation == "set":
+            self.set_count += 1
+            if self.fail_set or self.set_count in self.fail_set_calls:
+                return subprocess.CompletedProcess(args, 1, "", "set failed")
+            self.value = args[-1]
+            output = ""
+        else:
+            return subprocess.CompletedProcess(args, 1, "", "unsupported")
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+
+class NautilusPaletteTests(Sandbox):
+    def test_registry_defaults_and_optional_dependency_readiness(self):
+        plugins = {plugin.id: plugin for plugin in PLUGINS}
+        self.assertFalse(plugins["nautilus-palette"].default_enabled)
+        self.assertFalse(plugins["gnome-accent-compat"].default_enabled)
+        self.assertEqual(plugins["nautilus-palette"].support_status, "experimental")
+        with patch("thpm.integrations.nautilus_python_available", return_value=False):
+            ready, missing, _warnings = inspect_readiness(
+                "nautilus-palette", self.paths, lambda _command: None
+            )
+        self.assertFalse(ready)
+        self.assertIn("nautilus", missing)
+        self.assertIn("nautilus-python extension loader", missing)
+
+    def test_apply_is_xdg_aware_atomic_and_unchanged(self):
+        self.write_palette()
+        self.paths.current_theme_name.write_text("Dune\n")
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ,
+            {"THPM_ASSET_DIR": str(Path(__file__).parents[1] / "assets")},
+        ):
+            first = apply("nautilus-palette", self.paths)
+            second = apply("nautilus-palette", self.paths)
+        extension = self.paths.data_home / "nautilus-python/extensions/omarchy_palette.py"
+        css = (self.paths.cache_root or self.paths.home / ".cache") / "thpm/nautilus/nautilus.css"
+        self.assertEqual(first.status, "applied")
+        self.assertEqual(first.restartRequired, ["Nautilus"])
+        self.assertEqual(second.status, "unchanged")
+        self.assertEqual(second.restartRequired, [])
+        self.assertIn("XDG_CACHE_HOME", extension.read_text())
+        self.assertIn("@define-color window_bg_color #111111;", css.read_text())
+        self.assertIn("Omarchy theme 'Dune'", css.read_text())
+        self.assertEqual(css.stat().st_mode & 0o777, 0o644)
+
+    def test_generated_css_sanitizes_comment_terminators_in_theme_name(self):
+        self.write_palette()
+        self.paths.current_theme_name.write_text("bad */ selector { color: red; }\n")
+        with patch("thpm.palette.shutil.which", return_value=None):
+            rendered = integration_adapters.render_nautilus_css(self.paths)
+        self.assertNotIn("bad */", rendered)
+        self.assertIn("bad * / selector", rendered)
+        self.assertEqual(rendered.count("*/"), 1)
+
+    def test_failed_first_install_restores_the_entire_preapply_surface(self):
+        self.write_palette()
+        transaction_paths = integration_adapters._nautilus_transaction_paths(
+            self.paths
+        )
+        before = {
+            path: integration_adapters._snapshot_path(path)
+            for path in transaction_paths
+        }
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ,
+            {"THPM_ASSET_DIR": str(Path(__file__).parents[1] / "assets")},
+        ), patch(
+            "thpm.integrations._install_optional_asset",
+            side_effect=OSError("simulated initial install failure"),
+        ), self.assertRaisesRegex(OSError, "simulated initial install failure"):
+            apply("nautilus-palette", self.paths)
+        self.assertEqual(
+            {path: integration_adapters._snapshot_path(path) for path in transaction_paths},
+            before,
+        )
+
+    def test_failed_css_install_rolls_back_extension_takeover(self):
+        self.write_palette()
+        extension = self.paths.data_home / "nautilus-python/extensions/omarchy_palette.py"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("prior extension\n")
+        original_install = integration_adapters._install_optional_asset
+
+        def fail_css(paths, key, source, target, **kwargs):
+            if key == "nautilus-palette-css":
+                raise OSError("simulated CSS install failure")
+            return original_install(paths, key, source, target, **kwargs)
+
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ,
+            {"THPM_ASSET_DIR": str(Path(__file__).parents[1] / "assets")},
+        ), patch(
+            "thpm.integrations._install_optional_asset", side_effect=fail_css
+        ), self.assertRaisesRegex(OSError, "simulated CSS install failure"):
+            apply("nautilus-palette", self.paths)
+
+        self.assertEqual(extension.read_text(), "prior extension\n")
+        self.assertFalse(
+            (self.paths.managed_asset_state_dir / "nautilus-palette-extension.json").exists()
+        )
+        self.assertFalse(
+            (self.paths.managed_asset_state_dir / "nautilus-palette-css.legacy-checked").exists()
+        )
+
+    def test_target_rollback_failure_retains_recoverable_metadata(self):
+        self.write_palette()
+        assets = Path(__file__).parents[1] / "assets"
+        extension = self.paths.data_home / "nautilus-python/extensions/omarchy_palette.py"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("prior extension\n")
+        original_install = integration_adapters._install_optional_asset
+        original_restore = integration_adapters._restore_path_snapshot
+
+        def fail_css(paths, key, source, target, **kwargs):
+            if key == "nautilus-palette-css":
+                raise OSError("simulated CSS install failure")
+            return original_install(paths, key, source, target, **kwargs)
+
+        def fail_extension_restore(path, snapshot):
+            if path == extension:
+                raise OSError("simulated extension rollback failure")
+            return original_restore(path, snapshot)
+
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ, {"THPM_ASSET_DIR": str(assets)}
+        ), patch(
+            "thpm.integrations._install_optional_asset", side_effect=fail_css
+        ), patch(
+            "thpm.integrations._restore_path_snapshot",
+            side_effect=fail_extension_restore,
+        ), self.assertRaises(ApplyFailure) as raised:
+            apply("nautilus-palette", self.paths)
+
+        state, backup = integration_adapters._asset_state_paths(
+            self.paths, "nautilus-palette-extension"
+        )
+        saved = integration_adapters._read_asset_state(state)
+        self.assertIsNotNone(saved)
+        self.assertEqual(backup.read_text(), "prior extension\n")
+        self.assertNotEqual(extension.read_text(), "prior extension\n")
+        self.assertIn(str(extension), raised.exception.changed)
+        self.assertIn(str(state), raised.exception.changed)
+        self.assertIn(str(backup), raised.exception.changed)
+        self.assertEqual(raised.exception.restart_required, ["Nautilus"])
+        self.assertIn("retained for recovery", str(raised.exception.warnings))
+
+        cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
+            self.paths, "nautilus-palette"
+        )
+        self.assertEqual(cleanup_warnings, [])
+        self.assertIn(str(extension), cleanup_changed)
+        self.assertEqual(extension.read_text(), "prior extension\n")
+        self.assertFalse(state.exists())
+        self.assertFalse(backup.exists())
+
+    def test_service_reports_incomplete_rollback_paths_and_restart(self):
+        self.write_palette()
+        assets = Path(__file__).parents[1] / "assets"
+        extension = self.paths.data_home / "nautilus-python/extensions/omarchy_palette.py"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("prior extension\n")
+        original_install = integration_adapters._install_optional_asset
+        original_restore = integration_adapters._restore_path_snapshot
+
+        def fail_css(paths, key, source, target, **kwargs):
+            if key == "nautilus-palette-css":
+                raise OSError("simulated CSS install failure")
+            return original_install(paths, key, source, target, **kwargs)
+
+        def fail_extension_restore(path, snapshot):
+            if path == extension:
+                raise OSError("simulated extension rollback failure")
+            return original_restore(path, snapshot)
+
+        enabled = {plugin.id: False for plugin in PLUGINS}
+        enabled["nautilus-palette"] = True
+        save(self.paths, enabled)
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ, {"THPM_ASSET_DIR": str(assets)}
+        ), patch(
+            "thpm.integrations.inspect_readiness", return_value=(True, [], [])
+        ), patch(
+            "thpm.integrations._install_optional_asset", side_effect=fail_css
+        ), patch(
+            "thpm.integrations._restore_path_snapshot",
+            side_effect=fail_extension_restore,
+        ), patch(
+            "thpm.service._notify_restart_required", return_value=False
+        ):
+            payload = Service(self.paths).hook_run("theme-set", ["test-theme"])
+
+        result = next(
+            item for item in payload["results"] if item["id"] == "nautilus-palette"
+        )
+        state, backup = integration_adapters._asset_state_paths(
+            self.paths, "nautilus-palette-extension"
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(result["status"], "failed")
+        self.assertIn(str(extension), result["changed"])
+        self.assertIn(str(state), result["changed"])
+        self.assertIn(str(backup), result["changed"])
+        self.assertEqual(result["restartRequired"], ["Nautilus"])
+        self.assertEqual(payload["restartRequired"], ["Nautilus"])
+        self.assertIn("retained for recovery", str(result["warnings"]))
+        cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
+            self.paths, "nautilus-palette"
+        )
+        self.assertEqual(cleanup_warnings, [])
+        self.assertIn(str(extension), cleanup_changed)
+        self.assertEqual(extension.read_text(), "prior extension\n")
+
+    def _assert_reapply_metadata_failure_recovers_user_baseline(
+        self, failed_metadata: str
+    ) -> None:
+        self.write_palette()
+        assets = Path(__file__).parents[1] / "assets"
+        css = (self.paths.cache_root or self.paths.home / ".cache") / "thpm/nautilus/nautilus.css"
+        css.parent.mkdir(parents=True)
+        css.write_text("displaced user css\n")
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ, {"THPM_ASSET_DIR": str(assets)}
+        ):
+            apply("nautilus-palette", self.paths)
+        managed_before = css.read_bytes()
+        state, backup = integration_adapters._asset_state_paths(
+            self.paths, "nautilus-palette-css"
+        )
+        state_before = state.read_bytes()
+        backup_before = backup.read_bytes()
+        marker = integration_adapters._asset_legacy_marker(
+            self.paths, "nautilus-palette-css"
+        )
+        failed_path = {"backup": backup, "state": state}[failed_metadata]
+        colors = (self.paths.current_theme / "colors.toml").read_text()
+        (self.paths.current_theme / "colors.toml").write_text(
+            colors.replace('#4477cc', '#1177aa')
+        )
+        original_install = integration_adapters._install_optional_asset
+        original_restore = integration_adapters._restore_path_snapshot
+
+        def fail_after_css(paths, key, source, target, **kwargs):
+            changed = original_install(paths, key, source, target, **kwargs)
+            if key == "nautilus-palette-css":
+                raise OSError("simulated post-CSS failure")
+            return changed
+
+        def fail_metadata_restore(path, snapshot):
+            if path == failed_path:
+                raise OSError(f"simulated {failed_metadata} restoration failure")
+            return original_restore(path, snapshot)
+
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ, {"THPM_ASSET_DIR": str(assets)}
+        ), patch(
+            "thpm.integrations._install_optional_asset", side_effect=fail_after_css
+        ), patch(
+            "thpm.integrations._restore_path_snapshot",
+            side_effect=fail_metadata_restore,
+        ), self.assertRaises(ApplyFailure) as raised:
+            apply("nautilus-palette", self.paths)
+
+        saved = integration_adapters._read_asset_state(state)
+        self.assertIsNotNone(saved)
+        self.assertEqual(css.read_bytes(), managed_before)
+        self.assertEqual(state.read_bytes(), state_before)
+        self.assertEqual(backup.read_bytes(), backup_before)
+        self.assertTrue(marker.is_file())
+        self.assertEqual(
+            saved["managedSha256"], hashlib.sha256(managed_before).hexdigest()
+        )
+        self.assertEqual(saved["managedMode"], css.stat().st_mode & 0o777)
+        self.assertEqual(
+            saved["priorSha256"], hashlib.sha256(backup_before).hexdigest()
+        )
+        self.assertIn(str(failed_path), raised.exception.changed)
+        self.assertIn("retained for recovery", str(raised.exception.warnings))
+        self.assertEqual(raised.exception.restart_required, ["Nautilus"])
+
+        cleanup_changed, cleanup_warnings = cleanup_managed_outputs(
+            self.paths, "nautilus-palette"
+        )
+        self.assertEqual(cleanup_warnings, [])
+        self.assertIn(str(css), cleanup_changed)
+        self.assertEqual(css.read_text(), "displaced user css\n")
+        self.assertFalse(state.exists())
+        self.assertFalse(backup.exists())
+
+    def test_reapply_backup_rollback_failure_preserves_user_baseline(self):
+        self._assert_reapply_metadata_failure_recovers_user_baseline("backup")
+
+    def test_reapply_state_rollback_failure_preserves_user_baseline(self):
+        self._assert_reapply_metadata_failure_recovers_user_baseline("state")
+
+    def test_failed_second_reapply_restores_targets_and_state_exactly(self):
+        self.write_palette()
+        assets = Path(__file__).parents[1] / "assets"
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ, {"THPM_ASSET_DIR": str(assets)}
+        ):
+            apply("nautilus-palette", self.paths)
+        transaction_paths = integration_adapters._nautilus_transaction_paths(
+            self.paths
+        )
+        before = {
+            path: integration_adapters._snapshot_path(path)
+            for path in transaction_paths
+        }
+        colors = (self.paths.current_theme / "colors.toml").read_text()
+        (self.paths.current_theme / "colors.toml").write_text(
+            colors.replace('#4477cc', '#1177aa')
+        )
+        original_install = integration_adapters._install_optional_asset
+
+        def fail_after_css(paths, key, source, target, **kwargs):
+            changed = original_install(paths, key, source, target, **kwargs)
+            if key == "nautilus-palette-css":
+                raise OSError("simulated post-CSS failure")
+            return changed
+
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ, {"THPM_ASSET_DIR": str(assets)}
+        ), patch(
+            "thpm.integrations._install_optional_asset", side_effect=fail_after_css
+        ), self.assertRaisesRegex(OSError, "simulated post-CSS failure"):
+            apply("nautilus-palette", self.paths)
+        self.assertEqual(
+            {path: integration_adapters._snapshot_path(path) for path in transaction_paths},
+            before,
+        )
+
+    def test_disable_restores_displaced_files_and_preserves_later_edit(self):
+        self.write_palette()
+        extension = self.paths.data_home / "nautilus-python/extensions/omarchy_palette.py"
+        css = (self.paths.cache_root or self.paths.home / ".cache") / "thpm/nautilus/nautilus.css"
+        extension.parent.mkdir(parents=True)
+        css.parent.mkdir(parents=True)
+        extension.write_text("prior extension\n")
+        css.write_text("prior css\n")
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ,
+            {"THPM_ASSET_DIR": str(Path(__file__).parents[1] / "assets")},
+        ):
+            apply("nautilus-palette", self.paths)
+        extension.write_text("user extension edit\n")
+        enabled = load(self.paths)
+        enabled["nautilus-palette"] = True
+        save(self.paths, enabled)
+
+        disabled = Service(self.paths).set_enabled(
+            "nautilus-palette", False, refresh=False
+        )
+
+        self.assertTrue(disabled["ok"])
+        self.assertEqual(extension.read_text(), "user extension edit\n")
+        self.assertEqual(css.read_text(), "prior css\n")
+        self.assertIn("preserved user-modified file", str(disabled["warnings"]))
+        self.assertEqual(disabled["restartRequired"], [])
+
+    def test_disable_preserves_preexisting_byte_identical_targets(self):
+        self.write_palette()
+        assets = Path(__file__).parents[1] / "assets"
+        extension = self.paths.data_home / "nautilus-python/extensions/omarchy_palette.py"
+        css = (self.paths.cache_root or self.paths.home / ".cache") / "thpm/nautilus/nautilus.css"
+        extension.parent.mkdir(parents=True)
+        css.parent.mkdir(parents=True)
+        extension.write_bytes((assets / "nautilus/omarchy_palette.py").read_bytes())
+        with patch("thpm.palette.shutil.which", return_value=None):
+            css.write_text(integration_adapters.render_nautilus_css(self.paths))
+        expected_extension = extension.read_bytes()
+        expected_css = css.read_bytes()
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ, {"THPM_ASSET_DIR": str(assets)}
+        ):
+            applied = apply("nautilus-palette", self.paths)
+        enabled = load(self.paths)
+        enabled["nautilus-palette"] = True
+        save(self.paths, enabled)
+        disabled = Service(self.paths).set_enabled(
+            "nautilus-palette", False, refresh=False
+        )
+        self.assertEqual(applied.status, "unchanged")
+        self.assertTrue(disabled["ok"])
+        self.assertEqual(extension.read_bytes(), expected_extension)
+        self.assertEqual(css.read_bytes(), expected_css)
+
+    def test_uninstall_removes_owned_files_and_reports_nautilus_restart(self):
+        self.write_palette()
+        with patch("thpm.palette.shutil.which", return_value=None), patch.dict(
+            os.environ,
+            {"THPM_ASSET_DIR": str(Path(__file__).parents[1] / "assets")},
+        ), patch(
+            "thpm.service.ui.remove", return_value={"installed": False}
+        ):
+            apply("nautilus-palette", self.paths)
+            result = Service(self.paths).uninstall()
+        extension = self.paths.data_home / "nautilus-python/extensions/omarchy_palette.py"
+        css = (self.paths.cache_root or self.paths.home / ".cache") / "thpm/nautilus/nautilus.css"
+        self.assertTrue(result["ok"])
+        self.assertFalse(extension.exists())
+        self.assertFalse(css.exists())
+        self.assertEqual(result["restartRequired"], ["Nautilus"])
+
+    def test_extension_contract_compiles_and_clears_css_on_delete(self):
+        root = Path(__file__).parents[1]
+        extension = root / "assets/nautilus/omarchy_palette.py"
+        tree = ast.parse(extension.read_text(), filename=str(extension))
+        provider = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "OmarchyPalette"
+        )
+        methods = {
+            node.name for node in provider.body if isinstance(node, ast.FunctionDef)
+        }
+        self.assertIn("get_file_items", methods)
+        self.assertIn("get_background_items", methods)
+        compile(extension.read_text(), str(extension), "exec")
+
+        probe = r'''
+import json, os, runpy, sys, tempfile, types
+class GObjectBase: pass
+class MenuProvider: pass
+class Display:
+    @staticmethod
+    def get_default(): return None
+class FileMonitorEvent:
+    CHANGED=1; CREATED=2; RENAMED=3; DELETED=4; MOVED_OUT=5; CHANGES_DONE_HINT=6
+class File:
+    def __init__(self, path): self.path = path
+    def get_path(self): return self.path
+    @staticmethod
+    def new_for_path(path): return File(path)
+callbacks = []
+GLib = types.SimpleNamespace(SOURCE_REMOVE=False, Error=Exception,
+    timeout_add=lambda delay, callback: callbacks.append((delay, callback)) or len(callbacks),
+    source_remove=lambda source: None)
+Gdk = types.SimpleNamespace(Display=Display)
+Gio = types.SimpleNamespace(File=File, FileMonitorEvent=FileMonitorEvent,
+    FileMonitorFlags=types.SimpleNamespace(NONE=0))
+GObject = types.SimpleNamespace(GObject=GObjectBase)
+Gtk = types.SimpleNamespace(CssProvider=object, StyleContext=object,
+    STYLE_PROVIDER_PRIORITY_USER=1)
+Nautilus = types.SimpleNamespace(MenuProvider=MenuProvider)
+gi = types.ModuleType("gi")
+gi.require_version = lambda *args: None
+repository = types.ModuleType("gi.repository")
+for name, value in {"GLib":GLib,"Gdk":Gdk,"Gio":Gio,"GObject":GObject,"Gtk":Gtk,"Nautilus":Nautilus}.items():
+    setattr(repository, name, value)
+sys.modules.update({"gi":gi, "gi.repository":repository})
+namespace = runpy.run_path(sys.argv[1])
+runtime = namespace["_reload_now"].__globals__
+class Provider:
+    def __init__(self): self.cleared = False
+    def load_from_data(self, data): self.cleared = data == b""
+provider = Provider()
+runtime["_provider"] = provider
+runtime["CSS_PATH"] = os.path.join(tempfile.mkdtemp(), "missing.css")
+runtime["CSS_NAME"] = "missing.css"
+namespace["_reload_now"]()
+callbacks.clear()
+namespace["_on_css_dir_changed"](None, File(runtime["CSS_PATH"]), None, FileMonitorEvent.DELETED)
+print(json.dumps({"cleared": provider.cleared, "scheduled": len(callbacks)}))
+'''
+        completed = subprocess.run(
+            [sys.executable, "-c", probe, str(extension)],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), {"cleared": True, "scheduled": 1})
+
+    def test_extension_loads_with_real_gi_when_available(self):
+        extension = Path(__file__).parents[1] / "assets/nautilus/omarchy_palette.py"
+        probe = (
+            "import gi, importlib.util; "
+            "gi.require_version('Gtk','4.0'); "
+            "gi.require_version('Gdk','4.0'); "
+            "gi.require_version('Nautilus','4.1'); "
+            f"spec=importlib.util.spec_from_file_location('thpm_nautilus_palette',{str(extension)!r}); "
+            "module=importlib.util.module_from_spec(spec); "
+            "spec.loader.exec_module(module); "
+            "provider=module.OmarchyPalette(); "
+            "assert provider.get_file_items([])==[]; "
+            "assert provider.get_background_items(None)==[]"
+        )
+        environment = os.environ.copy()
+        for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
+            environment.pop(key, None)
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+            env=environment,
+        )
+        unavailable = (
+            "No module named 'gi'",
+            "Namespace Nautilus not available",
+            "Typelib file for namespace 'Nautilus'",
+        )
+        if completed.returncode != 0 and any(
+            marker in completed.stderr for marker in unavailable
+        ):
+            self.skipTest("PyGObject/Nautilus typelib is unavailable")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_install_check_requires_nautilus_runtime_assets(self):
+        root = Path(self.temp.name) / "assets"
+        for directory in ("templates", "hooks", "qml", "spicetify", "nautilus"):
+            (root / directory).mkdir(parents=True)
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(root)}), patch(
+            "thpm.service.capabilities"
+        ) as caps:
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            result = Service(self.paths).install_check()
+        self.assertFalse(result["ok"])
+        messages = [str(error["message"]) for error in result["errors"]]
+        self.assertIn(
+            f"packaged asset missing: {root / 'nautilus/omarchy_palette.py'}",
+            messages,
+        )
+        self.assertIn(
+            f"packaged asset missing: {root / 'nautilus/LICENSE'}", messages
+        )
+        self.assertIn(
+            f"packaged asset missing: {root / 'nautilus/UPSTREAM.md'}", messages
+        )
+        self.assertNotIn("packaged asset directory missing", " ".join(messages))
+
+        (root / "qml").rmdir()
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(root)}), patch(
+            "thpm.service.capabilities"
+        ) as caps:
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            missing_directory = Service(self.paths).install_check()
+        self.assertIn(
+            f"packaged asset directory missing: {root / 'qml'}",
+            [str(error["message"]) for error in missing_directory["errors"]],
+        )
+
+    def test_packaged_license_and_pinned_provenance_are_retained(self):
+        root = Path(__file__).parents[1]
+        license_text = (root / "assets/nautilus/LICENSE").read_text()
+        upstream = (root / "assets/nautilus/UPSTREAM.md").read_text()
+        package = (root / "pyproject.toml").read_text()
+        self.assertIn("Copyright (c) 2024 JJDizz1L", license_text)
+        self.assertIn("Permission is hereby granted", license_text)
+        self.assertIn("7324544a1dad9602d1c3195df3c984ed2223750a", upstream)
+        self.assertIn('"share/thpm/nautilus"', package)
+        self.assertIn('"assets/nautilus/LICENSE"', package)
+        stable = (root / "packaging/aur/thpm/PKGBUILD").read_text()
+        stable_metadata = (root / "packaging/aur/thpm/.SRCINFO").read_text()
+        self.assertNotIn("nautilus-python", stable)
+        self.assertNotIn('assets/nautilus/*', stable)
+        self.assertNotIn("nautilus-python", stable_metadata)
+        vcs = (root / "packaging/aur/thpm-git/PKGBUILD").read_text()
+        vcs_metadata = (root / "packaging/aur/thpm-git/.SRCINFO").read_text()
+        self.assertIn("glib2: GNOME accent compatibility through gsettings", vcs)
+        self.assertIn("nautilus-python: Nautilus Python extension loader", vcs)
+        self.assertIn('assets/nautilus/*', vcs)
+        self.assertIn("LICENSE.paint-omarchy-nautilus", vcs)
+        self.assertIn("glib2: GNOME accent compatibility through gsettings", vcs_metadata)
+        self.assertIn("nautilus-python: Nautilus Python extension loader", vcs_metadata)
+
+    def test_built_wheel_contains_nautilus_assets(self):
+        root = Path(__file__).parents[1]
+        output = Path(self.temp.name) / "wheel"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "build",
+                "--wheel",
+                "--no-isolation",
+                "--outdir",
+                str(output),
+                str(root),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if completed.returncode != 0 and "No module named build" in completed.stderr:
+            self.skipTest("python-build is unavailable")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        wheel = next(output.glob("thpm-*.whl"))
+        with zipfile.ZipFile(wheel) as archive:
+            names = archive.namelist()
+        for suffix in (
+            "share/thpm/nautilus/omarchy_palette.py",
+            "share/thpm/nautilus/LICENSE",
+            "share/thpm/nautilus/UPSTREAM.md",
+        ):
+            self.assertTrue(any(name.endswith(suffix) for name in names), suffix)
+
+
+class GnomeAccentCompatTests(Sandbox):
+    def setUp(self):
+        super().setUp()
+        self.desktop_session = patch.dict(
+            os.environ, {"DBUS_SESSION_BUS_ADDRESS": "test-session"}
+        )
+        self.desktop_session.start()
+
+    def tearDown(self):
+        self.desktop_session.stop()
+        super().tearDown()
+
+    def test_readiness_requires_session_schema_key_and_writable_value(self):
+        fake = GsettingsFake()
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ):
+            ready, missing, _warnings = inspect_readiness(
+                "gnome-accent-compat", self.paths, lambda _command: "/usr/bin/gsettings"
+            )
+        self.assertFalse(ready)
+        self.assertIn("desktop DBus session", missing[0])
+
+        fake.writable = False
+        with patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": "test"}), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ):
+            ready, missing, _warnings = inspect_readiness(
+                "gnome-accent-compat", self.paths, lambda _command: "/usr/bin/gsettings"
+            )
+        self.assertFalse(ready)
+        self.assertIn("writable GSettings key", missing[0])
+
+    def test_apply_unchanged_and_disable_restore_prior_accent(self):
+        self.write_palette()
+        colors = (self.paths.current_theme / "colors.toml").read_text()
+        (self.paths.current_theme / "colors.toml").write_text(
+            colors + 'accent = "#dd3344"\n'
+        )
+        fake = GsettingsFake("blue")
+        with patch("thpm.palette.shutil.which", return_value=None), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ):
+            first = apply("gnome-accent-compat", self.paths)
+            second = apply("gnome-accent-compat", self.paths)
+            enabled = load(self.paths)
+            enabled["gnome-accent-compat"] = True
+            save(self.paths, enabled)
+            disabled = Service(self.paths).set_enabled(
+                "gnome-accent-compat", False, refresh=False
+            )
+        self.assertEqual(first.status, "applied")
+        self.assertEqual(second.status, "unchanged")
+        self.assertEqual(fake.value, "blue")
+        self.assertTrue(disabled["ok"])
+        self.assertFalse(
+            (self.paths.managed_asset_state_dir / "gnome-accent-compat.json").exists()
+        )
+
+    def test_failed_initial_set_removes_new_restoration_state(self):
+        self.write_palette()
+        colors = (self.paths.current_theme / "colors.toml").read_text()
+        (self.paths.current_theme / "colors.toml").write_text(
+            colors + 'accent = "#dd3344"\n'
+        )
+        fake = GsettingsFake("blue")
+        fake.fail_set = True
+        with patch("thpm.palette.shutil.which", return_value=None), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ), self.assertRaisesRegex(RuntimeError, "set failed"):
+            apply("gnome-accent-compat", self.paths)
+        self.assertEqual(fake.value, "blue")
+        self.assertFalse(
+            (self.paths.managed_asset_state_dir / "gnome-accent-compat.json").exists()
+        )
+
+    def test_prepared_transition_recovers_as_not_attempted(self):
+        self.write_palette()
+        colors = (self.paths.current_theme / "colors.toml").read_text()
+        (self.paths.current_theme / "colors.toml").write_text(
+            colors + 'accent = "#dd3344"\n'
+        )
+        state = self.paths.managed_asset_state_dir / "gnome-accent-compat.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({
+            "version": 2,
+            "schema": "org.gnome.desktop.interface",
+            "key": "accent-color",
+            "phase": "prepared",
+            "prior": "blue",
+            "managed": "blue",
+            "pendingFrom": "blue",
+            "pendingTo": "red",
+            "hadOwnership": False,
+        }))
+        fake = GsettingsFake("blue")
+        with patch("thpm.palette.shutil.which", return_value=None), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ):
+            result = apply("gnome-accent-compat", self.paths)
+        saved = json.loads(state.read_text())
+        self.assertEqual(saved["phase"], "committed")
+        self.assertEqual(saved["managed"], fake.value)
+        self.assertEqual(fake.set_count, 1)
+        self.assertIn(str(state), result.changed)
+
+    def test_may_have_succeeded_transition_recovers_then_cleanup_restores(self):
+        self.write_palette()
+        state = self.paths.managed_asset_state_dir / "gnome-accent-compat.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({
+            "version": 2,
+            "schema": "org.gnome.desktop.interface",
+            "key": "accent-color",
+            "phase": "may-have-succeeded",
+            "prior": "blue",
+            "managed": "blue",
+            "pendingFrom": "blue",
+            "pendingTo": "red",
+            "hadOwnership": False,
+        }))
+        fake = GsettingsFake("red")
+        with patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ):
+            changed, warnings = gnome_accent.cleanup(self.paths)
+        self.assertEqual(warnings, [])
+        self.assertEqual(fake.value, "blue")
+        self.assertFalse(state.exists())
+        self.assertIn(str(state), changed)
+
+    def test_pretransition_state_write_failure_does_not_mutate_setting(self):
+        self.write_palette()
+        fake = GsettingsFake("blue")
+        with patch("thpm.palette.shutil.which", return_value=None), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ), patch(
+            "thpm.gnome_accent._write_state",
+            side_effect=OSError("simulated pending-state write failure"),
+        ), self.assertRaisesRegex(OSError, "pending-state write failure"):
+            apply("gnome-accent-compat", self.paths)
+        self.assertEqual(fake.value, "blue")
+        self.assertEqual(fake.set_count, 0)
+
+    def test_state_commit_and_setting_rollback_failure_retains_pending_state(self):
+        self.write_palette()
+        colors = (self.paths.current_theme / "colors.toml").read_text()
+        (self.paths.current_theme / "colors.toml").write_text(
+            colors + 'accent = "#dd3344"\n'
+        )
+        fake = GsettingsFake("blue")
+        fake.fail_set_calls.add(2)
+        original_write = gnome_accent._write_state
+        write_count = 0
+
+        def fail_commit(path, saved):
+            nonlocal write_count
+            write_count += 1
+            if write_count == 3:
+                raise OSError("simulated committed-state write failure")
+            return original_write(path, saved)
+
+        with patch("thpm.palette.shutil.which", return_value=None), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ), patch(
+            "thpm.gnome_accent._write_state", side_effect=fail_commit
+        ), self.assertRaisesRegex(RuntimeError, "rollback.*also failed"):
+            apply("gnome-accent-compat", self.paths)
+        state = self.paths.managed_asset_state_dir / "gnome-accent-compat.json"
+        saved = json.loads(state.read_text())
+        self.assertEqual(saved["phase"], "may-have-succeeded")
+        self.assertEqual(saved["pendingFrom"], "blue")
+        self.assertEqual(saved["pendingTo"], fake.value)
+
+    def test_pending_transition_with_unrelated_current_value_fails_closed(self):
+        self.write_palette()
+        state = self.paths.managed_asset_state_dir / "gnome-accent-compat.json"
+        state.parent.mkdir(parents=True)
+        pending = {
+            "version": 2,
+            "schema": "org.gnome.desktop.interface",
+            "key": "accent-color",
+            "phase": "may-have-succeeded",
+            "prior": "blue",
+            "managed": "blue",
+            "pendingFrom": "blue",
+            "pendingTo": "red",
+            "hadOwnership": False,
+        }
+        state.write_text(json.dumps(pending))
+        fake = GsettingsFake("pink")
+        with patch("thpm.gnome_accent.subprocess.run", side_effect=fake), self.assertRaisesRegex(
+            RuntimeError, "transition is unresolved"
+        ):
+            apply("gnome-accent-compat", self.paths)
+        self.assertEqual(json.loads(state.read_text()), pending)
+        self.assertEqual(fake.set_count, 0)
+
+    def test_user_accent_change_is_preserved_on_apply_and_uninstall(self):
+        self.write_palette()
+        fake = GsettingsFake("blue")
+        with patch("thpm.palette.shutil.which", return_value=None), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ), patch(
+            "thpm.service.ui.remove", return_value={"installed": False}
+        ):
+            apply("gnome-accent-compat", self.paths)
+            managed = fake.value
+            fake.value = "pink" if managed != "pink" else "green"
+            preserved_apply = apply("gnome-accent-compat", self.paths)
+            result = Service(self.paths).uninstall()
+        self.assertEqual(fake.value, "pink" if managed != "pink" else "green")
+        self.assertIn("preserved user-modified GNOME accent", str(preserved_apply.warnings))
+        self.assertIn("preserved user-modified GNOME accent", str(result["warnings"]))
+        self.assertTrue(result["ok"])
+
+    def test_cleanup_fails_closed_without_session_access(self):
+        self.write_palette()
+        fake = GsettingsFake("blue")
+        with patch("thpm.palette.shutil.which", return_value=None), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=fake
+        ):
+            apply("gnome-accent-compat", self.paths)
+        enabled = load(self.paths)
+        enabled["gnome-accent-compat"] = True
+        save(self.paths, enabled)
+        with patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": ""}), patch(
+            "thpm.gnome_accent.subprocess.run", side_effect=OSError("no session")
+        ):
+            disabled = Service(self.paths).set_enabled(
+                "gnome-accent-compat", False, refresh=False
+            )
+        self.assertFalse(disabled["ok"])
+        self.assertTrue(disabled["cleanupIncomplete"])
+        self.assertTrue(
+            (self.paths.managed_asset_state_dir / "gnome-accent-compat.json").exists()
+        )
 
 
 class IntegrationTests(Sandbox):

@@ -178,6 +178,19 @@ class Sandbox(unittest.TestCase):
         (self.paths.current_theme / "colors.toml").write_text("\n".join(lines) + "\n")
 
 
+class PathsTests(Sandbox):
+    def test_empty_xdg_cache_home_uses_absolute_home_fallback(self):
+        with patch.dict(
+            os.environ,
+            {"HOME": str(self.paths.home), "XDG_CACHE_HOME": ""},
+            clear=False,
+        ):
+            discovered = Paths.discover()
+
+        self.assertEqual(discovered.cache_root, self.paths.home / ".cache")
+        self.assertTrue(discovered.cache_root.is_absolute())
+
+
 class PaletteTests(Sandbox):
     def test_accepts_quattro_semantic_palette_without_host_resolver(self):
         self.write_palette()
@@ -5127,6 +5140,7 @@ for name, value in {"GLib":GLib,"Gdk":Gdk,"Gio":Gio,"GObject":GObject,"Gtk":Gtk,
 sys.modules.update({"gi":gi, "gi.repository":repository})
 namespace = runpy.run_path(sys.argv[1])
 runtime = namespace["_reload_now"].__globals__
+original_css_path = runtime["CSS_PATH"]
 class Provider:
     def __init__(self): self.cleared = False
     def load_from_data(self, data): self.cleared = data == b""
@@ -5137,17 +5151,34 @@ runtime["CSS_NAME"] = "missing.css"
 namespace["_reload_now"]()
 callbacks.clear()
 namespace["_on_css_dir_changed"](None, File(runtime["CSS_PATH"]), None, FileMonitorEvent.DELETED)
-print(json.dumps({"cleared": provider.cleared, "scheduled": len(callbacks)}))
+print(json.dumps({
+    "cleared": provider.cleared,
+    "scheduled": len(callbacks),
+    "cssPath": original_css_path,
+}))
 '''
+        working_dir = self.paths.home / "nautilus-working-directory"
+        working_dir.mkdir()
+        environment = os.environ.copy()
+        environment.update({"HOME": str(self.paths.home), "XDG_CACHE_HOME": ""})
         completed = subprocess.run(
             [sys.executable, "-c", probe, str(extension)],
             text=True,
             capture_output=True,
             check=False,
             timeout=10,
+            cwd=working_dir,
+            env=environment,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(json.loads(completed.stdout), {"cleared": True, "scheduled": 1})
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "cleared": True,
+                "scheduled": 1,
+                "cssPath": str(self.paths.home / ".cache/thpm/nautilus/nautilus.css"),
+            },
+        )
 
     def test_extension_loads_with_real_gi_when_available(self):
         extension = Path(__file__).parents[1] / "assets/nautilus/omarchy_palette.py"

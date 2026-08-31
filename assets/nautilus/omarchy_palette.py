@@ -11,7 +11,9 @@ gi.require_version("Nautilus", "4.1")
 
 from gi.repository import GLib, Gdk, Gio, GObject, Gtk, Nautilus  # noqa: E402
 
-_CACHE_HOME = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+_CACHE_HOME = os.path.abspath(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+)
 CSS_PATH = os.path.join(_CACHE_HOME, "thpm", "nautilus", "nautilus.css")
 CSS_DIR = os.path.dirname(CSS_PATH)
 CSS_NAME = os.path.basename(CSS_PATH)

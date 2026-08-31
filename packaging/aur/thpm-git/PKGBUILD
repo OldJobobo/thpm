@@ -7,7 +7,10 @@ arch=('any')
 url='https://github.com/oldjobobo/thpm'
 license=('MIT')
 depends=('bash' 'python>=3.11' 'python-rich>=14' 'python-rich<16' 'python-textual>=8.2.8' 'python-textual<9')
-optdepends=('omarchy: Omarchy 4 host integration (required for installation and theme operations)')
+optdepends=('omarchy: Omarchy 4 host integration (required for installation and theme operations)'
+            'glib2: GNOME accent compatibility through gsettings'
+            'nautilus: Nautilus palette integration'
+            'nautilus-python: Nautilus Python extension loader')
 makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 provides=('thpm' 'theme-hook-plugin-manager')
 conflicts=('thpm' 'theme-hook-plugin-manager')
@@ -35,6 +38,8 @@ package() {
     install -Dm644 assets/compat/theme-env.sh "$pkgdir/usr/share/thpm/compat/theme-env.sh"
     install -Dm644 -t "$pkgdir/usr/share/thpm/vencord" assets/vencord/*
     install -Dm644 -t "$pkgdir/usr/share/thpm/spicetify" assets/spicetify/*
+    install -Dm644 -t "$pkgdir/usr/share/thpm/nautilus" assets/nautilus/*
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 assets/vencord/LICENSE.midnight "$pkgdir/usr/share/licenses/$pkgname/LICENSE.midnight"
+    install -Dm644 assets/nautilus/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.paint-omarchy-nautilus"
 }

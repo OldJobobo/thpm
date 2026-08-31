@@ -48,7 +48,13 @@ from .compat import (
     vscode_readiness,
 )
 from .files import atomic_copy, atomic_text, remove_managed_block
+from .gnome_accent import apply as apply_gnome_accent
+from .gnome_accent import cleanup as cleanup_gnome_accent
+from .gnome_accent import readiness as gnome_accent_readiness
 from .models import ApplyResult
+from .nautilus_palette import css_target as nautilus_css_target
+from .nautilus_palette import extension_target as nautilus_extension_target
+from .nautilus_palette import nautilus_python_available, render_css as render_nautilus_css
 from .palette import load as load_palette
 from .paths import Paths
 from .registry import BY_ID, PLUGINS
@@ -103,7 +109,8 @@ RETIRED_MANAGED_OUTPUT_PLUGINS = {"vicinae"}
 # GENERATED retains historical names needed for guarded retirement cleanup;
 # registry membership remains the authority for active integrations.
 MANAGED_OUTPUT_PLUGINS = (
-    set(GENERATED) | {"discord", "discord-system24"}
+    set(GENERATED)
+    | {"discord", "discord-system24", "nautilus-palette", "gnome-accent-compat"}
 ) - RETIRED_MANAGED_OUTPUT_PLUGINS
 
 
@@ -279,6 +286,7 @@ def _install_optional_asset(
     target: Path,
     *,
     legacy_owned: bool = False,
+    preserve_identical: bool = False,
 ) -> bool:
     """Install one opt-in asset while preserving the file THPM displaced."""
     state_file, backup = _asset_state_paths(paths, key)
@@ -346,7 +354,7 @@ def _install_optional_asset(
             legacy_takeover = not had_state and not legacy_marker.exists() and legacy_owned
             existed = (
                 target_data is not None
-                and target_data != source_data
+                and (target_data != source_data or preserve_identical)
                 and not legacy_takeover
             )
             if existed and target_data is not None:
@@ -1137,6 +1145,14 @@ def inspect_readiness(
     elif plugin_id in OPTIONAL_ASSET_PLUGINS and not assets:
         # Missing opt-in assets mean "restore defaults", not "unavailable".
         missing = []
+    elif plugin_id == "nautilus-palette":
+        if not nautilus_python_available():
+            missing.append("nautilus-python extension loader")
+    elif plugin_id == "gnome-accent-compat":
+        ready, missing = gnome_accent_readiness(
+            paths, command=command_path("gsettings")
+        )
+        return ready, missing, warnings
     elif plugin_id == "gtk-css-compat":
         missing = []
     elif plugin_id == "vscode-local-compat":
@@ -1612,6 +1628,296 @@ def _cleanup_browser(paths: Paths, plugin_id: str, *, assume_legacy: bool) -> tu
     return changed, warnings
 
 
+def _snapshot_path(path: Path) -> tuple[str, bytes | str, int]:
+    if path.is_symlink():
+        return ("symlink", str(path.readlink()), 0)
+    if path.is_file():
+        return ("file", path.read_bytes(), path.stat().st_mode & 0o777)
+    if path.exists():
+        return ("other", b"", 0)
+    return ("missing", b"", 0)
+
+
+def _restore_path_snapshot(
+    path: Path, snapshot: tuple[str, bytes | str, int]
+) -> None:
+    _persist_path_snapshot(path, snapshot)
+
+
+def _persist_path_snapshot(
+    path: Path, snapshot: tuple[str, bytes | str, int]
+) -> None:
+    kind, content, mode = snapshot
+    if kind == "other":
+        if not path.exists() or path.is_file() or path.is_symlink():
+            raise RuntimeError(f"recovery path type changed: {path}")
+        return
+    if kind == "missing":
+        if path.exists() or path.is_symlink():
+            if not path.is_file() and not path.is_symlink():
+                raise RuntimeError(f"recovery path is not a file: {path}")
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".thpm-recovery-", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.close(descriptor)
+        if kind == "symlink":
+            temporary.unlink()
+            temporary.symlink_to(str(content))
+        else:
+            temporary.write_bytes(bytes(content))
+            temporary.chmod(mode)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _nautilus_transaction_surfaces(
+    paths: Paths,
+) -> tuple[tuple[str, Path, Path, Path, Path], ...]:
+    surfaces: list[tuple[str, Path, Path, Path, Path]] = []
+    for key, target in (
+        ("nautilus-palette-extension", nautilus_extension_target(paths)),
+        ("nautilus-palette-css", nautilus_css_target(paths)),
+    ):
+        state_file, backup = _asset_state_paths(paths, key)
+        surfaces.append(
+            (key, target, state_file, backup, _asset_legacy_marker(paths, key))
+        )
+    return tuple(surfaces)
+
+
+def _nautilus_transaction_paths(paths: Paths) -> tuple[Path, ...]:
+    return tuple(
+        path
+        for _key, target, state_file, backup, marker in _nautilus_transaction_surfaces(
+            paths
+        )
+        for path in (target, state_file, backup, marker)
+    )
+
+
+def _persist_nautilus_preinvocation_metadata(
+    target: Path,
+    state_file: Path,
+    backup: Path,
+    marker: Path,
+    snapshots: dict[Path, tuple[str, bytes | str, int]],
+) -> None:
+    # Restore the baseline backup atomically before publishing state that refers to it.
+    _persist_path_snapshot(backup, snapshots[backup])
+    _persist_path_snapshot(marker, snapshots[marker])
+    _persist_path_snapshot(state_file, snapshots[state_file])
+    for path in (backup, marker, state_file):
+        if _snapshot_path(path) != snapshots[path]:
+            raise RuntimeError(f"recovery metadata differs from its snapshot: {path}")
+    if snapshots[state_file][0] != "file":
+        return
+    saved = _read_asset_state(state_file)
+    if saved is None:
+        raise RuntimeError(f"recovery state is invalid: {state_file}")
+    if not target.is_file() or target.is_symlink():
+        raise RuntimeError(f"restored managed target is unavailable: {target}")
+    target_data = target.read_bytes()
+    target_mode = target.stat().st_mode & 0o777
+    if (
+        _digest(target_data) != str(saved.get("managedSha256", ""))
+        or target_mode != int(saved.get("managedMode", -1))
+    ):
+        raise RuntimeError(
+            f"recovery state does not identify the restored managed target: {target}"
+        )
+    if (
+        bool(saved.get("existed"))
+        and saved.get("priorType") == "file"
+        and not _valid_backup(backup, str(saved.get("priorSha256", "")))
+    ):
+        raise RuntimeError(f"recovery backup is invalid: {backup}")
+
+
+def _ensure_nautilus_recovery_metadata(
+    paths: Paths,
+    key: str,
+    target: Path,
+    target_snapshot: tuple[str, bytes | str, int],
+) -> None:
+    state_file, backup = _asset_state_paths(paths, key)
+    saved = _read_asset_state(state_file)
+    if saved is not None and (
+        saved.get("priorType") != "file"
+        or not bool(saved.get("existed"))
+        or _valid_backup(backup, str(saved.get("priorSha256", "")))
+    ):
+        return
+    if not target.is_file() or target.is_symlink():
+        raise RuntimeError(f"managed target is unavailable for recovery: {target}")
+    target_data = target.read_bytes()
+    target_mode = target.stat().st_mode & 0o777
+    prior_kind, prior_content, prior_mode = target_snapshot
+    if prior_kind == "file":
+        prior_data = bytes(prior_content)
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_bytes(prior_data)
+        restored: dict[str, object] = {
+            "existed": True,
+            "priorType": "file",
+            "priorSha256": _digest(prior_data),
+            "priorMode": prior_mode,
+        }
+    elif prior_kind == "symlink":
+        backup.unlink(missing_ok=True)
+        restored = {
+            "existed": True,
+            "priorType": "symlink",
+            "linkTarget": str(prior_content),
+        }
+    elif prior_kind == "missing":
+        backup.unlink(missing_ok=True)
+        restored = {
+            "existed": False,
+            "priorType": "file",
+            "priorSha256": "",
+            "priorMode": 0o644,
+        }
+    else:
+        raise RuntimeError(f"unsupported prior target type for recovery: {target}")
+    restored["managedSha256"] = _digest(target_data)
+    restored["managedMode"] = target_mode
+    atomic_text(state_file, json.dumps(restored, separators=(",", ":")) + "\n")
+    atomic_text(_asset_legacy_marker(paths, key), "checked\n")
+
+
+def _cleanup_nautilus_palette(paths: Paths) -> tuple[list[str], list[str]]:
+    changed: list[str] = []
+    warnings: list[str] = []
+    for key, target in (
+        ("nautilus-palette-extension", nautilus_extension_target(paths)),
+        ("nautilus-palette-css", nautilus_css_target(paths)),
+    ):
+        item_changed, item_warnings = _cleanup_optional_asset(paths, key, target)
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+    return changed, warnings
+
+
+def _apply_nautilus_palette(paths: Paths) -> ApplyResult:
+    extension = packaged_asset("nautilus", "omarchy_palette.py")
+    if not extension.is_file() or extension.is_symlink():
+        raise RuntimeError("nautilus-palette: packaged extension is unavailable")
+    css = render_nautilus_css(paths)
+    paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
+    temporary = paths.thpm_state_dir / ".nautilus-palette.css.tmp"
+    atomic_text(temporary, css, 0o600)
+    changed: list[str] = []
+    surfaces = _nautilus_transaction_surfaces(paths)
+    transaction_paths = _nautilus_transaction_paths(paths)
+    snapshots = {path: _snapshot_path(path) for path in transaction_paths}
+    try:
+        targets = (
+            (
+                "nautilus-palette-extension",
+                extension,
+                nautilus_extension_target(paths),
+            ),
+            ("nautilus-palette-css", temporary, nautilus_css_target(paths)),
+        )
+        for key, source, target in targets:
+            if _install_optional_asset(
+                paths, key, source, target, preserve_identical=True
+            ):
+                changed.append(str(target))
+    except Exception as exc:
+        rollback_failures: list[str] = []
+        failed_paths: list[Path] = []
+        recovery_retained = False
+        for key, target, state_file, backup, marker in reversed(surfaces):
+            try:
+                _restore_path_snapshot(target, snapshots[target])
+            except Exception as rollback_exc:
+                rollback_failures.append(f"{target}: {rollback_exc}")
+                failed_paths.append(target)
+                try:
+                    _ensure_nautilus_recovery_metadata(
+                        paths, key, target, snapshots[target]
+                    )
+                except Exception as recovery_exc:
+                    rollback_failures.append(
+                        f"{state_file}: unable to retain recovery metadata: {recovery_exc}"
+                    )
+                    failed_paths.append(state_file)
+                else:
+                    recovery_retained = True
+                continue
+
+            metadata_failed = False
+            backup_restored = True
+            try:
+                _restore_path_snapshot(backup, snapshots[backup])
+            except Exception as rollback_exc:
+                rollback_failures.append(f"{backup}: {rollback_exc}")
+                failed_paths.append(backup)
+                backup_restored = False
+                metadata_failed = True
+            try:
+                _restore_path_snapshot(marker, snapshots[marker])
+            except Exception as rollback_exc:
+                rollback_failures.append(f"{marker}: {rollback_exc}")
+                failed_paths.append(marker)
+                metadata_failed = True
+            if backup_restored:
+                try:
+                    _restore_path_snapshot(state_file, snapshots[state_file])
+                except Exception as rollback_exc:
+                    rollback_failures.append(f"{state_file}: {rollback_exc}")
+                    failed_paths.append(state_file)
+                    metadata_failed = True
+            if metadata_failed:
+                try:
+                    _persist_nautilus_preinvocation_metadata(
+                        target, state_file, backup, marker, snapshots
+                    )
+                except Exception as recovery_exc:
+                    rollback_failures.append(
+                        f"{state_file}: unable to persist coherent recovery metadata: "
+                        f"{recovery_exc}"
+                    )
+                    failed_paths.append(state_file)
+                else:
+                    recovery_retained = True
+        affected_paths = [
+            path
+            for path in transaction_paths
+            if _snapshot_path(path) != snapshots[path]
+        ]
+        if rollback_failures or affected_paths:
+            concrete_paths = list(dict.fromkeys([*affected_paths, *failed_paths]))
+            warnings = (
+                ["restoration metadata was retained for recovery"]
+                if recovery_retained
+                else []
+            )
+            raise ApplyFailure(
+                f"nautilus-palette apply failed ({exc}); rollback incomplete: "
+                + "; ".join(rollback_failures or ["rollback state differs"]),
+                changed=[str(path) for path in concrete_paths],
+                warnings=warnings,
+                restart_required=["Nautilus"],
+            ) from exc
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    restart_required = (
+        ["Nautilus"] if str(nautilus_extension_target(paths)) in changed else []
+    )
+    return _result(
+        "nautilus-palette", changed, [], restart_required=restart_required
+    )
+
+
 def cleanup_managed_outputs(
     paths: Paths, plugin_id: str, *, assume_legacy: bool = False
 ) -> tuple[list[str], list[str]]:
@@ -1619,7 +1925,15 @@ def cleanup_managed_outputs(
     changed: list[str] = []
     warnings: list[str] = []
     targets = _standard_output_targets(paths)
-    if plugin_id in targets:
+    if plugin_id == "nautilus-palette":
+        item_changed, item_warnings = _cleanup_nautilus_palette(paths)
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+    elif plugin_id == "gnome-accent-compat":
+        item_changed, item_warnings = cleanup_gnome_accent(paths)
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+    elif plugin_id in targets:
         target = targets[plugin_id]
         legacy = _legacy_standard_output_targets(paths).get(plugin_id)
         legacy_key = f"generated-{plugin_id}"
@@ -2151,6 +2465,11 @@ def apply(
         return _apply_zed_asset(paths)
     if plugin_id == "cliamp":
         return _apply_cliamp_theme(paths)
+    if plugin_id == "nautilus-palette":
+        return _apply_nautilus_palette(paths)
+    if plugin_id == "gnome-accent-compat":
+        changed, actions, warnings = apply_gnome_accent(paths)
+        return _result(plugin_id, changed, actions, warnings)
     paths.current_theme.mkdir(parents=True, exist_ok=True)
     changed: list[str] = []
     warnings: list[str] = []

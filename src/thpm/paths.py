@@ -27,7 +27,7 @@ class Paths:
             data_home=_expand(os.environ.get("XDG_DATA_HOME", "~/.local/share")),
             state_home=_expand(os.environ.get("XDG_STATE_HOME", "~/.local/state")),
             runtime_dir=_expand(os.environ.get("XDG_RUNTIME_DIR", "/tmp")),
-            cache_root=_expand(os.environ.get("XDG_CACHE_HOME", "~/.cache")),
+            cache_root=_expand(os.environ.get("XDG_CACHE_HOME") or "~/.cache"),
         )
 
     @property

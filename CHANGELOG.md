@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add an Experimental, opt-in Nautilus palette integration with an XDG-aware hot-reloading Python extension, atomic semantic CSS generation, optional dependency diagnostics, and guarded file restoration.
+- Add a separate Experimental GNOME accent compatibility adapter that maps semantic accents to libadwaita's named palette and restores the prior GSettings value only while THPM still owns it.
+
 ## 1.0.0rc24 - 2026-08-28
 
 - Promote the opt-in Zellij integration to Supported after exact merged-source lifecycle, parser, restoration, live-transition, visual-evidence, and maintainer-signoff gates passed on Omarchy Quattro.

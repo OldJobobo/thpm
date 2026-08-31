@@ -70,6 +70,7 @@ from .migrate import artifacts as legacy_artifacts
 from .migrate import inspect as inspect_legacy
 from .migrate import needs_compat
 from .models import ApplyResult
+from .nautilus_palette import extension_target as nautilus_extension_target
 from .omarchy import capabilities, run
 from .palette import load as load_palette
 from .paths import Paths
@@ -925,6 +926,10 @@ class Service:
                         ) in cleanup_changed
                     changed.extend(cleanup_changed)
                     record_cleanup(cleanup_warnings)
+                    if plugin_id == "nautilus-palette" and str(
+                        nautilus_extension_target(self.paths)
+                    ) in cleanup_changed:
+                        restart_required.append("Nautilus")
                     if plugin_id == "typora":
                         legacy_changed, legacy_warnings = cleanup_optional_assets(
                             self.paths, "typora", assume_legacy=True
@@ -1215,13 +1220,33 @@ class Service:
 
     def install_check(self) -> dict[str, object]:
         caps = capabilities()
-        missing_assets = [
+        required_directories = ("templates", "hooks", "qml", "spicetify", "nautilus")
+        required_files = (
+            ("nautilus", "omarchy_palette.py"),
+            ("nautilus", "LICENSE"),
+            ("nautilus", "UPSTREAM.md"),
+        )
+        missing_directories = [
             str(asset(kind))
-            for kind in ("templates", "hooks", "qml", "spicetify")
+            for kind in required_directories
             if not asset(kind).is_dir()
         ]
-        errors = ([{"message": item} for item in caps.missing] +
-            [{"message": f"packaged asset directory missing: {item}"} for item in missing_assets])
+        missing_files = [
+            str(asset(*parts))
+            for parts in required_files
+            if not asset(*parts).is_file() or asset(*parts).is_symlink()
+        ]
+        errors = (
+            [{"message": item} for item in caps.missing]
+            + [
+                {"message": f"packaged asset directory missing: {item}"}
+                for item in missing_directories
+            ]
+            + [
+                {"message": f"packaged asset missing: {item}"}
+                for item in missing_files
+            ]
+        )
         return envelope("install-check", not errors, summary="installation prerequisites satisfied" if not errors else "installation prerequisites missing",
             capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)}, errors=errors)
 
@@ -1390,6 +1415,10 @@ class Service:
                         ) in cleanup_changed
                     changed.extend(cleanup_changed)
                     record_cleanup(plugin_id, cleanup_warnings)
+                    if plugin_id == "nautilus-palette" and str(
+                        nautilus_extension_target(self.paths)
+                    ) in cleanup_changed:
+                        restart_required.append("Nautilus")
                 zellij_changed, zellij_warnings = cleanup_zellij(self.paths)
                 zellij_output_changed = bool(zellij_changed)
                 changed.extend(zellij_changed)

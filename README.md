@@ -10,6 +10,7 @@ This is a new MIT-licensed implementation. It is not a continuation or relicensi
 - Python 3.11 or newer
 - Textual 8.2.8 or newer within the supported 8.x series (installed automatically by source installs; packaged as `python-textual` on Arch)
 - Optional: Omarchy Shell for the graphical manager and menu launchers
+- Optional: `nautilus` and `nautilus-python` for the default-disabled Nautilus palette integration
 
 Pre-4.0 Omarchy path layouts are intentionally unsupported. Palette interpretation follows the installed Omarchy 4 `omarchy-theme-color` resolver, including aliases and derived values that Quattro accepts. Omarchy's canonical `background`, `dark_background`, `foreground`, and related long names are authoritative; THPM normalizes them to its private short-key TUI schema after resolution. If a custom theme emits conflicting canonical and short values, a non-empty canonical value wins; an empty canonical value is treated as absent so resolver output from short-only compatibility themes remains usable.
 
@@ -73,6 +74,8 @@ Common commands:
 thpm list
 thpm status
 thpm enable firefox
+thpm enable nautilus-palette
+thpm enable gnome-accent-compat
 thpm disable firefox
 thpm doctor
 thpm run
@@ -117,6 +120,10 @@ The same control appears as **Restart apps automatically** in the GUI and TUI Sy
 The two Discord choices are mutually exclusive. `discord` provides an Omarchy-colored Midnight surface from THPM's MIT-licensed vendored base, while `discord-system24` provides the more opinionated System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template. The Midnight fallback imports THPM's hosted base at runtime, so it requires network access; the hosted `main` artifact intentionally remains updateable so Discord selector repairs can land without waiting for a THPM package release.
 
 The opt-in `pi-hot-reload` compatibility integration emits a metadata-only change event after Omarchy atomically replaces `~/.pi/agent/themes/omarchy-system.json`. It first verifies that the installed file exactly matches the current native `pi.json`, then advances only its modification time while preserving its contents, access time, and inode. Long-lived Pi sessions currently using `omarchy-system`—including sessions inside Zellij, Splinterm, and similar persistent terminals—can then repaint; sessions using another global, project, CLI, automatic, or in-memory theme ignore the event.
+
+The Experimental `nautilus-palette` integration requires separately installed `nautilus` and `nautilus-python`; THPM only diagnoses those optional dependencies and never installs them. When enabled, it restorably installs an XDG-aware Nautilus Python extension plus atomically generated palette CSS. The extension hot-reloads the CSS in open Nautilus windows. Extension changes report Nautilus as restart-required, while later CSS-only theme changes reload in place. Disable and uninstall restore displaced files only while THPM still owns them and preserve later user edits.
+
+`gnome-accent-compat` is a separate Experimental opt-in because it changes the desktop-wide `org.gnome.desktop.interface accent-color` setting for all libadwaita applications. It maps the active semantic accent to GNOME's supported named accents, records the prior value, and restores it only while the current value still matches THPM's last write. Missing GSettings schema/key access, a non-writable key, or a missing desktop DBus session fails closed; concurrent user changes are preserved.
 
 Cava integration is opt-in because enabling it safely changes the `[color] theme` selector in Cava's user configuration. A saved `cava = true` value from releases where Cava was enabled by default is treated as disabled until confirmed setup succeeds and records a durable opt-in marker. THPM preserves comments, formatting, symlinked dotfile layouts, unrelated edits, and the previous selector for guarded restoration on disable or uninstall. Run `thpm doctor cava` for detailed checks or `thpm doctor cava --fix` for a confirmed transactional repair. Only running Cava processes whose effective config and theme directory can be verified are sent a PID-specific `SIGUSR1`; ambiguous processes are left alone and reported as requiring a manual reload or restart. Cava 0.10.6 or newer is required.
 

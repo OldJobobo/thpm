@@ -26,7 +26,8 @@
   --thpm-muted: {{ muted }};
   --thpm-border: {{ selection }};
   --thpm-accent: {{ gradient_start accent blue }};
-  --thpm-on-accent: {{ darker_background }};
+  --thpm-selection-bg: {{ gradient_start selection_background selection }};
+  --thpm-selection-fg: {{ gradient_start selection_foreground bright_foreground }};
 
   --toolbar-background-color: var(--thpm-bg) !important;
   --toolbar-text-color: var(--thpm-fg) !important;
@@ -35,8 +36,8 @@
 
   --toolbarbutton-icon-fill: var(--thpm-fg) !important;
   --toolbarbutton-icon-fill-attention: var(--thpm-accent) !important;
-  --toolbarbutton-background-color-hover: var(--thpm-border) !important;
-  --toolbarbutton-background-color-active: var(--thpm-accent) !important;
+  --toolbarbutton-background-color-hover: color-mix(in srgb, var(--thpm-fg) 14%, transparent) !important;
+  --toolbarbutton-background-color-active: color-mix(in srgb, var(--thpm-fg) 24%, transparent) !important;
 
   --toolbar-field-background-color: var(--thpm-surface) !important;
   --toolbar-field-text-color: var(--thpm-fg) !important;
@@ -48,8 +49,8 @@
   --panel-text-color: var(--thpm-fg) !important;
   --panel-border-color: var(--thpm-border) !important;
 
-  --urlbarview-background-color-selected: var(--thpm-accent) !important;
-  --urlbarview-text-color-selected: var(--thpm-on-accent) !important;
+  --urlbarview-background-color-selected: var(--thpm-selection-bg) !important;
+  --urlbarview-text-color-selected: var(--thpm-selection-fg) !important;
 
   --sidebar-background-color: var(--thpm-surface-raised) !important;
   --sidebar-text-color: var(--thpm-fg) !important;

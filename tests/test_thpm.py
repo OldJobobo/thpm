@@ -75,6 +75,7 @@ from thpm.config import load as load_config
 from thpm.config import save as save_config
 from thpm.integrations import (
     ApplyFailure,
+    _browser_default_profile,
     _browser_import,
     _reload,
     apply,
@@ -7004,6 +7005,178 @@ class IntegrationTests(Sandbox):
         (base / "profiles.ini").write_text("[Install1]\nDefault=../../escape\n")
         with self.assertRaisesRegex(ValueError, "escapes"):
             _browser_import(self.paths, "firefox", base)
+
+    def _profiles_root(self, *installs, profiles=()):
+        base = self.paths.home / ".mozilla/firefox"
+        base.mkdir(parents=True, exist_ok=True)
+        text = "".join(
+            f"[Install{index}]\nDefault={profile}\nLocked=1\n\n"
+            for index, profile in enumerate(installs)
+        )
+        (base / "profiles.ini").write_text(text)
+        for profile, app_dir in profiles:
+            directory = base / profile
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "compatibility.ini").write_text(
+                f"[Compatibility]\nLastVersion=1\nLastAppDir={app_dir}\n"
+            )
+        return base
+
+    def test_single_install_profile_selection_is_unchanged(self):
+        base = self._profiles_root("profile.default")
+        self.assertEqual(_browser_default_profile(base), "profile.default")
+
+    def test_profile_selection_skips_install_of_uninstalled_application(self):
+        # Mozilla never prunes [Install*] sections, so a build that has been
+        # removed keeps its entry and can sort ahead of the live one.
+        live = self.paths.home / "opt/live-app"
+        live.mkdir(parents=True)
+        base = self._profiles_root(
+            "profile.removed",
+            "profile.live",
+            profiles=(
+                ("profile.removed", str(self.paths.home / "opt/removed-app")),
+                ("profile.live", str(live)),
+            ),
+        )
+        self.assertEqual(_browser_default_profile(base), "profile.live")
+
+    def test_profile_selection_falls_back_when_several_installs_are_live(self):
+        first = self.paths.home / "opt/first-app"
+        second = self.paths.home / "opt/second-app"
+        first.mkdir(parents=True)
+        second.mkdir(parents=True)
+        base = self._profiles_root(
+            "profile.first",
+            "profile.second",
+            profiles=(
+                ("profile.first", str(first)),
+                ("profile.second", str(second)),
+            ),
+        )
+        # Two genuinely installed builds share the profile root; there is
+        # nothing to disambiguate them, so the previous behaviour stands.
+        self.assertEqual(_browser_default_profile(base), "profile.first")
+
+    def test_profile_selection_falls_back_without_compatibility_metadata(self):
+        base = self._profiles_root("profile.first", "profile.second")
+        self.assertEqual(_browser_default_profile(base), "profile.first")
+
+    def test_browser_import_uses_the_live_install_profile(self):
+        generated = self.paths.current_theme / "thpm-firefox.css"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("/* generated */\n")
+        live = self.paths.home / "opt/live-app"
+        live.mkdir(parents=True)
+        base = self._profiles_root(
+            "profile.removed",
+            "profile.live",
+            profiles=(
+                ("profile.removed", str(self.paths.home / "opt/removed-app")),
+                ("profile.live", str(live)),
+            ),
+        )
+        _browser_import(self.paths, "firefox", base)
+        self.assertTrue((base / "profile.live/chrome/userChrome.css").is_file())
+        self.assertFalse((base / "profile.removed/chrome").exists())
+
+    def test_profile_selection_does_not_read_escaping_candidate_metadata(self):
+        outside = self.paths.home / "outside-profile"
+        outside_app = self.paths.home / "opt/outside-app"
+        live_app = self.paths.home / "opt/live-app"
+        outside.mkdir()
+        outside_app.mkdir(parents=True)
+        live_app.mkdir(parents=True)
+        (outside / "compatibility.ini").write_text(
+            f"[Compatibility]\nLastAppDir={outside_app}\n"
+        )
+        base = self._profiles_root(
+            "../../outside-profile",
+            "profile.live",
+            profiles=(("profile.live", str(live_app)),),
+        )
+        self.assertEqual(_browser_default_profile(base), "profile.live")
+
+    def test_profile_selection_ignores_absolute_and_symlinked_candidates(self):
+        live_app = self.paths.home / "opt/live-app"
+        outside_app = self.paths.home / "opt/outside-app"
+        live_app.mkdir(parents=True)
+        outside_app.mkdir(parents=True)
+        outside = self.paths.home / "outside-profile"
+        outside.mkdir()
+        (outside / "compatibility.ini").write_text(
+            f"[Compatibility]\nLastAppDir={outside_app}\n"
+        )
+        base = self._profiles_root(
+            str(outside),
+            "profile.link",
+            "profile.live",
+            profiles=(("profile.live", str(live_app)),),
+        )
+        (base / "profile.link").symlink_to(outside, target_is_directory=True)
+        self.assertEqual(_browser_default_profile(base), "profile.live")
+
+    def test_profile_selection_ignores_unresolvable_candidate(self):
+        live_app = self.paths.home / "opt/live-app"
+        live_app.mkdir(parents=True)
+        base = self._profiles_root(
+            "profile.loop",
+            "profile.live",
+            profiles=(("profile.live", str(live_app)),),
+        )
+        (base / "profile.loop").symlink_to("profile.loop", target_is_directory=True)
+        self.assertEqual(_browser_default_profile(base), "profile.live")
+
+    def test_profile_selection_ignores_malformed_install_section(self):
+        live_app = self.paths.home / "opt/live-app"
+        wrong_app = self.paths.home / "opt/wrong-app"
+        live_app.mkdir(parents=True)
+        wrong_app.mkdir(parents=True)
+        base = self._profiles_root(
+            "profile.good", profiles=(("profile.good", str(live_app)),)
+        )
+        wrong = base / "profile.wrong"
+        wrong.mkdir()
+        (wrong / "compatibility.ini").write_text(
+            f"[Compatibility]\nLastAppDir={wrong_app}\n"
+        )
+        (base / "profiles.ini").write_text(
+            "[InstallationNotes]\nDefault=profile.wrong\n\n"
+            "[InstallAB]\nDefault=profile.good\n"
+        )
+        self.assertEqual(_browser_default_profile(base), "profile.good")
+
+    def test_profile_selection_requires_scoped_absolute_last_app_dir(self):
+        live_app = self.paths.home / "opt/live-app"
+        wrong_app = self.paths.home / "opt/wrong-app"
+        live_app.mkdir(parents=True)
+        wrong_app.mkdir(parents=True)
+        base = self._profiles_root(
+            "profile.wrong-section",
+            "profile.relative",
+            "profile.live",
+            profiles=(("profile.live", str(live_app)),),
+        )
+        (base / "profile.wrong-section").mkdir()
+        (base / "profile.wrong-section/compatibility.ini").write_text(
+            f"[Other]\nLastAppDir={wrong_app}\n"
+        )
+        (base / "profile.relative").mkdir()
+        (base / "profile.relative/compatibility.ini").write_text(
+            "[Compatibility]\nLastAppDir=.\n"
+        )
+        self.assertEqual(_browser_default_profile(base), "profile.live")
+
+    def test_profile_selection_deduplicates_live_default_entries(self):
+        live_app = self.paths.home / "opt/live-app"
+        live_app.mkdir(parents=True)
+        base = self._profiles_root(
+            "profile.removed",
+            "profile.live",
+            "profile.live",
+            profiles=(("profile.live", str(live_app)),),
+        )
+        self.assertEqual(_browser_default_profile(base), "profile.live")
 
     def test_discord_cleanup_restores_displaced_theme(self):
         source = self.paths.current_theme / "thpm-vencord.theme.css"

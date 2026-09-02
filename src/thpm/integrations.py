@@ -681,19 +681,86 @@ def _browser_import_blocks(plugin_id: str) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _browser_default_profile(base: Path) -> str:
+def _browser_install_defaults(base: Path) -> list[str]:
+    """Every [Install*] Default= profile in profiles.ini, in file order.
+
+    Mozilla writes one [InstallHASH] section per installation directory, and
+    never prunes them. A profile root can therefore carry sections for a
+    second build sharing it (Flatpak beside a distribution package, ESR
+    beside release, a fork such as Betterbird) or for one that has since
+    been uninstalled.
+    """
     profiles = base / "profiles.ini"
     if not profiles.is_file():
-        return ""
+        return []
+    defaults: list[str] = []
     in_install = False
     for raw in profiles.read_text().splitlines():
-        if raw.startswith("[Install"):
+        if re.fullmatch(r"\[Install[0-9A-Fa-f]+\]", raw):
             in_install = True
         elif raw.startswith("["):
             in_install = False
         elif in_install and raw.startswith("Default="):
-            return raw.split("=", 1)[1]
+            profile = raw.split("=", 1)[1]
+            if profile and profile not in defaults:
+                defaults.append(profile)
+            in_install = False
+    return defaults
+
+
+def _browser_profile_path(base: Path, profile: str) -> Path | None:
+    """Resolve a profile only when it remains strictly beneath its root."""
+    try:
+        profile_root = base.resolve()
+        profile_path = (base / profile).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if profile_path == profile_root or profile_root not in profile_path.parents:
+        return None
+    return profile_path
+
+
+def _browser_profile_app_dir(base: Path, profile: str) -> str:
+    """The absolute installation directory a safe profile last used, if recorded."""
+    profile_path = _browser_profile_path(base, profile)
+    if profile_path is None:
+        return ""
+    try:
+        content = (profile_path / "compatibility.ini").read_text()
+    except (OSError, UnicodeError):
+        return ""
+    in_compatibility = False
+    for raw in content.splitlines():
+        if raw == "[Compatibility]":
+            in_compatibility = True
+        elif raw.startswith("["):
+            in_compatibility = False
+        elif in_compatibility and raw.startswith("LastAppDir="):
+            app_dir = raw.split("=", 1)[1].strip()
+            return app_dir if Path(app_dir).is_absolute() else ""
     return ""
+
+
+def _browser_default_profile(base: Path) -> str:
+    defaults = _browser_install_defaults(base)
+    if len(defaults) <= 1:
+        return defaults[0] if defaults else ""
+    # Several installations are registered against this profile root. Taking
+    # the first entry picks an arbitrary one, which silently themes a profile
+    # the user's application never opens when that entry belongs to a build
+    # that is no longer installed. Prefer an entry whose profile was last
+    # opened by an installation directory that still exists; when exactly one
+    # qualifies the choice is unambiguous. Anything else keeps the previous
+    # behaviour rather than guessing between live installations.
+    live = [
+        profile
+        for profile in defaults
+        if (app_dir := _browser_profile_app_dir(base, profile))
+        and Path(app_dir).is_dir()
+    ]
+    if len(live) == 1:
+        return live[0]
+    return defaults[0]
 
 
 def _pi_theme_paths(paths: Paths) -> tuple[Path, Path]:
@@ -1276,9 +1343,8 @@ def _browser_import(paths: Paths, plugin_id: str, base: Path) -> tuple[list[str]
     profile = _browser_default_profile(base)
     if not profile:
         raise RuntimeError(f"{plugin_id}: profiles.ini has no default install profile")
-    profile_root = base.resolve()
-    profile_path = (base / profile).resolve()
-    if profile_path == profile_root or profile_root not in profile_path.parents:
+    profile_path = _browser_profile_path(base, profile)
+    if profile_path is None:
         raise ValueError(f"browser profile escapes its profile root: {profile}")
     chrome = profile_path / "chrome"
     managed = chrome / f"thpm-{plugin_id}.css"

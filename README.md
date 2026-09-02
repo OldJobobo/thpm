@@ -116,13 +116,13 @@ THPM currently covers these application groups:
 | Group | Integrations |
 | --- | --- |
 | Terminal | Fish, fzf, Superfile, Zellij |
-| Desktop | GTK CSS compatibility, Branding extras, Qt6ct, nwg-dock-hyprland |
+| Desktop | GTK CSS compatibility, Nautilus palette, Branding extras, Qt6ct, nwg-dock-hyprland |
 | Editors and writing | Local VS Code themes, Typora, Obsidian Terminal, Zed authored themes, Hermes |
 | Browsers | Firefox, Zen Browser, Qutebrowser |
 | Messaging | Discord/Vencord, Discord System24 |
 | Media | Spotify/Spicetify, Cava, cliamp |
 | Games | Steam, Heroic |
-| Compatibility | Pi live theme reload |
+| Compatibility | GNOME accent compatibility, Pi live theme reload |
 
 `fzf` and Zellij are Supported. All other active integrations are Experimental and opt-in. Omarchy-owned integrations appear as read-only records rather than duplicate controls. The [integration support register](docs/integration-support.md) is the authoritative status list.
 

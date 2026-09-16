@@ -1,183 +1,281 @@
-# thpm
+# THPM
 
-`thpm` is an Omarchy 4.x-native manager for theme integrations that Omarchy does not own. It installs one theme hook, lets Omarchy render semantic-color templates, and exposes the same plugin state through a CLI, an Omarchy Shell QML panel, and a full-screen terminal UI.
+**Theme Hook Plugin Manager for Omarchy 4**
 
-This is a new MIT-licensed implementation. It is not a continuation or relicensing of `imbypass/omarchy-theme-hook`; no source, tests, documentation, comments, or Git history from that project are included. See [PROVENANCE.md](PROVENANCE.md).
+THPM keeps applications outside Omarchy’s native theme coverage synchronized with your active Omarchy theme. Choose the integrations you want, switch themes normally, and THPM applies each supported color surface from one graphical control panel, terminal UI, or CLI.
+
+## What THPM gives you
+
+- **One control center** for browsing, enabling, disabling, and checking theme integrations.
+- **Automatic theme synchronization** through Omarchy’s normal theme-change hook.
+- **Graphical and terminal interfaces** backed by the same state and safety rules.
+- **Safe cleanup** that restores displaced files or previous selections when restoration data is available.
+- **Honest outcomes** for applied, unchanged, skipped, unavailable, and failed integrations.
+- **Private support reports** that users can send to the maintainer without exposing configuration contents or raw environments.
+
+THPM also shows Omarchy-owned integrations as read-only records, so it is clear which application owns each theme surface.
 
 ## Requirements
 
-- Omarchy 4.x (Quattro)
+- Omarchy 4.x
 - Python 3.11 or newer
 - Textual 8.2.8 or newer within the supported 8.x series (installed automatically by source installs; packaged as `python-textual` on Arch)
-- Optional: Omarchy Shell for the graphical manager and menu launchers
+- Optional: Omarchy Shell for the graphical control panel and menu entry
 - Optional: `nautilus` and `nautilus-python` for the default-disabled Nautilus palette integration
 
-Pre-4.0 Omarchy path layouts are intentionally unsupported. Palette interpretation follows the installed Omarchy 4 `omarchy-theme-color` resolver, including aliases and derived values that Quattro accepts. Omarchy's canonical `background`, `dark_background`, `foreground`, and related long names are authoritative; THPM normalizes them to its private short-key TUI schema after resolution. If a custom theme emits conflicting canonical and short values, a non-empty canonical value wins; an empty canonical value is treated as absent so resolver output from short-only compatibility themes remains usable.
-
-## Integration support status
-
-An integration appearing in THPM does not by itself establish end-to-end application support. The current [integration support register](docs/integration-support.md) records the reference Omarchy environment, each active adapter's default and lifecycle disposition, a repeatable certification protocol, adapter-specific real-application evidence, retired cleanup, and the maintainer signoff template. `fzf` and `zellij` are Supported through retained, reviewed certification evidence; all other active adapters remain visibly labeled Experimental. Every integration remains default-disabled for new state. Existing schema-1 `true` values are grandfathered because older releases serialized inherited defaults and cannot distinguish them from later explicit choices; they are not evidence of certification or opt-in. Existing users should review and disable integrations they do not want. Cava remains the exception and still requires its separate consent marker. Automated coverage varies from shared rendering/ownership machinery to integration-specific lifecycle tests, so only rows promoted through reviewed real-application evidence and maintainer signoff are stable compatibility guarantees.
+Earlier Omarchy layouts are not supported.
 
 ## Install
 
-### Omarchy / AUR
-
-Install the stable package, then complete the per-user setup:
+Install THPM from the AUR through Omarchy, then complete its user setup:
 
 ```bash
 omarchy pkg aur add thpm
 thpm install
 ```
 
-The package installs THPM and its assets under `/usr`. The required `thpm install` step creates your theme hook and templates, migrates an older installation, and deploys the graphical manager and menu entry under your user configuration. Pacman cannot safely perform that per-user setup on its own. Use `thpm install --no-ui` only when you intentionally do not want the graphical manager; you can add it later with `thpm ui install`.
-
-While AUR submissions are unavailable, install or upgrade directly from the newest published GitHub release with:
+Open **Theme Hook Plugins** from Omarchy Menu, or launch either interface directly:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install-arch-release.sh | bash
+thpm ui open
+thpm tui
 ```
 
-The installer resolves GitHub's newest published release—including release candidates—then downloads its source archive and mandatory SHA-256 file, verifies the source, builds the stable Arch package with `makepkg`, installs it through pacman, and runs the per-user `thpm install` step. It does not install an untracked Python runtime or replace pacman ownership. To inspect it first, download the same URL to a file before running it; pass an explicit version argument to pin an older release.
+Use `thpm install --no-ui` if you only want the terminal UI and CLI. Add the graphical control panel later with `thpm ui install`.
 
-To build locally instead, choose either the stable package or the development package; they conflict, so install only one:
-
-```bash
-(cd packaging/aur/thpm && makepkg -si)       # stable release
-# or
-(cd packaging/aur/thpm-git && makepkg -si)   # latest main branch
-thpm install
-```
-
-After a direct package-manager upgrade, reconcile generated theme output when the release requests it:
-
-```bash
-thpm reconcile --refresh
-```
-
-Once the self-healing menu launcher has been installed, the graphical manager needs no separate redeployment step after upgrades. Its menu action compares packaged and deployed frontend assets, repairs plugin discovery and enablement, verifies that the asynchronous QML panel actually opened, and falls back to the terminal interface in a floating window if graphical recovery fails. An idempotent user `post-update` hook keeps that stable launcher in place before Omarchy's AUR phase; the next click synchronizes any newer QML installed later in the update.
-
-`thpm update` synchronizes package state, integrations, the active theme, and the graphical control panel from the CLI, TUI, or GUI. Direct `pacman` or AUR-helper upgrades cannot safely rewrite user configuration from the package transaction, so the stable launcher performs that synchronization in the desktop user's context.
-
-### Source checkout
+### Install from a source checkout
 
 ```bash
 ./install.sh
 ```
 
-The source installer builds and validates a private runtime at `~/.local/share/thpm/runtime`, activates it with rollback protection, and then runs the per-user migration and integration setup. Pip runs only inside that isolated environment and installs the exact universal wheels pinned with SHA-256 hashes in `requirements-source.lock`; source distributions and unlisted dependency versions are rejected. Recognized legacy files are archived under `~/.local/state/thpm/legacy-backups/`; unrecognized user files are left alone.
+This creates a private user installation. Use either the AUR package or the source installation, not both.
 
-## Use
+## Quick start
 
-Common commands:
+See what THPM can manage on your system:
 
 ```bash
 thpm list
-thpm status
-thpm enable firefox
-thpm enable nautilus-palette
-thpm enable gnome-accent-compat
-thpm disable firefox
 thpm doctor
+```
+
+Enable an available integration. Enabling it applies the active theme immediately and keeps it synchronized after later theme changes:
+
+```bash
+thpm enable fzf
+thpm doctor fzf
+```
+
+Disable it and restore its prior managed state:
+
+```bash
+thpm disable fzf
+```
+
+Every integration is disabled by default for new installations. Integrations marked **Experimental** are opt-in and may still need real-application certification. Existing schema-1 state from older releases can preserve previously saved enablement, including values inherited from former defaults; after upgrading, review `thpm status` and disable any integration you did not intentionally choose. `fzf` and `zellij` are currently Supported; see the [integration support register](docs/integration-support.md) for the current evidence and status of every integration.
+
+## Using THPM
+
+| Interface | Open it | Best for |
+| --- | --- | --- |
+| Graphical control panel | Omarchy Menu or `thpm ui open` | Everyday integration management |
+| Terminal UI | `thpm tui` | Full-screen terminal management |
+| CLI | `thpm status`, `thpm enable ID` | Shell workflows and automation |
+
+The graphical control panel and terminal UI share four sections:
+
+- **Overview** — integration and system status at a glance.
+- **Integrations** — search, inspect, enable, and disable application adapters.
+- **Doctor** — readiness checks and actionable warnings.
+- **System** — apply the active theme, reconcile generated files, choose the menu interface, and manage updates.
+
+In the terminal UI, use `1`–`4` to change sections, `/` to search, `Space` or `Enter` to toggle an integration, `r` to refresh, and `q` to quit. Mouse and normal Tab navigation are also supported. Use a terminal at least 80×24.
+
+Useful CLI commands:
+
+```bash
+thpm status
+thpm list
+thpm enable <integration>
+thpm disable <integration>
+thpm doctor [integration]
 thpm run
-thpm reconcile
 thpm reconcile --refresh
-thpm zed status
-thpm zed setup
-thpm ui status
-thpm ui install
-thpm ui sync
-thpm ui open
-thpm ui remove
-thpm tui
+thpm report [integration]
 thpm update
-thpm update check
-thpm update status
 thpm uninstall
 ```
 
-Interactive commands use a color-aware live progress surface. `thpm run` advances through the enabled integrations as they actually start and finish, showing the current integration and a truthful completed/total count instead of waiting at a fabricated outer-stage percentage. Each integration outcome is appended to a persistent outline as soon as it completes while the live bar continues beneath it. Use `--verbose` (or `-v`) to add adapter details, stage history, changed paths, and captured command output, or `--quiet` (or `-q`) to suppress progress. Redirected progress is emitted as flushed plain lines, `NO_COLOR=1` disables ANSI color, and `--json` remains a single stable, decoration-free document for automation.
+Add `--json` to non-interactive commands when you need machine-readable output.
 
-For AUR installations, `thpm update` runs Yay synchronously in the invoking terminal with routine package confirmations disabled, then reconciles integrations after installation. Password authentication can still appear normally. Callers without a TTY use an Omarchy terminal fallback so authorization and package output remain visible.
+## Integrations
 
-Non-interactive service commands accept `--json`. The interactive `thpm tui` command intentionally rejects JSON mode. The graphical control panel is available directly with `thpm ui open`, and the alternate terminal application with `thpm tui`. The graphical frontend is a normal compositor-managed window, so Hyprland controls its focus, movement, resizing, and workspace placement; a title-matched window rule can make it float by default. Omarchy Menu contains one **Theme Hook Plugins** entry; choose which frontend it opens from the **Menu launcher** control in either frontend's System section, with `thpm ui surface gui` or `thpm ui surface tui`, or flip it with `thpm ui surface toggle`. Run `thpm ui surface` without an argument to inspect the current target. Both frontends have an overview dashboard and dedicated Integrations, Doctor, and System sections for toggling plugins, checking health, reapplying or reconciling the active theme, and managing updates.
+THPM currently covers these application groups:
 
-The TUI uses the active Omarchy semantic palette and falls back to a readable built-in dark theme if the palette is unavailable. Use `1`–`4` to change sections, `/` to search integrations, `Space` or `Enter` to toggle the selected integration, `r` to refresh, and `q` to quit. Mouse controls and normal Tab navigation are also supported. Terminals smaller than 80×24 show a resize prompt instead of a damaged layout.
+| Group | Integrations |
+| --- | --- |
+| Terminal | Fish, fzf, Superfile, Zellij |
+| Desktop | GTK CSS compatibility, Nautilus palette, Branding extras, Qt6ct, nwg-dock-hyprland |
+| Editors and writing | Local VS Code themes, Typora, Obsidian Terminal, Zed authored themes, Hermes |
+| Browsers | Firefox, Zen Browser, Qutebrowser |
+| Messaging | Discord/Vencord, Discord System24 |
+| Media | Spotify/Spicetify, Cava, cliamp |
+| Games | Steam, Heroic |
+| Compatibility | GNOME accent compatibility, Pi live theme reload |
 
-Plugin output is isolated: one failing optional integration is reported without preventing other enabled integrations from running. Hook and JSON output distinguish applied, unchanged, skipped, and failed integrations, and Doctor flags enabled plugins that are no longer actionable. Terminal-driven Omarchy theme changes send the same live integration outline and final summary to stderr because Omarchy discards normal hook stdout. `thpm run` consumes the same structured hook events through a private channel while the refresh is still running, then returns the authoritative final report and failure status without executing adapters twice. Redirected output stays plain, and `NO_COLOR=1` disables ANSI color. THPM-generated fallbacks are refused if Omarchy leaves an unresolved `{{ ... }}` placeholder, preventing malformed generated content from being copied into application configuration; explicit theme-provided assets keep their existing precedence. The GTK compatibility integration always manages GTK 3 and GTK 4 CSS for an active theme: a supplied `gtk.css` takes precedence, otherwise THPM generates the stylesheet from `colors.toml`. Validated local VS Code theme compatibility remains conditional on the active theme requesting a local bundle. Omarchy-native integrations are shown read-only so ownership stays clear. Disabling an integration stops future synchronization, removes its rendered THPM template, and restores displaced files or prior selections when THPM has restoration data. Unrelated and user-modified configuration is preserved. Uninstall applies the same guarded cleanup before removing THPM's hook, templates, and control surfaces. If promised restoration cannot be completed, disable or uninstall fails with `cleanupIncomplete`, reports retained paths and a retry command, and keeps the recovery records needed for another attempt. The source uninstaller also retains its private runtime and launcher until service cleanup succeeds.
+`fzf` and Zellij are Supported. All other active integrations are Experimental and opt-in. Omarchy-owned integrations appear as read-only records rather than duplicate controls. The [integration support register](docs/integration-support.md) is the authoritative status list.
 
-### User preferences
+## Application setup
 
-THPM stores user-editable preferences in `~/.config/thpm/config.toml`. Choose whether restart-capable running applications restart automatically after a theme change or remain open while THPM sends one desktop notification naming the applications that still need restart:
+Some integrations require the application or its theming tool to be initialized first. `thpm doctor <integration>` shows the exact missing prerequisite.
+
+### Steam and Adwaita-for-Steam
+
+The Omarchy way to install the recommended [AdwSteamGtk](https://github.com/Foldex/AdwSteamGtk) manager is:
 
 ```bash
-thpm config
-thpm config restart-policy automatic
-thpm config restart-policy notify
+omarchy pkg aur add adwsteamgtk
 ```
 
-The same control appears as **Restart apps automatically** in the GUI and TUI System sections. The default is `automatic`; THPM never launches an application that was closed. Applications without a safe restart contract, including generic GTK applications and nwg-dock-hyprland, are always reported rather than killed. **Apply active theme** in either frontend, and the equivalent `thpm run`, explicitly force restart-required adapters such as Spotify even when their managed files are already current; ordinary theme hooks retain no-op behavior when nothing changed.
+After installing AdwSteamGtk, you should:
 
-The two Discord choices are mutually exclusive. `discord` provides an Omarchy-colored Midnight surface from THPM's MIT-licensed vendored base, while `discord-system24` provides the more opinionated System24 surface. Both prefer a matching asset shipped by the active theme and fall back to an Omarchy-rendered semantic-palette template. The Midnight fallback imports THPM's hosted base at runtime, so it requires network access; the hosted `main` artifact intentionally remains updateable so Discord selector repairs can land without waiting for a THPM package release.
+1. Open **AdwSteamGtk** from your application launcher, or run `adwaita-steam-gtk`.
+2. Choose your preferred skin options.
+3. Select **Install** to apply Adwaita-for-Steam.
+4. Fully exit and reopen Steam.
 
-The opt-in `pi-hot-reload` compatibility integration emits a metadata-only change event after Omarchy atomically replaces `~/.pi/agent/themes/omarchy-system.json`. It first verifies that the installed file exactly matches the current native `pi.json`, then advances only its modification time while preserving its contents, access time, and inode. Long-lived Pi sessions currently using `omarchy-system`—including sessions inside Zellij, Splinterm, and similar persistent terminals—can then repaint; sessions using another global, project, CLI, automatic, or in-memory theme ignore the event.
+You do not need to keep AdwSteamGtk running in the background. AdwSteamGtk is currently independent of THPM.
 
-The Experimental `nautilus-palette` integration requires separately installed `nautilus` and `nautilus-python`; THPM only diagnoses those optional dependencies and never installs them. When enabled, it restorably installs an XDG-aware Nautilus Python extension plus atomically generated palette CSS. The extension hot-reloads the CSS in open Nautilus windows. Extension changes report Nautilus as restart-required, while later CSS-only theme changes reload in place. Disable and uninstall restore displaced files only while THPM still owns them and preserve later user edits.
+THPM’s Experimental Steam integration does not yet recognize AdwSteamGtk. It requires the standalone installer at `~/.local/share/steam-adwaita/install.py` and otherwise remains **Unavailable**. Run `thpm report steam` to confirm what THPM detected. THPM never terminates Steam because doing so could interrupt a game or download.
 
-`gnome-accent-compat` is a separate Experimental opt-in because it changes the desktop-wide `org.gnome.desktop.interface accent-color` setting for all libadwaita applications. It maps the active semantic accent to GNOME's supported named accents, records the prior value, and restores it only while the current value still matches THPM's last write. Missing GSettings schema/key access, a non-writable key, or a missing desktop DBus session fails closed; concurrent user changes are preserved.
+### Nautilus
 
-Cava integration is opt-in because enabling it safely changes the `[color] theme` selector in Cava's user configuration. A saved `cava = true` value from releases where Cava was enabled by default is treated as disabled until confirmed setup succeeds and records a durable opt-in marker. THPM preserves comments, formatting, symlinked dotfile layouts, unrelated edits, and the previous selector for guarded restoration on disable or uninstall. Run `thpm doctor cava` for detailed checks or `thpm doctor cava --fix` for a confirmed transactional repair. Only running Cava processes whose effective config and theme directory can be verified are sent a PID-specific `SIGUSR1`; ambiguous processes are left alone and reported as requiring a manual reload or restart. Cava 0.10.6 or newer is required.
+The Experimental `nautilus-palette` integration requires separately installed `nautilus` and `nautilus-python`; THPM diagnoses these optional dependencies but never installs them. When enabled, it restorably installs an XDG-aware Nautilus Python extension and atomically generated palette CSS. Extension changes require a Nautilus restart, while later CSS-only theme changes reload in open windows. Disable and uninstall restore displaced files only while THPM still owns them and preserve later user edits.
 
-THPM keeps a bounded, mode-`0600` structured operation journal under `~/.local/state/thpm/logs/`. It records integration outcomes and durations without raw environments or configuration contents; logging is best-effort and never changes hook success. For remote troubleshooting, run `thpm report cava` (or another integration ID) to create a privacy-preserving JSON report under `~/.local/state/thpm/reports/`. Use `--output PATH` to choose its destination or `--json` to include the versioned report object in one CLI envelope. Reports normalize home paths wherever they occur, remove URL credentials, queries, and fragments, redact secret-like fields and authorization values, cap recent history and total size, and list omitted/redacted categories.
+### GNOME accent compatibility
 
-### Application setup
+`gnome-accent-compat` is a separate Experimental opt-in because it changes the desktop-wide `org.gnome.desktop.interface accent-color` setting for all libadwaita applications. It maps the active semantic accent to GNOME's supported named accents, records the previous value, and restores it only while the current value still matches THPM's last write. Missing schema, key, write, or desktop DBus access fails closed; concurrent user changes are preserved.
 
-The Spotify integration expects Spicetify's one-time backup to be complete. THPM's Doctor reports a missing or stale backup instead of letting every theme hook fail. Initialize Spicetify, then enable the integration:
+### Spotify
+
+Complete Spicetify’s one-time backup, then enable the integration:
 
 ```bash
 spicetify backup apply
 thpm enable spotify
 ```
 
-THPM keeps `~/.config/spicetify/Themes/omarchy/color.ini` synchronized, initializes a missing companion `user.css` from its bundled Omarchy stylesheet, and selects the lowercase `omarchy` theme with the `Base` color scheme. Existing stylesheets are never overwritten or removed. It always refreshes Spicetify's generated theme files after a palette change. Under the `automatic` restart policy, an already-running Spotify client is restarted so the colors take effect; under `notify`, Spotify remains open and is named in the pending-restart notification. A closed client stays closed under either policy. Hooks never perform Spicetify's privileged or destructive first-time backup.
+THPM updates the Omarchy color scheme without overwriting an existing Spicetify stylesheet.
 
-### cliamp themes
+### Cava
 
-cliamp already provides contrast-checked built-in themes and a terminal-ANSI default that follows the terminal palette. THPM therefore does not reduce `colors.toml` to cliamp's smaller custom-theme schema. It intervenes only when an active-theme `cliamp.toml` contains the exact line `# thpm:cliamp-use-native`, which records deliberate author intent to replace cliamp's native behavior. THPM then installs the file restorably as `~/.config/cliamp/themes/omarchy.toml` and selects `omarchy` in cliamp's top-level config. When the marker or file disappears—or the integration is disabled or removed—THPM restores both the displaced file and the previous cliamp theme selection. Later user edits and selections are preserved rather than overwritten during cleanup.
+Cava 0.10.6 or newer is required. Setup changes Cava’s selected color theme, so confirmation is required. A saved `cava = true` value from releases where Cava was enabled by default remains disabled until confirmed setup records a durable opt-in marker. THPM preserves comments, formatting, symlinked dotfile layouts, unrelated edits, and the previous selector for guarded restoration:
+
+```bash
+thpm enable cava
+thpm doctor cava
+```
+
+If the selector or generated theme needs repair:
+
+```bash
+thpm doctor cava --fix
+```
+
+### Firefox and Zen
+
+Launch the browser once before enabling its integration so a default profile exists. THPM manages its own `userChrome.css` import and restores that managed change when disabled.
+
+### Discord
+
+`discord` and `discord-system24` are mutually exclusive Vencord themes. Enable only the surface you want. Both require an existing supported client theme directory.
 
 ### Zed authored themes
 
-Omarchy's optional `omazed` package is the generated-color fallback for Zed. THPM does not modify Omazed's executable, hook, or `~/.config/zed/themes/omazed.json`. Instead, the opt-in `zed-extra` integration installs a richer authored asset when the active theme provides `zed.json` or, as a compatibility fallback, `aether.zed.json`. Canonical `zed.json` wins when both exist.
-
-THPM validates the authored JSON and normalizes its single dark or light theme to the stable name **THPM Current** at `~/.config/zed/themes/thpm-current.json`. Run `thpm enable zed-extra` for ongoing synchronization on every theme change; it backs up `settings.json` and safely selects **THPM Current**. `thpm zed setup` only performs that installation and settings selection directly—it does not persistently enable the integration. Normal theme hooks update only the managed theme file and never rewrite Zed settings. Use `thpm zed status` to see the selected source, synchronization state, current Zed selection, and whether Omazed is available. If an authored asset disappears, THPM relinquishes its file and reports the Omazed fallback honestly; select **Omazed** in Zed if you want to switch to generated colors.
-
-## Development
-
-All changes use isolated Git worktrees, short-lived branches, and pull requests. Do not develop directly on `main`; start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and the mandatory agent rules in [`AGENTS.md`](AGENTS.md). Enable the committed local guards once per clone, then create a task worktree:
+When the active Omarchy theme supplies `zed.json` or `aether.zed.json`, enable authored-theme synchronization with:
 
 ```bash
-scripts/setup-dev.sh
-scripts/agent-worktree.sh create <task-slug>
+thpm enable zed-extra
 ```
 
-From inside the task worktree, run the project checks:
+Use `thpm zed status` to inspect the selected source and Zed theme state.
+
+## Restart behavior
+
+Choose whether safely restartable running applications restart automatically after a theme change or remain open with a notification:
 
 ```bash
-python -m unittest discover -s tests -v
-python -m compileall -q src
-bash -n install.sh uninstall.sh assets/hooks/90-thpm assets/hooks/90-thpm-ui scripts/install-arch-release.sh
-qmllint assets/qml/Panel.qml.in  # when Qt tooling is installed
+thpm config restart-policy automatic
+thpm config restart-policy notify
 ```
 
-Run `scripts/zellij-live-test.sh` to apply the checkout's Zellij adapter in an isolated XDG sandbox, open a real themed Zellij session, switch its colors while it is running, and verify restoration on exit. Use `--no-launch` to verify the watched-config refresh and cleanup without opening an interactive session, or `--keep` to retain the restored sandbox for inspection.
+THPM never launches an application that was closed. Applications without a safe restart contract are reported instead of being killed.
 
-Run `scripts/local-arch-package.sh` to package the exact current working tree without creating a release or publishing to AUR. Pass `--install` to install that artifact through pacman so `/usr/bin/thpm`, packaged assets, hooks, and the graphical manager use the local build. The default local package release is `99`, making it visibly distinct from the published package; rebuild the published package with `yay -S thpm --rebuild` to roll back.
+## Troubleshooting and support reports
 
-Start with the [visual architecture map](docs/architecture-map.md), then see [docs/architecture.md](docs/architecture.md), [docs/plugins.md](docs/plugins.md), and the [Quattro compatibility plan](docs/quattro-compatibility-plan.md) for the detailed contracts and native-ownership boundary.
+Start with Doctor:
 
-Source updates follow stable GitHub releases and require matching `thpm-<version>.tar.gz` and `thpm-<version>.tar.gz.sha256` assets. Before merging release preparation, run `python scripts/verify-release.py metadata`; after the merged commit is tagged, `scripts/release-assets.sh` requires clean tag, version, release-note, Python, QML, template, and package metadata and then verifies every archive file against the tagged commit. Package-managed installations hand updates back to AUR rather than overwriting pacman-owned files.
+```bash
+thpm doctor
+thpm doctor steam
+```
 
-The stable and VCS AUR submission trees are under `packaging/aur/thpm` and `packaging/aur/thpm-git`. After publishing the tagged archive, update the stable package's SHA-256 and the VCS package's tagged `pkgver`, regenerate both `.SRCINFO` files with `makepkg --printsrcinfo`, and run `python scripts/verify-release.py packaging <archive> <archive.sha256>`. This finalization is a follow-up packaging pull request because an archive cannot contain its own digest. Keep `SKIP` only for the VCS package.
+Create a report for the affected integration:
+
+```bash
+thpm report steam
+```
+
+Reports are written to `~/.local/state/thpm/reports/`. Send the generated JSON file to the THPM maintainer.
+
+Support reports include THPM and runtime versions, the active theme, integration readiness, Doctor results, and recent bounded operation outcomes. They omit file contents, raw process environments, host identity, unrelated arguments, and unbounded command output. Home paths and secret-like values are redacted.
+
+THPM’s private operation journal is stored under `~/.local/state/thpm/logs/` with mode `0600` and bounded rotation. Logging is best-effort and records outcomes and durations without raw environments or configuration contents. Reports normalize home paths, remove URL credentials, queries, and fragments, redact secret-like fields and authorization values, and cap recent history and total size.
+
+## Update
+
+Update THPM and synchronize the active theme from any interface, or run:
+
+```bash
+thpm update
+```
+
+After a direct package-manager upgrade, refresh generated outputs and the graphical control panel when requested:
+
+```bash
+thpm reconcile --refresh
+thpm ui install
+```
+
+Opening the graphical control panel also synchronizes its installed files automatically.
+
+## Uninstall
+
+For an AUR installation, remove THPM’s managed integrations first, then remove the package:
+
+```bash
+thpm uninstall && omarchy pkg drop thpm
+```
+
+For a source installation, run this from its checkout:
+
+```bash
+./uninstall.sh
+```
+
+THPM preserves unrelated and user-modified configuration. If a managed file cannot be restored safely, uninstall reports the retained path and keeps the recovery data instead of claiming success. External tools remain responsible for reversing their own effects, including an Adwaita-for-Steam patch.
+
+## Documentation
+
+- [Integration support and certification](docs/integration-support.md)
+- [Integration behavior and prerequisites](docs/plugins.md)
+- [Architecture](docs/architecture.md)
+- [Visual architecture map](docs/architecture-map.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [Provenance](PROVENANCE.md)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+THPM is available under the [MIT License](LICENSE).

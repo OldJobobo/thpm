@@ -4,7 +4,8 @@
 
 - Add an Experimental, opt-in Nautilus palette integration with an XDG-aware hot-reloading Python extension, atomic semantic CSS generation, optional dependency diagnostics, and guarded file restoration.
 - Add a separate Experimental GNOME accent compatibility adapter that maps semantic accents to libadwaita's named palette and restores the prior GSettings value only while THPM still owns it.
-- Theme Firefox's toolbars, urlbar, panels, sidebar, selected tab, and icons from the semantic palette instead of only the toolbox background, using the lightweight-theme custom properties Firefox consumes outside `:root[lwtheme]`, and render the accent from the theme's own accent color with a blue fallback. Separate the selected tab from the strip it sits on with a raised surface and an accent ring, which Firefox's default of painting it in the toolbar background cannot do once the strip carries that same background.
+
+- Find the Firefox and Zen profile roots under `$XDG_CONFIG_HOME` as well as their legacy home-directory locations, so both integrations still work on builds that store a freshly created profile in the XDG location, and restore managed output from either root on cleanup.
 
 ## 1.0.0rc24 - 2026-08-28
 

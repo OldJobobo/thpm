@@ -1,2 +1,80 @@
-:root { --thpm-bg: {{ background }}; --thpm-fg: {{ foreground }}; --thpm-muted: {{ muted }}; --thpm-accent: {{ blue }}; }
-#navigator-toolbox { background-color: var(--thpm-bg) !important; color: var(--thpm-fg) !important; }
+/* THPM Firefox theming.
+ *
+ * Imported into the profile's userChrome.css, which applies to chrome
+ * documents only, so no document scoping is needed here.
+ *
+ * The variables below are the ones a lightweight theme add-on sets through
+ * LightweightThemeConsumer. Most are consumed as plain var() lookups rather
+ * than behind the :root[lwtheme] attribute that only that consumer can set,
+ * so setting them from a plain stylesheet reaches the same toolbars, panels,
+ * urlbar, sidebar, tabs and icons an add-on would reach. Verified against
+ * Firefox 154's own chrome CSS; --lwt-accent-color, --lwt-text-color and
+ * --lwt-tab-line-color are consumed only under that attribute and are
+ * deliberately left unset, because setting them would have no effect.
+ *
+ * The accent token goes through Omarchy's gradient_start resolver with an
+ * explicit blue fallback. Accent is an optional semantic color, a direct
+ * reference would render literally on a palette that omits it, and THPM
+ * refuses to apply a generated file with an unresolved placeholder.
+ */
+
+:root {
+  --thpm-bg: {{ background }};
+  --thpm-surface: {{ lighter_background }};
+  --thpm-surface-raised: {{ dark_background }};
+  --thpm-fg: {{ foreground }};
+  --thpm-muted: {{ muted }};
+  --thpm-border: {{ selection }};
+  --thpm-accent: {{ gradient_start accent blue }};
+  --thpm-selection-bg: {{ gradient_start selection_background selection }};
+  --thpm-selection-fg: {{ gradient_start selection_foreground bright_foreground }};
+
+  --toolbar-background-color: var(--thpm-bg) !important;
+  --toolbar-text-color: var(--thpm-fg) !important;
+  --toolbarseparator-color: var(--thpm-border) !important;
+  --chrome-content-separator-color: var(--thpm-border) !important;
+
+  --toolbarbutton-icon-fill: var(--thpm-fg) !important;
+  --toolbarbutton-icon-fill-attention: var(--thpm-accent) !important;
+  --toolbarbutton-background-color-hover: color-mix(in srgb, var(--thpm-fg) 14%, transparent) !important;
+  --toolbarbutton-background-color-active: color-mix(in srgb, var(--thpm-fg) 24%, transparent) !important;
+
+  --toolbar-field-background-color: var(--thpm-surface) !important;
+  --toolbar-field-text-color: var(--thpm-fg) !important;
+  --toolbar-field-border-color: var(--thpm-border) !important;
+  --toolbar-field-background-color-focus: var(--thpm-surface) !important;
+  --toolbar-field-text-color-focus: var(--thpm-fg) !important;
+
+  --panel-background-color: var(--thpm-surface) !important;
+  --panel-text-color: var(--thpm-fg) !important;
+  --panel-border-color: var(--thpm-border) !important;
+
+  --urlbarview-background-color-selected: var(--thpm-selection-bg) !important;
+  --urlbarview-text-color-selected: var(--thpm-selection-fg) !important;
+
+  --sidebar-background-color: var(--thpm-surface-raised) !important;
+  --sidebar-text-color: var(--thpm-fg) !important;
+  --sidebar-border-color: var(--thpm-border) !important;
+
+  /* The tab strip and the toolbar share one background here, so Firefox's
+     default of painting the selected tab in --toolbar-background-color makes
+     it disappear into the strip. Firefox's own themes raise it with a
+     translucent overlay, which a semantic palette has no token for, so the tab
+     is raised to the surface color and ringed in the accent. The ring is what
+     carries the signal on palettes whose surface step is small:
+     --tab-selected-outline-color is consumed without :root[lwtheme], unlike
+     the --lwt-tab-line-color an add-on would set for the same effect. */
+  --tab-background-color-selected: var(--thpm-surface) !important;
+  --tab-selected-textcolor: var(--thpm-fg) !important;
+  --tab-selected-outline-color: var(--thpm-accent) !important;
+
+  --focus-outline-color: var(--thpm-accent) !important;
+}
+
+/* #navigator-toolbox only reads --lwt-accent-color under :root[lwtheme];
+   without that attribute it falls back to the native system color and
+   ignores the variables above, so it is set directly. */
+#navigator-toolbox {
+  background-color: var(--thpm-bg) !important;
+  color: var(--thpm-fg) !important;
+}

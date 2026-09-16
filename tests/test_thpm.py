@@ -77,6 +77,7 @@ from thpm.integrations import (
     ApplyFailure,
     _browser_default_profile,
     _browser_import,
+    _browser_profile_root,
     _reload,
     apply,
     apply_enabled,
@@ -617,6 +618,19 @@ class StateTests(Sandbox):
         def substitute(match: re.Match[str]) -> str:
             expression = match.group(1).strip()
             parts = expression.split()
+            if parts and parts[0] == "gradient_start":
+                # Mirrors Omarchy's resolve_theme_ref: the referenced color
+                # wins when the palette defines it, otherwise the fallback
+                # reference does. Either way the token always renders, which
+                # is what lets a template reach an optional semantic color.
+                self.assertEqual(
+                    len(parts), 3, f"unsupported gradient_start form: {expression}"
+                )
+                _, reference, fallback = parts
+                self.assertNotIn(reference, legacy)
+                self.assertNotIn(fallback, legacy)
+                self.assertIn(fallback, CANONICAL_COLORS)
+                return CANONICAL_COLORS.get(reference, CANONICAL_COLORS[fallback])
             self.assertEqual(
                 len(parts), 1, f"test renderer needs explicit coverage for {expression}"
             )
@@ -646,6 +660,90 @@ class StateTests(Sandbox):
         document = json.loads(rendered["thpm-hermes.json.tpl"])
         self.assertEqual(document["schemaVersion"], 1)
         self.assertIn("brightWhite", document["theme"]["darkTerminal"])
+
+    def test_firefox_selected_tab_is_separated_from_the_tab_strip(self):
+        # Firefox's own default paints the selected tab in
+        # --toolbar-background-color, which is the color this template gives
+        # the strip around it, so the tab would dissolve into the strip. It has
+        # to be raised onto its own surface and ringed in the accent, and the
+        # ring is what stays legible on palettes whose surface step is small.
+        # --tab-selected-outline-color is the ungated stand-in for the
+        # --lwt-tab-line-color only a theme add-on can set.
+        template = (
+            Path(__file__).parents[1] / "assets/templates/thpm-firefox.css.tpl"
+        ).read_text()
+        declarations = dict(
+            re.findall(r"^\s*(--[\w-]+):\s*(.+?)\s*!important;$", template, re.M)
+        )
+        self.assertNotEqual(
+            declarations["--tab-background-color-selected"],
+            declarations["--toolbar-background-color"],
+        )
+        self.assertEqual(
+            declarations["--tab-selected-outline-color"], "var(--thpm-accent)"
+        )
+
+    def test_firefox_filled_states_use_semantic_selection_contrast(self):
+        template = (
+            Path(__file__).parents[1] / "assets/templates/thpm-firefox.css.tpl"
+        ).read_text()
+        declarations = dict(
+            re.findall(r"^\s*(--[\w-]+):\s*(.+?);$", template, re.M)
+        )
+        self.assertEqual(
+            declarations["--thpm-selection-bg"],
+            "{{ gradient_start selection_background selection }}",
+        )
+        self.assertEqual(
+            declarations["--thpm-selection-fg"],
+            "{{ gradient_start selection_foreground bright_foreground }}",
+        )
+        self.assertEqual(
+            declarations["--urlbarview-background-color-selected"],
+            "var(--thpm-selection-bg) !important",
+        )
+        self.assertEqual(
+            declarations["--urlbarview-text-color-selected"],
+            "var(--thpm-selection-fg) !important",
+        )
+        self.assertNotIn(
+            "var(--thpm-accent)",
+            declarations["--toolbarbutton-background-color-active"],
+        )
+        self.assertIn(
+            "var(--thpm-fg)",
+            declarations["--toolbarbutton-background-color-active"],
+        )
+
+        def contrast(first: str, second: str) -> float:
+            def luminance(color: str) -> float:
+                channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+                linear = [
+                    channel / 12.92
+                    if channel <= 0.04045
+                    else ((channel + 0.055) / 1.055) ** 2.4
+                    for channel in channels
+                ]
+                return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+            lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+            return (lighter + 0.05) / (darker + 0.05)
+
+        # Optional semantic selection colors win for a dark palette; their
+        # canonical fallbacks remain a paired selection surface for a light one.
+        dark = {
+            "selection_background": "#345678",
+            "selection_foreground": "#ffffff",
+            "selection": "#333333",
+            "bright_foreground": "#ffffff",
+        }
+        light = {"selection": "#d7e3f4", "bright_foreground": "#111827"}
+        for colors in (dark, light):
+            background = colors.get("selection_background", colors["selection"])
+            foreground = colors.get(
+                "selection_foreground", colors["bright_foreground"]
+            )
+            self.assertGreaterEqual(contrast(background, foreground), 4.5)
 
     def test_fish_template_sets_effective_syntax_and_pager_colors(self):
         template = (
@@ -7177,6 +7275,76 @@ class IntegrationTests(Sandbox):
             profiles=(("profile.live", str(live_app)),),
         )
         self.assertEqual(_browser_default_profile(base), "profile.live")
+    def _firefox_root(self, kind):
+        base = (
+            self.paths.home / ".mozilla/firefox"
+            if kind == "legacy"
+            else self.paths.config_home / "mozilla/firefox"
+        )
+        profile = base / "profile.default"
+        profile.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        return base
+
+    def test_firefox_uses_legacy_profile_root_when_present(self):
+        legacy = self._firefox_root("legacy")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), legacy)
+
+    def test_firefox_finds_profile_root_under_xdg_config_home(self):
+        # Recent Firefox builds create a fresh profile under
+        # $XDG_CONFIG_HOME/mozilla/firefox, where the legacy path does not
+        # exist at all and the integration previously found nothing.
+        xdg = self._firefox_root("xdg")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), xdg)
+
+    def test_firefox_prefers_legacy_profile_root_over_xdg(self):
+        legacy = self._firefox_root("legacy")
+        self._firefox_root("xdg")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), legacy)
+
+    def test_firefox_readiness_accepts_an_xdg_profile_root(self):
+        xdg = self._firefox_root("xdg")
+        _ready, missing, _warnings = inspect_readiness(
+            "firefox", self.paths, which=lambda command: f"/usr/bin/{command}"
+        )
+        self.assertEqual(missing, [])
+        # The legacy root does not exist at all here, so before this change
+        # readiness reported its profiles.ini as the missing prerequisite.
+        self.assertTrue((xdg / "profiles.ini").is_file())
+        self.assertFalse((self.paths.home / ".mozilla/firefox").exists())
+
+    def test_firefox_import_and_cleanup_cover_an_xdg_profile_root(self):
+        generated = self.paths.current_theme / "thpm-firefox.css"
+        generated.parent.mkdir(parents=True, exist_ok=True)
+        generated.write_text("/* generated */\n")
+        xdg = self._firefox_root("xdg")
+        _browser_import(self.paths, "firefox", _browser_profile_root(self.paths, "firefox"))
+        entrypoint = xdg / "profile.default/chrome/userChrome.css"
+        self.assertTrue(entrypoint.is_file())
+        cleanup_managed_outputs(self.paths, "firefox", assume_legacy=True)
+        self.assertFalse(entrypoint.exists())
+
+    def test_zen_finds_profile_root_under_xdg_config_home(self):
+        base = self.paths.config_home / "zen"
+        # Zen profile directories carry spaces and parentheses in practice,
+        # e.g. "k70byiqe.Default (release)".
+        (base / "profile.Default (release)").mkdir(parents=True)
+        (base / "profiles.ini").write_text(
+            "[Install1]\nDefault=profile.Default (release)\n"
+        )
+        self.assertEqual(_browser_profile_root(self.paths, "zen"), base)
+        self.assertEqual(
+            _browser_default_profile(base), "profile.Default (release)"
+        )
+
+    def test_zen_prefers_legacy_profile_root_over_xdg(self):
+        legacy = self.paths.home / ".zen"
+        (legacy / "profile.default").mkdir(parents=True)
+        (legacy / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        xdg = self.paths.config_home / "zen"
+        (xdg / "profile.default").mkdir(parents=True)
+        (xdg / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        self.assertEqual(_browser_profile_root(self.paths, "zen"), legacy)
 
     def test_discord_cleanup_restores_displaced_theme(self):
         source = self.paths.current_theme / "thpm-vencord.theme.css"

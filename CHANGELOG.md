@@ -4,6 +4,7 @@
 
 - Add an Experimental, opt-in Nautilus palette integration with an XDG-aware hot-reloading Python extension, atomic semantic CSS generation, optional dependency diagnostics, and guarded file restoration.
 - Add a separate Experimental GNOME accent compatibility adapter that maps semantic accents to libadwaita's named palette and restores the prior GSettings value only while THPM still owns it.
+- Find the Firefox and Zen profile roots under `$XDG_CONFIG_HOME` as well as their legacy home-directory locations, so both integrations still work on builds that store a freshly created profile in the XDG location, and restore managed output from either root on cleanup.
 
 ## 1.0.0rc24 - 2026-08-28
 

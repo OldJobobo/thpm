@@ -302,6 +302,21 @@ def status(
     if source_path is not None:
         try:
             expected, appearance = normalized(source_path)
+            style = json.loads(expected)["themes"][0]["style"]
+            missing_backgrounds = [
+                f"{severity}.background"
+                for severity in ("warning", "error", "info", "hint")
+                if not isinstance(style.get(f"{severity}.background"), str)
+                or not style[f"{severity}.background"].strip()
+            ]
+            if missing_backgrounds:
+                warnings.append(
+                    f"authored Zed theme {source_path} has no explicit diagnostic background for "
+                    + ", ".join(missing_backgrounds)
+                    + "; Zed fallback colors may make popup text unreadable. "
+                    "Set these backgrounds to a readable theme surface in the source asset; "
+                    "THPM preserves authored styles and does not repair them automatically"
+                )
         except ZedThemeError as exc:
             warnings.append(str(exc))
     synchronized = False

@@ -3786,6 +3786,68 @@ class ZedTests(Sandbox):
         self.assertEqual(unchanged.status, "unchanged")
         self.assertEqual(unchanged.changed, [])
 
+    def test_status_warns_for_missing_authored_diagnostic_backgrounds(self):
+        for name in ("zed.json", "aether.zed.json"):
+            with self.subTest(source=name):
+                source = self.write_zed(name)
+                before = source.read_bytes()
+                result = zed_status(self.paths)
+                warning = next(
+                    message for message in result["warnings"]
+                    if "no explicit diagnostic background" in message
+                )
+                self.assertIn(str(source), warning)
+                for severity in ("warning", "error", "info", "hint"):
+                    self.assertIn(f"{severity}.background", warning)
+                self.assertIn("THPM preserves authored styles", warning)
+                self.assertEqual(source.read_bytes(), before)
+                self.assertFalse((self.paths.config_home / "zed/themes").exists())
+                source.unlink()
+
+    def test_diagnostic_background_warnings_preserve_authored_styles(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        style = data["themes"][0]["style"]
+        style.update({
+            "warning": "#ffbf00",
+            "warning.background": "#2a2518",
+            "warning.border": "#8a6d1d",
+            "error.background": "#123456",
+            "info.background": "#12345690",
+            "hint.background": "#123456",
+        })
+        source.write_text(json.dumps(data))
+        before = source.read_bytes()
+        apply("zed-extra", self.paths)
+        for value in (None, "", "   ", 42):
+            with self.subTest(background=value):
+                style["hint.background"] = value
+                source.write_text(json.dumps(data))
+                warning = next(
+                    message for message in zed_status(self.paths)["warnings"]
+                    if "no explicit diagnostic background" in message
+                )
+                self.assertIn("hint.background", warning)
+                self.assertNotIn("warning.background", warning)
+                self.assertNotIn("error.background", warning)
+                self.assertNotIn("info.background", warning)
+        source.write_bytes(before)
+        self.assertFalse(any(
+            "diagnostic background" in message
+            for message in zed_status(self.paths)["warnings"]
+        ))
+        installed = self.paths.config_home / "zed/themes/thpm-current.json"
+        self.assertEqual(json.loads(installed.read_text())["themes"][0]["style"],
+                         json.loads(before)["themes"][0]["style"])
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_enabled_zed_diagnostic_warnings_reach_doctor(self):
+        self.write_zed()
+        save(self.paths, {"zed-extra": True})
+        result = Service(self.paths).doctor("zed-extra")
+        self.assertIn("warning.background", str(result["warnings"]))
+        self.assertIn("THPM preserves authored styles", str(result["warnings"]))
+
     def test_aether_source_is_supported_without_touching_aether_or_omazed(self):
         self.write_zed("aether.zed.json")
         aether = self.paths.config_home / "zed/themes/aether.json"
@@ -4085,6 +4147,8 @@ class ZedTests(Sandbox):
         self.assertEqual(result["omazed"]["command"], "/usr/bin/omazed")
         self.assertTrue(result["omazed"]["outputExists"])
         self.assertIn("select Omazed", " ".join(result["warnings"]))
+        self.assertFalse(any("diagnostic background" in message for message in result["warnings"]))
+        self.assertEqual(fallback.read_text(), "generated")
 
 
 class CavaTests(Sandbox):

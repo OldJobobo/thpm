@@ -3786,6 +3786,136 @@ class ZedTests(Sandbox):
         self.assertEqual(unchanged.status, "unchanged")
         self.assertEqual(unchanged.changed, [])
 
+    def test_missing_diagnostic_colors_are_filled_without_editing_source(self):
+        for name in ("zed.json", "aether.zed.json"):
+            with self.subTest(source=name):
+                source = self.write_zed(name)
+                before = source.read_bytes()
+                installed = self.paths.config_home / "zed/themes/thpm-current.json"
+                target_before = installed.read_bytes() if installed.exists() else None
+                zed_status(self.paths)
+                self.assertEqual(source.read_bytes(), before)
+                self.assertEqual(installed.read_bytes() if installed.exists() else None, target_before)
+                apply("zed-extra", self.paths)
+                style = json.loads(installed.read_text())["themes"][0]["style"]
+                for severity in ("warning", "error", "info", "hint"):
+                    self.assertEqual(style[f"{severity}.background"], "#123456")
+                    self.assertEqual(style[f"{severity}.border"], style[severity])
+                    self.assertRegex(style[severity], r"^#[0-9a-f]{6}$")
+                self.assertTrue(zed_status(self.paths)["synchronized"])
+                self.assertEqual(apply("zed-extra", self.paths).status, "unchanged")
+                self.assertEqual(source.read_bytes(), before)
+                source.unlink()
+
+    def test_diagnostic_defaults_preserve_explicit_overrides(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        style = data["themes"][0]["style"]
+        style.update({
+            "warning": "#ffbf00",
+            "warning.background": "#2a2518",
+            "warning.border": "#8a6d1d",
+            "error.background": "#123456",
+            "info.background": "#12345690",
+            "hint.background": "#00000000",
+            "syntax": {"keyword": {"color": "#abcdef"}},
+        })
+        source.write_text(json.dumps(data))
+        before = source.read_bytes()
+        apply("zed-extra", self.paths)
+        installed = self.paths.config_home / "zed/themes/thpm-current.json"
+        completed = json.loads(installed.read_text())["themes"][0]["style"]
+        for key, value in style.items():
+            self.assertEqual(completed[key], value)
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_null_and_blank_diagnostic_colors_receive_defaults(self):
+        source = self.write_zed()
+        for value in (None, "", "   "):
+            with self.subTest(color=value):
+                data = json.loads(zed_theme())
+                style = data["themes"][0]["style"]
+                style.update({"warning": value, "warning.background": value, "warning.border": value})
+                source.write_text(json.dumps(data))
+                completed = json.loads(normalized(source)[0])["themes"][0]["style"]
+                self.assertEqual(completed["warning.background"], "#123456")
+                self.assertEqual(completed["warning.border"], completed["warning"])
+                self.assertNotEqual(completed["warning"], value)
+
+    def test_authored_surface_and_terminal_accents_take_precedence(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        style = data["themes"][0]["style"]
+        style["elevated_surface.background"] = "#2a2518"
+        style["terminal.ansi.yellow"] = "#ffbf00"
+        source.write_text(json.dumps(data))
+        completed = json.loads(normalized(source)[0])["themes"][0]["style"]
+        self.assertEqual(completed["warning"], "#ffbf00")
+        self.assertEqual(completed["warning.border"], "#ffbf00")
+        for severity in ("warning", "error", "info", "hint"):
+            self.assertEqual(completed[f"{severity}.background"], "#2a2518")
+
+    def test_diagnostic_defaults_use_canonical_palette_and_detect_changes(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        data["themes"][0]["style"] = {}
+        source.write_text(json.dumps(data))
+        colors = self.paths.current_theme / "colors.toml"
+        canonical = {**COLORS, **CANONICAL_COLORS, "bg": "#ff0000"}
+        colors.write_text("\n".join(f'{key} = "{value}"' for key, value in canonical.items()))
+        with patch("thpm.palette.shutil.which", return_value=None):
+            apply("zed-extra", self.paths)
+            installed = self.paths.config_home / "zed/themes/thpm-current.json"
+            style = json.loads(installed.read_text())["themes"][0]["style"]
+            for severity, accent in (("warning", "yellow"), ("error", "red"), ("info", "blue"), ("hint", "cyan")):
+                self.assertEqual(style[severity], COLORS[accent])
+                self.assertEqual(style[f"{severity}.border"], COLORS[accent])
+                self.assertEqual(style[f"{severity}.background"], COLORS["bg"])
+            self.assertTrue(zed_status(self.paths)["synchronized"])
+            canonical["yellow"] = "#eedd00"
+            colors.write_text("\n".join(f'{key} = "{value}"' for key, value in canonical.items()))
+            self.assertFalse(zed_status(self.paths)["synchronized"])
+            self.assertEqual(apply("zed-extra", self.paths).status, "applied")
+            self.assertEqual(json.loads(installed.read_text())["themes"][0]["style"]["warning"], "#eedd00")
+
+    def test_light_and_dark_defaults_work_without_palette_or_surface(self):
+        for appearance, background in (("dark", "#181818"), ("light", "#fafafa")):
+            with self.subTest(appearance=appearance):
+                source = self.write_zed(appearance=appearance)
+                data = json.loads(source.read_text())
+                data["themes"][0]["style"] = {}
+                source.write_text(json.dumps(data))
+                style = json.loads(normalized(source)[0])["themes"][0]["style"]
+                for severity in ("warning", "error", "info", "hint"):
+                    self.assertEqual(style[f"{severity}.background"], background)
+                    self.assertEqual(style[f"{severity}.border"], style[severity])
+
+    def test_complete_diagnostics_do_not_require_a_valid_palette(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        style = data["themes"][0]["style"]
+        for severity in ("warning", "error", "info", "hint"):
+            style[severity] = "#abcdef"
+            style[f"{severity}.background"] = "#123456"
+            style[f"{severity}.border"] = "#fedcba"
+        source.write_text(json.dumps(data))
+        (source.parent / "colors.toml").write_text("not valid TOML")
+        self.assertEqual(json.loads(normalized(source)[0])["themes"][0]["style"], style)
+
+    def test_invalid_needed_palette_does_not_replace_installed_theme(self):
+        source = self.write_zed()
+        apply("zed-extra", self.paths)
+        installed = self.paths.config_home / "zed/themes/thpm-current.json"
+        before = installed.read_bytes()
+        (source.parent / "colors.toml").write_text("not valid TOML")
+        with patch("thpm.palette.shutil.which", return_value=None):
+            with self.assertRaises(ZedThemeError):
+                normalized(source)
+            with self.assertRaises(ZedThemeError):
+                apply("zed-extra", self.paths)
+            self.assertIn("diagnostic defaults", " ".join(zed_status(self.paths)["warnings"]))
+        self.assertEqual(installed.read_bytes(), before)
+
     def test_aether_source_is_supported_without_touching_aether_or_omazed(self):
         self.write_zed("aether.zed.json")
         aether = self.paths.config_home / "zed/themes/aether.json"
@@ -4085,6 +4215,8 @@ class ZedTests(Sandbox):
         self.assertEqual(result["omazed"]["command"], "/usr/bin/omazed")
         self.assertTrue(result["omazed"]["outputExists"])
         self.assertIn("select Omazed", " ".join(result["warnings"]))
+        self.assertFalse(any("diagnostic background" in message for message in result["warnings"]))
+        self.assertEqual(fallback.read_text(), "generated")
 
 
 class CavaTests(Sandbox):

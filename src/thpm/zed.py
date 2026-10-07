@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .files import atomic_copy, atomic_text
+from .palette import load as load_palette
 from .paths import Paths
 
 THEME_NAME = "THPM Current"
@@ -67,10 +68,67 @@ def _load_theme(path: Path) -> dict[str, object]:
     return data
 
 
+def _missing_color(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _complete_diagnostics(style: dict[str, object], appearance: str, path: Path) -> None:
+    accents = {"warning": "yellow", "error": "red", "info": "blue", "hint": "cyan"}
+    if all(
+        not _missing_color(style.get(key))
+        for severity in accents
+        for key in (severity, f"{severity}.background", f"{severity}.border")
+    ):
+        return
+
+    # Authored surfaces and accents take priority over the semantic palette.
+    surface = next((
+        style[key] for key in ("elevated_surface.background", "background")
+        if isinstance(style.get(key), str) and not _missing_color(style[key])
+    ), None)
+    needs_palette = (surface is None and any(
+        _missing_color(style.get(f"{severity}.background")) for severity in accents
+    )) or any(
+        _missing_color(style.get(severity))
+        and (not isinstance(style.get(f"terminal.ansi.{accent}"), str)
+             or _missing_color(style.get(f"terminal.ansi.{accent}")))
+        for severity, accent in accents.items()
+    )
+    colors_path = path.parent / "colors.toml"
+    colors: dict[str, str] = {}
+    if needs_palette and colors_path.is_file():
+        try:
+            colors = load_palette(colors_path)
+        except (OSError, ValueError) as exc:
+            raise ZedThemeError(f"could not resolve Zed diagnostic defaults from {colors_path}: {exc}") from exc
+    defaults = (
+        {"bg": "#fafafa", "yellow": "#765500", "red": "#b42318", "blue": "#175cd3", "cyan": "#0e6471"}
+        if appearance == "light" else
+        {"bg": "#181818", "yellow": "#e5c07b", "red": "#e06c75", "blue": "#61afef", "cyan": "#56b6c2"}
+    )
+    surface = surface or colors.get("bg", defaults["bg"])
+    for severity, accent in accents.items():
+        if _missing_color(style.get(severity)):
+            authored = style.get(f"terminal.ansi.{accent}")
+            style[severity] = (
+                authored if isinstance(authored, str) and not _missing_color(authored)
+                else colors.get(accent, defaults[accent])
+            )
+        if _missing_color(style.get(f"{severity}.background")):
+            style[f"{severity}.background"] = surface
+        if _missing_color(style.get(f"{severity}.border")):
+            style[f"{severity}.border"] = style[severity]
+
+
 def normalized(path: Path) -> tuple[str, str]:
     data = _load_theme(path)
-    theme = data["themes"][0]
+    themes = data["themes"]
+    assert isinstance(themes, list)
+    theme = themes[0]
     assert isinstance(theme, dict)
+    style = theme["style"]
+    assert isinstance(style, dict)
+    _complete_diagnostics(style, str(theme["appearance"]), path)
     data["name"] = THEME_NAME
     theme["name"] = THEME_NAME
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n", str(theme["appearance"])
@@ -302,21 +360,6 @@ def status(
     if source_path is not None:
         try:
             expected, appearance = normalized(source_path)
-            style = json.loads(expected)["themes"][0]["style"]
-            missing_backgrounds = [
-                f"{severity}.background"
-                for severity in ("warning", "error", "info", "hint")
-                if not isinstance(style.get(f"{severity}.background"), str)
-                or not style[f"{severity}.background"].strip()
-            ]
-            if missing_backgrounds:
-                warnings.append(
-                    f"authored Zed theme {source_path} has no explicit diagnostic background for "
-                    + ", ".join(missing_backgrounds)
-                    + "; Zed fallback colors may make popup text unreadable. "
-                    "Set these backgrounds to a readable theme surface in the source asset; "
-                    "THPM preserves authored styles and does not repair them automatically"
-                )
         except ZedThemeError as exc:
             warnings.append(str(exc))
     synchronized = False

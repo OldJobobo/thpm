@@ -7890,10 +7890,11 @@ class IntegrationTests(Sandbox):
         source.parent.mkdir(parents=True)
         source.write_text(":root { --bg-color: #101820; }\n")
         service = Service(self.paths)
+        assets = Path(__file__).parents[1] / "assets"
 
         with patch("thpm.service._typora_process_running", return_value=True), patch(
             "thpm.integrations._reload", return_value=([], [])
-        ):
+        ), patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
             service.set_enabled("typora", True, refresh=False)
             apply("typora", self.paths)
             disabled = service.set_enabled("typora", False)

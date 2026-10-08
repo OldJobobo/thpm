@@ -101,7 +101,7 @@ from thpm.state import (
     load,
     save,
 )
-from thpm.templates import reconcile
+from thpm.templates import owned_names, reconcile
 from thpm.tui import ThpmTui, omarchy_theme
 from thpm.zed import (
     MAX_THEME_BYTES,
@@ -657,9 +657,7 @@ class StateTests(Sandbox):
             output = placeholder.sub(substitute, source)
             self.assertNotIn("{{", output, str(path))
             rendered[path.name] = output
-        document = json.loads(rendered["thpm-hermes.json.tpl"])
-        self.assertEqual(document["schemaVersion"], 1)
-        self.assertIn("brightWhite", document["theme"]["darkTerminal"])
+        self.assertNotIn("thpm-hermes.json.tpl", rendered)
 
     def test_firefox_selected_tab_is_separated_from_the_tab_strip(self):
         # Firefox's own default paints the selected tab in
@@ -2467,10 +2465,16 @@ class ServiceTests(Sandbox):
         after = next(plugin for plugin in Service(self.paths).state()["plugins"] if plugin["id"] == "gtk-css-compat")
         self.assertEqual(after["warnings"], [])
 
-    def test_hermes_desktop_config_makes_plugin_available(self):
-        (self.paths.config_home / "Hermes").mkdir(parents=True)
-        plugin = next(item for item in Service(self.paths).state()["plugins"] if item["id"] == "hermes")
-        self.assertTrue(plugin["available"])
+    def test_hermes_is_a_read_only_native_ownership_record(self):
+        plugins = Service(self.paths).state()["plugins"]
+        self.assertNotIn("hermes", {plugin["id"] for plugin in plugins})
+        for plugin_id in ("native-hermes", "native-pi", "native-claude", "native-t3code"):
+            plugin = next(item for item in plugins if item["id"] == plugin_id)
+            self.assertEqual(plugin["ownership"], "native")
+            self.assertEqual(plugin["supportStatus"], "native")
+            self.assertEqual(plugin["templates"], [])
+            self.assertFalse(Service(self.paths).set_enabled(plugin_id, True)["ok"])
+        self.assertFalse(Service(self.paths).set_enabled("hermes", True)["ok"])
         self.assertEqual(plugin["missing"], [])
 
     def test_enabled_unavailable_plugins_are_reported_as_attention(self):
@@ -3754,6 +3758,145 @@ class TuiTests(Sandbox):
                     await pilot.pause()
             launch.assert_called_once_with("https://ko-fi.com/oldjobobo")
         asyncio.run(exercise())
+
+
+class HermesRetirementTests(Sandbox):
+    def setUp(self):
+        super().setUp()
+        self.native_files = {}
+        for name in (
+            ".hermes/skins/omarchy.yaml",
+            ".hermes/profiles/work/skins/omarchy.yaml",
+            ".hermes/config.yaml",
+            ".hermes/profiles/work/config.yaml",
+        ):
+            path = self.paths.home / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("native Hermes file\n")
+            self.native_files[path] = path.read_bytes()
+        self.native_source = self.paths.current_theme / "hermes.yaml"
+        self.native_source.parent.mkdir(parents=True, exist_ok=True)
+        self.native_source.write_text("name: omarchy\ncolors:\n  background: '#111111'\n")
+        self.native_files[self.native_source] = self.native_source.read_bytes()
+        self.target = self.paths.config_home / "Hermes/omarchy-theme.json"
+        self.rendered = self.paths.current_theme / "thpm-hermes.json"
+
+    def write_descriptor(self):
+        data = {
+            "schemaVersion": 1, "source": "thpm",
+            "theme": {"name": "omarchy-current", **{
+                key: {"foreground": "#dddddd"}
+                for key in ("colors", "darkColors", "terminal", "darkTerminal")
+            }},
+        }
+        self.rendered.write_text(json.dumps(data))
+        self.target.parent.mkdir(parents=True, exist_ok=True)
+        self.target.write_bytes(self.rendered.read_bytes())
+
+    def assert_native_untouched(self):
+        for path, content in self.native_files.items():
+            self.assertEqual(path.read_bytes(), content, str(path))
+
+    def test_reconcile_retires_enabled_hermes_and_removes_legacy_files(self):
+        self.write_descriptor()
+        template = self.paths.themed_dir / "thpm-hermes.json.tpl"
+        template.parent.mkdir(parents=True)
+        template.write_text("old template")
+        self.paths.state_file.parent.mkdir(parents=True)
+        self.paths.state_file.write_text("version = 1\n[plugins]\nhermes = true\n")
+        self.paths.canonical_palette_migration_marker.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.canonical_palette_migration_marker.write_text("canonical-palette-v1\n")
+        payload = Service(self.paths).reconcile()
+        self.assertTrue(payload["ok"], payload)
+        self.assertNotIn("hermes =", self.paths.state_file.read_text())
+        self.assertNotIn("hermes", {plugin["id"] for plugin in payload["plugins"]})
+        self.assertIn("native-hermes", {plugin["id"] for plugin in payload["plugins"]})
+        for path in (self.target, self.rendered, template):
+            self.assertFalse(path.exists())
+            self.assertIn(str(path), payload["changed"])
+        self.assert_native_untouched()
+        self.assertTrue(Service(self.paths).reconcile()["ok"])
+        self.assert_native_untouched()
+
+    def test_tracked_retirement_restores_prior_descriptor_without_rendered_source(self):
+        self.write_descriptor()
+        self.target.write_text("prior user descriptor")
+        self.target.chmod(0o600)
+        integration_adapters._install_optional_asset(
+            self.paths, "generated-hermes", self.rendered, self.target
+        )
+        self.rendered.unlink()
+        changed, warnings = cleanup_managed_outputs(self.paths, "hermes", assume_legacy=True)
+        self.assertEqual(self.target.read_text(), "prior user descriptor")
+        self.assertEqual(self.target.stat().st_mode & 0o777, 0o600)
+        self.assertIn(str(self.target), changed)
+        self.assertEqual(warnings, [])
+        self.assert_native_untouched()
+
+    def test_tracked_user_modification_is_preserved(self):
+        self.write_descriptor()
+        integration_adapters._install_optional_asset(
+            self.paths, "generated-hermes", self.rendered, self.target
+        )
+        self.target.write_text("user modified descriptor")
+        changed, warnings = cleanup_managed_outputs(self.paths, "hermes", assume_legacy=True)
+        self.assertEqual(self.target.read_text(), "user modified descriptor")
+        self.assertNotIn(str(self.target), changed)
+        self.assertIn("user-modified", " ".join(warnings))
+        self.assert_native_untouched()
+
+    def test_untracked_changed_descriptor_is_not_removed(self):
+        self.write_descriptor()
+        self.target.write_text("unknown user descriptor")
+        cleanup_managed_outputs(self.paths, "hermes", assume_legacy=True)
+        self.assertEqual(self.target.read_text(), "unknown user descriptor")
+        self.assert_native_untouched()
+
+    def test_untracked_descriptor_without_matching_source_is_preserved(self):
+        self.write_descriptor()
+        before = self.target.read_bytes()
+        self.rendered.unlink()
+        cleanup_managed_outputs(self.paths, "hermes", assume_legacy=True)
+        self.assertEqual(self.target.read_bytes(), before)
+        self.assert_native_untouched()
+
+    def test_unknown_rendered_json_and_symlink_targets_are_preserved(self):
+        self.rendered.write_text('{"source": "user"}')
+        self.target.parent.mkdir(parents=True)
+        self.target.symlink_to(self.native_source)
+        cleanup_managed_outputs(self.paths, "hermes", assume_legacy=True)
+        self.assertTrue(self.target.is_symlink())
+        self.assertEqual(self.rendered.read_text(), '{"source": "user"}')
+        self.assert_native_untouched()
+
+    def test_invalid_cleanup_metadata_retains_descriptor_and_recovery_state(self):
+        self.write_descriptor()
+        state, backup = integration_adapters._asset_state_paths(self.paths, "generated-hermes")
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text("invalid metadata")
+        backup.write_text("prior descriptor")
+        before = self.target.read_bytes()
+        changed, warnings = cleanup_managed_outputs(self.paths, "hermes", assume_legacy=True)
+        self.assertEqual(self.target.read_bytes(), before)
+        self.assertNotIn(str(self.target), changed)
+        self.assertIn("state is invalid", " ".join(warnings))
+        self.assertTrue(state.exists())
+        self.assertTrue(backup.exists())
+        self.assert_native_untouched()
+
+    def test_uninstall_cleans_old_json_without_touching_native_skin_or_selection(self):
+        self.write_descriptor()
+        with patch("thpm.ui.run"):
+            payload = Service(self.paths).uninstall()
+        self.assertFalse(self.target.exists())
+        self.assertFalse(self.rendered.exists())
+        self.assertIn(str(self.target), payload["changed"])
+        self.assert_native_untouched()
+
+    def test_retired_writer_cannot_be_applied(self):
+        with self.assertRaises(KeyError):
+            apply("hermes", self.paths)
+        self.assert_native_untouched()
 
 
 class ZedTests(Sandbox):
@@ -9457,20 +9600,9 @@ class IntegrationTests(Sandbox):
             self.assertIn(rule, template)
         self.assertIn("text-decoration: underline !important;", template)
 
-    def test_hermes_template_matches_desktop_theme_contract(self):
-        template = (Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").read_text()
-        def replace(match: re.Match[str]) -> str:
-            key = match.group(1)
-            self.assertIn(key, CANONICAL_COLORS)
-            return CANONICAL_COLORS[key]
-        rendered = re.sub(r"\{\{ ([a-z_]+) \}\}", replace, template)
-        document = json.loads(rendered)
-        self.assertEqual(document["schemaVersion"], 1)
-        self.assertEqual(document["source"], "thpm")
-        for key in ("colors", "darkColors", "terminal", "darkTerminal"):
-            self.assertIn(key, document["theme"])
-        self.assertIn("composerRing", document["theme"]["colors"])
-        self.assertIn("brightWhite", document["theme"]["darkTerminal"])
+    def test_hermes_template_is_retired_not_packaged(self):
+        self.assertFalse((Path(__file__).parents[1] / "assets/templates/thpm-hermes.json.tpl").exists())
+        self.assertIn("thpm-hermes.json.tpl", owned_names())
 
     def test_zen_template_themes_modern_browser_chrome(self):
         template = (

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retire THPM's obsolete Hermes JSON writer in favor of Omarchy's native YAML skin integration, preserving guarded legacy cleanup and leaving native skins and selections untouched. Add read-only Hermes, Pi, Claude, and T3 Code ownership records.
+
 - Add an Experimental, opt-in Nautilus palette integration with an XDG-aware hot-reloading Python extension, atomic semantic CSS generation, optional dependency diagnostics, and guarded file restoration.
 - Add a separate Experimental GNOME accent compatibility adapter that maps semantic accents to libadwaita's named palette and restores the prior GSettings value only while THPM still owns it.
 

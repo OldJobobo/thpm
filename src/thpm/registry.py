@@ -24,7 +24,6 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("cava", "Cava", "Media", "Install, select, and safely reload a Cava gradient.", "hybrid", ("cava",), theme_assets=("cava_theme",), templates=("thpm-cava.ini.tpl",), default_enabled=False, confirmation=True),
     Plugin("firefox", "Firefox", "Browsers", "Manage Firefox userChrome imports and generated CSS.", "hybrid", ("firefox",), theme_assets=("firefox.css",), templates=("thpm-firefox.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("zen", "Zen Browser", "Browsers", "Manage Zen userChrome imports and generated CSS.", "hybrid", ("zen-browser",), theme_assets=("zen.css",), templates=("thpm-zen.css.tpl",), default_enabled=False, confirmation=True),
-    Plugin("hermes", "Hermes", "Editors", "Generate the Hermes Omarchy theme descriptor.", "hybrid", ("Hermes",), templates=("thpm-hermes.json.tpl",)),
     Plugin("qutebrowser", "Qutebrowser", "Browsers", "Install generated Qutebrowser colors.", "hybrid", ("qutebrowser",), templates=("thpm-qutebrowser.py.tpl",)),
     Plugin("steam", "Steam", "Games", "Apply the Omarchy color theme through steam-adwaita.", "action", ("steam", "python"), default_enabled=False, confirmation=True),
     Plugin("heroic", "Heroic", "Games", "Install a Heroic theme stylesheet.", "hybrid", ("heroic",), templates=("thpm-heroic.css.tpl",)),
@@ -32,6 +31,10 @@ PLUGINS: tuple[Plugin, ...] = (
 )
 
 NATIVE: tuple[Plugin, ...] = (
+    Plugin("native-hermes", "Hermes", "Native", "Omarchy owns Hermes YAML skin generation, profile synchronization, and native skin activation.", "action", native=True),
+    Plugin("native-pi", "Pi theme", "Native", "Omarchy owns Pi theme generation and synchronization; THPM offers an optional live-reload compatibility action.", "action", native=True),
+    Plugin("native-claude", "Claude theme", "Native", "Owned by Omarchy 4.", "action", native=True),
+    Plugin("native-t3code", "T3 Code theme", "Native", "Owned by Omarchy 4.", "action", native=True),
     Plugin("native-foot", "Foot live colors", "Native", "Owned by Omarchy 4.", "action", native=True),
     Plugin("native-tmux", "tmux synchronization", "Native", "Owned by Omarchy 4.", "action", native=True),
     Plugin("native-gnome", "GNOME mode and icons", "Native", "Omarchy owns mode and icons; THPM covers optional theme GTK CSS.", "action", native=True),

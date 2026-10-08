@@ -105,7 +105,7 @@ OPTIONAL_ASSET_PLUGINS = {
 }
 RETIRED_OPTIONAL_ASSET_PLUGINS = {"swaync", "windsurf"}
 LEGACY_OPTIONAL_ASSET_PLUGINS = {"typora"}
-RETIRED_MANAGED_OUTPUT_PLUGINS = {"vicinae"}
+RETIRED_MANAGED_OUTPUT_PLUGINS = {"hermes", "vicinae"}
 # GENERATED retains historical names needed for guarded retirement cleanup;
 # registry membership remains the authority for active integrations.
 MANAGED_OUTPUT_PLUGINS = (
@@ -1229,12 +1229,6 @@ def inspect_readiness(
             warnings.append(
                 "THPM will select Spicetify current_theme=omarchy and color_scheme=Base"
             )
-    elif plugin_id == "hermes" and (
-        (paths.config_home / "Hermes").is_dir()
-        or command_path("hermes-desktop-remote")
-        or command_path("Hermes")
-    ):
-        missing = []
     elif plugin_id in {"discord", "discord-system24"} and not any(
         path.is_dir() for path in _discord_directories(paths)
     ):
@@ -1953,6 +1947,26 @@ def _apply_nautilus_palette(paths: Paths) -> ApplyResult:
     )
 
 
+def _is_legacy_hermes_descriptor(path: Path) -> bool:
+    """Recognize the old data-only THPM descriptor, never a native YAML skin."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        if path.stat().st_size > 1024 * 1024:
+            return False
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return False
+    if not isinstance(data, dict) or data.get("schemaVersion") != 1 or data.get("source") != "thpm":
+        return False
+    theme = data.get("theme")
+    return (
+        isinstance(theme, dict)
+        and theme.get("name") == "omarchy-current"
+        and all(isinstance(theme.get(key), dict) for key in ("colors", "darkColors", "terminal", "darkTerminal"))
+    )
+
+
 def cleanup_managed_outputs(
     paths: Paths, plugin_id: str, *, assume_legacy: bool = False
 ) -> tuple[list[str], list[str]]:
@@ -1966,6 +1980,20 @@ def cleanup_managed_outputs(
         warnings.extend(item_warnings)
     elif plugin_id == "gnome-accent-compat":
         item_changed, item_warnings = cleanup_gnome_accent(paths)
+        changed.extend(item_changed)
+        warnings.extend(item_warnings)
+    elif plugin_id == "hermes":
+        target = targets[plugin_id]
+        sources = tuple(
+            source for source in _current_plugin_sources(paths, plugin_id)
+            if _is_legacy_hermes_descriptor(source)
+        )
+        item_changed, item_warnings = _cleanup_optional_asset(
+            paths,
+            _standard_output_state_key(plugin_id),
+            target,
+            legacy_owned=assume_legacy and not target.is_symlink() and _matches_sources(target, sources),
+        )
         changed.extend(item_changed)
         warnings.extend(item_warnings)
     elif plugin_id in targets:
@@ -2021,7 +2049,9 @@ def cleanup_managed_outputs(
     generated = GENERATED.get(plugin_id)
     if generated:
         rendered = paths.current_theme / generated
-        if rendered.is_file():
+        if rendered.is_file() and (
+            plugin_id != "hermes" or _is_legacy_hermes_descriptor(rendered)
+        ):
             rendered.unlink()
             changed.append(str(rendered))
     return changed, warnings

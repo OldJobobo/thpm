@@ -5,7 +5,7 @@ from .paths import Paths
 from .registry import PLUGINS
 from .resources import asset
 
-OBSOLETE_TEMPLATES = {"thpm-vicinae.toml.tpl", "thpm-zellij.kdl.tpl"}
+OBSOLETE_TEMPLATES = {"thpm-hermes.json.tpl", "thpm-vicinae.toml.tpl", "thpm-zellij.kdl.tpl"}
 
 
 def owned_names() -> set[str]:

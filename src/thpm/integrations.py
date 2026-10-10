@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from . import steam
 from .cava import (
     CavaError,
 )
@@ -110,7 +111,7 @@ RETIRED_MANAGED_OUTPUT_PLUGINS = {"vicinae"}
 # registry membership remains the authority for active integrations.
 MANAGED_OUTPUT_PLUGINS = (
     set(GENERATED)
-    | {"discord", "discord-system24", "nautilus-palette", "gnome-accent-compat"}
+    | {"discord", "discord-system24", "nautilus-palette", "gnome-accent-compat", "steam"}
 ) - RETIRED_MANAGED_OUTPUT_PLUGINS
 
 
@@ -1249,6 +1250,11 @@ def inspect_readiness(
         installer = paths.home / ".local/share/steam-adwaita/install.py"
         if not installer.is_file():
             missing.append(str(installer))
+        try:
+            if not steam.roots(paths):
+                missing.append("initialized supported Steam installation")
+        except RuntimeError as exc:
+            missing.append(str(exc))
     elif (
         plugin.kind == "apply"
         and plugin_id not in OPTIONAL_ASSET_PLUGINS | {"steam", "zellij"}
@@ -1960,6 +1966,8 @@ def cleanup_managed_outputs(
     changed: list[str] = []
     warnings: list[str] = []
     targets = _standard_output_targets(paths)
+    if plugin_id == "steam":
+        return _cleanup_steam(paths)
     if plugin_id == "nautilus-palette":
         item_changed, item_warnings = _cleanup_nautilus_palette(paths)
         changed.extend(item_changed)
@@ -2427,6 +2435,126 @@ def _reload(
     return actions, restart_required
 
 
+def _steam_owned(paths: Paths, target: Path) -> bool:
+    state, _backup = _asset_state_paths(paths, _target_key("steam", target))
+    saved = _read_asset_state(state)
+    return saved is not None and target.is_file() and not target.is_symlink() and (
+        _digest(target.read_bytes()) == saved.get("managedSha256")
+        and (target.stat().st_mode & 0o777) == saved.get("managedMode")
+    )
+
+
+def _cleanup_steam(paths: Paths) -> tuple[list[str], list[str]]:
+    try:
+        targets = steam.read_manifest(paths)
+    except RuntimeError as exc:
+        return [], [str(exc)]
+    changed: list[str] = []
+    warnings: list[str] = []
+    for target in targets:
+        try:
+            item_changed, item_warnings = _cleanup_optional_asset(
+                paths, _target_key("steam", target), target
+            )
+            changed.extend(item_changed)
+            warnings.extend(item_warnings)
+        except (OSError, RuntimeError) as exc:
+            warnings.append(f"could not restore Steam output {target}: {exc}")
+    # Keep the manifest until every recovery record has been consumed. Missing
+    # or corrupt backups must remain retryable through disable/uninstall.
+    if not any(_asset_state_paths(paths, _target_key("steam", p))[0].exists() for p in targets):
+        steam.manifest_path(paths).unlink(missing_ok=True)
+    return changed, warnings
+
+
+def _apply_steam(paths: Paths, *, force: bool) -> ApplyResult:
+    script = paths.home / ".local/share/steam-adwaita/install.py"
+    if not script.is_file():
+        return ApplyResult("steam", "skipped", message="steam-adwaita installer is not installed")
+    roots = steam.roots(paths)
+    if not roots:
+        return ApplyResult("steam", "skipped", message="no initialized supported Steam installation was found")
+    css = steam.render(load_palette(paths.current_theme / "colors.toml"))
+    targets = steam.read_manifest(paths)
+    source = steam.source_path(paths)
+    current = bool(targets) and source in targets and all(_steam_owned(paths, p) for p in targets)
+    if current and source.read_text() == css and not force:
+        try:
+            for root in roots:
+                if root / steam.CSS_PATH not in targets:
+                    raise RuntimeError("new Steam installation")
+                steam.validate(root, css)
+        except RuntimeError:
+            pass
+        else:
+            return _result("steam", [], [])
+    changed: list[str] = []
+    actions: list[str] = []
+
+    def install(staged: Path, target: Path) -> None:
+        if target.parent.resolve() != target.parent:
+            raise RuntimeError(f"steam: refusing redirected output parent: {target}")
+        if target not in targets:
+            targets.append(target)
+            atomic_text(steam.manifest_path(paths), json.dumps([str(p) for p in targets]) + "\n")
+        if _install_optional_asset(paths, _target_key("steam", target), staged, target, preserve_identical=True):
+            changed.append(str(target))
+
+    try:
+        paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="steam-stage-", dir=paths.thpm_state_dir) as temporary:
+            staging = Path(temporary)
+            generated = staging / "omarchy.css"
+            generated.write_text(css)
+            install(generated, source)
+            for index, root in enumerate(roots):
+                stage = staging / str(index)
+                for name in (steam.LIBRARY_PATH, Path("steamui/css/library.original.css")):
+                    original = root / name
+                    if original.is_file():
+                        atomic_copy(original, stage / name)
+                try:
+                    completed = subprocess.run(
+                        [str(script), "--color-theme", "omarchy", "--target", str(stage)],
+                        cwd=script.parent, text=True, capture_output=True, check=False, timeout=30,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError("steam: steam-adwaita timed out") from exc
+                if completed.returncode != 0:
+                    detail = completed.stderr.strip() or completed.stdout.strip() or f"exit {completed.returncode}"
+                    raise RuntimeError(f"steam: steam-adwaita failed: {detail}")
+                actions.append("steam-adwaita --color-theme omarchy (isolated staging target)")
+                steam.validate(stage, css)
+                outputs = sorted(p for p in (stage / "steamui").rglob("*") if p.is_file() or p.is_symlink())
+                if any(p.is_symlink() or p.parent.resolve() != p.parent for p in outputs):
+                    raise RuntimeError("steam: installer produced symlink outputs")
+                # Validate all destinations before publishing any installed file.
+                for output in outputs:
+                    target = root / output.relative_to(stage)
+                    if target.parent.resolve() != target.parent:
+                        raise RuntimeError(f"steam: refusing redirected output parent: {target}")
+                for output in outputs:
+                    install(output, root / output.relative_to(stage))
+                steam.validate(root, css)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ApplyFailure(
+            str(exc), changed=changed, actions=actions,
+            restart_required=["Steam"] if any(p != str(source) for p in changed) else [],
+        ) from exc
+    restarts: list[str] = []
+    if shutil.which("pgrep"):
+        try:
+            running = subprocess.run(["pgrep", "-x", "steam"], text=True, capture_output=True, check=False, timeout=2)
+            if running.returncode != 1:
+                restarts.append("Steam")
+        except (OSError, subprocess.TimeoutExpired):
+            # Failure to inspect a process must not imply the client is closed.
+            restarts.append("Steam")
+    result = _result("steam", changed, actions, restart_required=restarts)
+    result.message = "Steam palette and installed CSS import chain verified; client rendering requires launch/restart"
+    return result
+
+
 def _result(
     plugin_id: str,
     changed: list[str],
@@ -2510,7 +2638,6 @@ def apply(
     warnings: list[str] = []
     restart_required: list[str] = []
     setup_actions: list[str] = []
-    home = paths.home
     targets = _standard_output_targets(paths)
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),
@@ -2813,49 +2940,7 @@ def apply(
             changed.extend(browser_paths)
             restart_required.append(BY_ID[plugin_id].label)
     elif plugin_id == "steam":
-        script = home / ".local/share/steam-adwaita/install.py"
-        if not script.is_file():
-            return ApplyResult(
-                plugin_id, "skipped", message="steam-adwaita installer is not installed"
-            )
-        try:
-            completed = subprocess.run(
-                [str(script), "--color-theme", "omarchy"],
-                cwd=script.parent,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=30,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("steam: steam-adwaita timed out") from exc
-        if completed.returncode != 0:
-            detail = (
-                completed.stderr.strip()
-                or completed.stdout.strip()
-                or f"exit {completed.returncode}"
-            )
-            raise RuntimeError(f"steam: steam-adwaita failed: {detail}")
-        restart_required: list[str] = []
-        if shutil.which("pgrep"):
-            try:
-                running = subprocess.run(
-                    ["pgrep", "-x", "steam"],
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=2,
-                )
-            except subprocess.TimeoutExpired:
-                running = None
-            if running is not None and running.returncode == 0:
-                restart_required.append("Steam")
-        return _result(
-            plugin_id,
-            [],
-            ["steam-adwaita --color-theme omarchy"],
-            restart_required=restart_required,
-        )
+        return _apply_steam(paths, force=force_reload)
 
     try:
         reload_result = (

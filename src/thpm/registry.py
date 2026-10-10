@@ -26,7 +26,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("zen", "Zen Browser", "Browsers", "Manage Zen userChrome imports and generated CSS.", "hybrid", ("zen-browser",), theme_assets=("zen.css",), templates=("thpm-zen.css.tpl",), default_enabled=False, confirmation=True),
     Plugin("hermes", "Hermes", "Editors", "Generate the Hermes Omarchy theme descriptor.", "hybrid", ("Hermes",), templates=("thpm-hermes.json.tpl",)),
     Plugin("qutebrowser", "Qutebrowser", "Browsers", "Install generated Qutebrowser colors.", "hybrid", ("qutebrowser",), templates=("thpm-qutebrowser.py.tpl",)),
-    Plugin("steam", "Steam", "Games", "Apply the Omarchy color theme through steam-adwaita.", "action", ("steam", "python"), default_enabled=False, confirmation=True),
+    Plugin("steam", "Steam", "Games", "Generate and restorably install the active semantic palette through steam-adwaita; restart Steam manually when safe.", "action", ("steam", "python"), default_enabled=False, confirmation=True),
     Plugin("heroic", "Heroic", "Games", "Install a Heroic theme stylesheet.", "hybrid", ("heroic",), templates=("thpm-heroic.css.tpl",)),
     Plugin("cliamp", "cliamp", "Media", "Install only an explicitly opted-in authored override; otherwise preserve cliamp's native theming.", "apply", ("cliamp",), theme_assets=("cliamp.toml",)),
 )

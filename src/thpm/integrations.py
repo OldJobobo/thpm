@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from . import steam
+from . import hermes_desktop, steam
 from .cava import (
     CavaError,
 )
@@ -111,7 +111,7 @@ RETIRED_MANAGED_OUTPUT_PLUGINS = {"vicinae"}
 # registry membership remains the authority for active integrations.
 MANAGED_OUTPUT_PLUGINS = (
     set(GENERATED)
-    | {"discord", "discord-system24", "nautilus-palette", "gnome-accent-compat", "steam"}
+    | {"discord", "discord-system24", "nautilus-palette", "gnome-accent-compat", "steam", "hermes-desktop-local"}
 ) - RETIRED_MANAGED_OUTPUT_PLUGINS
 
 
@@ -156,6 +156,7 @@ def _standard_output_targets(paths: Paths) -> dict[str, Path]:
         "nwg-dock": config / "nwg-dock-hyprland/thpm.css",
         "cava": config / "cava/themes/thpm",
         "hermes": config / "Hermes/omarchy-theme.json",
+        "hermes-desktop-local": hermes_desktop.target(paths),
         "qutebrowser": config / "qutebrowser/thpm_theme.py",
         "heroic": config / "heroic/themes/thpm.css",
     }
@@ -1246,6 +1247,11 @@ def inspect_readiness(
             missing.append(str(base / "profiles.ini"))
         elif not _browser_default_profile(base):
             missing.append("default browser install profile")
+    elif plugin_id == "hermes-desktop-local":
+        ready, detail = hermes_desktop.readiness(paths)
+        if not ready:
+            missing.append(detail)
+        warnings.append("Select Local Omarchy in Hermes Desktop; remote gateway and desktop selections are never changed by THPM")
     elif plugin_id == "steam":
         installer = paths.home / ".local/share/steam-adwaita/install.py"
         if not installer.is_file():
@@ -2589,6 +2595,23 @@ def apply(
 ) -> ApplyResult:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
+    if plugin_id == "hermes-desktop-local":
+        ready, detail = hermes_desktop.readiness(paths)
+        if not ready:
+            return ApplyResult(plugin_id, "skipped", message=detail)
+        content = hermes_desktop.render(load_palette(paths.current_theme / "colors.toml"))
+        target = hermes_desktop.target(paths)
+        paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="hermes-desktop-", dir=paths.thpm_state_dir) as directory:
+            source = Path(directory) / "plugin.js"
+            source.write_text(content)
+            changed = _install_optional_asset(
+                paths, _standard_output_state_key(plugin_id), source, target,
+                preserve_identical=True,
+            )
+        result = _result(plugin_id, [str(target)] if changed else [], [])
+        result.message = "Local Omarchy desktop theme contribution published; select it in Desktop Appearance to consume it"
+        return result
     if plugin_id == "gtk-css-compat":
         return apply_gtk(paths, force_restart=force_reload)
     if plugin_id == "vscode-local-compat":

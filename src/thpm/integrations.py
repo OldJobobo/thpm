@@ -2638,7 +2638,6 @@ def apply(
     warnings: list[str] = []
     restart_required: list[str] = []
     setup_actions: list[str] = []
-    home = paths.home
     targets = _standard_output_targets(paths)
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),

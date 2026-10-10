@@ -29,6 +29,7 @@ PLUGINS: tuple[Plugin, ...] = (
     Plugin("steam", "Steam", "Games", "Generate and restorably install the active semantic palette through steam-adwaita; restart Steam manually when safe.", "action", ("steam", "python"), default_enabled=False, confirmation=True),
     Plugin("heroic", "Heroic", "Games", "Install a Heroic theme stylesheet.", "hybrid", ("heroic",), templates=("thpm-heroic.css.tpl",)),
     Plugin("cliamp", "cliamp", "Media", "Install only an explicitly opted-in authored override; otherwise preserve cliamp's native theming.", "apply", ("cliamp",), theme_assets=("cliamp.toml",)),
+    Plugin("hermes-desktop-local", "Hermes Desktop local palette", "Editors", "Offer a local Omarchy desktop theme independently of the connected agent; select Local Omarchy explicitly.", "action", default_enabled=False, confirmation=True),
 )
 
 NATIVE: tuple[Plugin, ...] = (

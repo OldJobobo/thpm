@@ -103,9 +103,21 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | `zen` | Incomplete | Experimental | disabled | Launch recorded `zen-browser` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
 | `hermes` | Incomplete | Experimental | disabled | Launch recorded `Hermes` with a disposable config and prove it discovers and renders the generated Omarchy descriptor. |
 | `qutebrowser` | Incomplete | Experimental | disabled | Launch recorded `qutebrowser` with a disposable basedir sourcing the generated config and prove the effective UI/web palette. |
-| `steam` | Incomplete | Experimental | disabled | With recorded Steam and steam-adwaita versions, apply the fixture, prove the client renders it, and document the external action's persistence/manual reversal. |
+| `steam` | Incomplete | Experimental | disabled | Semantic generation, isolated installer execution, exact installed palette/import-chain validation, no-op/force, failures, and guarded disable/uninstall restoration have automated coverage. With recorded Steam and steam-adwaita versions, switch dark/light fixtures, manually relaunch only when safe, and prove the real client renders both palettes; verify baseline restoration/user-edit preservation. CSS wiring alone is not visual certification. |
 | `heroic` | Incomplete | Experimental | disabled | Launch recorded `heroic` with a disposable config and prove its custom-theme loader consumes the installed semantic CSS variables. |
 | `cliamp` | Incomplete | Experimental | disabled | Prove a marked authored override is installed and selected in a disposable config, then prove marker removal/disable restores the prior file and selection. Also verify a colors-only theme leaves cliamp's built-in or terminal-ANSI theming untouched. |
+
+### Steam installer regression evidence
+
+The optional real-installer test copies a reviewed steam-adwaita checkout into an isolated HOME and passes only temporary `--target` paths. It exercises two semantic palettes, validates both installed stylesheets and the import chain, checks ordinary no-op and explicit reapply, and restores source/library baselines. It neither launches Steam nor changes the supplied checkout. To repeat from a task worktree:
+
+```bash
+mkdir -p .test-tmp
+TMPDIR="$PWD/.test-tmp" THPM_TEST_STEAM_ADWAITA=/path/to/reviewed/steam-adwaita \
+  PYTHONPATH=src:tests python3 -m unittest test_steam -v
+```
+
+The installed companion checkout at commit `bb35622` passed this test on Omarchy development build `7cc6a55f`. This is installer/loader regression evidence, **not** real-client consumption or support signoff. Until a disposable Steam session visibly renders both fixtures and restoration is observed, the Steam row remains Incomplete/Experimental.
 
 ## Native ownership records
 

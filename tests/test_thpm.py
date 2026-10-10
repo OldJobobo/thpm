@@ -9013,66 +9013,6 @@ class IntegrationTests(Sandbox):
                 plugin_id, automatic_restarts=True
             )
 
-    def test_steam_helper_is_bounded_and_quiet(self):
-        script = self.paths.home / ".local/share/steam-adwaita/install.py"
-        script.parent.mkdir(parents=True)
-        script.touch()
-        with patch("thpm.integrations.shutil.which", return_value=None), patch(
-            "thpm.integrations.subprocess.run"
-        ) as run:
-            run.return_value.returncode = 0
-            result = apply("steam", self.paths)
-        self.assertEqual(result.status, "applied")
-        self.assertEqual(result.restartRequired, [])
-        run.assert_called_once_with(
-            [str(script), "--color-theme", "omarchy"],
-            cwd=script.parent,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=30,
-        )
-
-    def test_steam_restart_notice_depends_on_running_process(self):
-        script = self.paths.home / ".local/share/steam-adwaita/install.py"
-        script.parent.mkdir(parents=True)
-        script.touch()
-        installed = subprocess.CompletedProcess([], 0, "", "")
-
-        for returncode, expected in ((0, ["Steam"]), (1, [])):
-            with self.subTest(returncode=returncode), patch(
-                "thpm.integrations.shutil.which", return_value="/usr/bin/pgrep"
-            ), patch(
-                "thpm.integrations.subprocess.run",
-                side_effect=[
-                    installed,
-                    subprocess.CompletedProcess([], returncode, "", ""),
-                ],
-            ) as run:
-                result = apply("steam", self.paths)
-
-            self.assertEqual(result.restartRequired, expected)
-            self.assertEqual(
-                run.call_args_list,
-                [
-                    call(
-                        [str(script), "--color-theme", "omarchy"],
-                        cwd=script.parent,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                        timeout=30,
-                    ),
-                    call(
-                        ["pgrep", "-x", "steam"],
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                        timeout=2,
-                    ),
-                ],
-            )
-
     def test_gtk_compat_generates_css_from_palette_without_theme_asset(self):
         self.write_palette()
 
@@ -9307,19 +9247,6 @@ class IntegrationTests(Sandbox):
         self.assertEqual(unchanged.status, "unchanged")
         self.assertEqual(unchanged.restartRequired, [])
         self.assertEqual(unchanged.warnings, [])
-
-    def test_steam_missing_helper_skips_and_failure_is_reported(self):
-        skipped = apply("steam", self.paths)
-        self.assertEqual(skipped.status, "skipped")
-        script = self.paths.home / ".local/share/steam-adwaita/install.py"
-        script.parent.mkdir(parents=True)
-        script.touch()
-        with patch("thpm.integrations.subprocess.run") as run:
-            run.return_value.returncode = 2
-            run.return_value.stderr = "installer broke"
-            run.return_value.stdout = ""
-            with self.assertRaisesRegex(RuntimeError, "installer broke"):
-                apply("steam", self.paths)
 
     def test_reload_failure_preserves_files_changed_before_failure(self):
         generated = self.paths.current_theme / "thpm-spicetify.ini"

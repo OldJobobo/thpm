@@ -23,16 +23,26 @@ def readiness(paths: Paths) -> tuple[bool, str]:
             return False, "Hermes Desktop build with local runtime-plugin support is required"
         # Verify the shipped renderer, not an adjacent source checkout. The
         # theme registry and plugin-loader capabilities must both be present.
-        bundles = [p.read_text() for p in (root / "assets").glob("*.js")]
-        if not any("hermes-desktop-user-themes-v1" in s for s in bundles) or not any("@hermes/plugin-sdk" in s for s in bundles):
+        required = {"hermes-desktop-user-themes-v1", "@hermes/plugin-sdk"}
+        for bundle in (root / "assets").glob("*.js"):
+            content = bundle.read_text()
+            required = {marker for marker in required if marker not in content}
+            if not required:
+                break
+        if required:
             return False, "Hermes Desktop renderer lacks the theme/runtime-plugin contract"
-        profile_file = paths.home / ".hermes/active_profile"
-        if profile_file.is_file() and profile_file.read_text().strip() not in {"", "default"}:
-            return False, "local desktop theme currently supports the default local Hermes profile only"
+        # Desktop's local filesystem profile is separate from the agent's
+        # active_profile and from the connected remote gateway's profile.
+        profile_file = paths.config_home / "Hermes/active-profile.json"
+        if profile_file.is_file():
+            preference = json.loads(profile_file.read_text())
+            profile = preference.get("profile") if isinstance(preference, dict) else None
+            if isinstance(profile, str) and profile.strip() not in {"", "default"}:
+                return False, "local desktop theme currently supports the default local Hermes profile only"
         destination = target(paths)
         if destination.parent.resolve() != destination.parent:
             return False, "local Hermes Desktop plugin directory is redirected"
-    except (OSError, UnicodeError) as exc:
+    except (OSError, ValueError) as exc:
         return False, f"cannot verify local Hermes Desktop capabilities: {exc}"
     return True, "local runtime-plugin/theme support verified; desktop selection remains user-owned"
 
@@ -76,7 +86,7 @@ def render(palette: dict[str, str]) -> str:
     data = json.dumps(theme(palette), ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     digest = hashlib.sha256(data.encode()).hexdigest()
     # Plain, self-contained ESM through Hermes' documented runtime-plugin door.
-    # No gateway RPC, Electron bundle patches, selection/storage writes, DOM
+    # No gateway RPC, Electron bundle patches, selection writes, DOM
     # styling, timers that survive unload, or hidden remote-backend mutation.
     return (
         "// THPM-owned local Hermes Desktop theme contribution\n"
@@ -87,6 +97,7 @@ def render(palette: dict[str, str]) -> str:
         "  defaultEnabled: true,\n"
         "  register(ctx) {\n"
         "    ctx.register({id: 'palette', area: 'themes', data: theme});\n"
+        f"    ctx.storage.set('registration', {{fingerprint: '{digest}', registeredAt: new Date().toISOString()}});\n"
         f"    console.info('[thpm-local-omarchy] registered palette {digest}');\n"
         "    let timer, previous;\n"
         "    const report = () => {\n"
@@ -95,7 +106,10 @@ def render(palette: dict[str, str]) -> str:
         "      const background = css.getPropertyValue('--theme-background-seed').trim();\n"
         "      const foreground = css.getPropertyValue('--theme-foreground').trim();\n"
         "      const state = JSON.stringify({selected, background, foreground, expectedBackground: theme.colors.background, expectedForeground: theme.colors.foreground});\n"
-        "      if (state !== previous) console.info('[thpm-local-omarchy] consumption', state);\n"
+        "      if (state !== previous) {\n"
+        "        ctx.storage.set('consumption', {...JSON.parse(state), observedAt: new Date().toISOString()});\n"
+        "        console.info('[thpm-local-omarchy] consumption', state);\n"
+        "      }\n"
         "      previous = state;\n"
         "    };\n"
         "    const schedule = () => { clearTimeout(timer); timer = setTimeout(report, 200); };\n"

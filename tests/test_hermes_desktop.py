@@ -63,10 +63,14 @@ class LocalHermesDesktopTests(Sandbox):
         self.assertFalse(hermes_desktop.target(self.paths).exists())
 
     def test_named_local_profile_and_redirected_parent_are_refused(self):
-        profile = self.paths.home / '.hermes/active_profile'
-        profile.write_text('named')
+        profile = self.paths.config_home / 'Hermes/active-profile.json'
+        profile.parent.mkdir(parents=True)
+        profile.write_text('{"profile":"named"}')
         self.assertFalse(hermes_desktop.readiness(self.paths)[0])
-        profile.unlink()
+        profile.write_text('{"profile":"default"}')
+        # A CLI-agent profile must not be confused with Desktop's local root.
+        (self.paths.home / '.hermes/active_profile').write_text('another-cli-profile')
+        self.assertTrue(hermes_desktop.readiness(self.paths)[0])
         root = self.paths.home / '.hermes/desktop-plugins'
         root.symlink_to(self.paths.home, target_is_directory=True)
         self.assertIn('redirected', hermes_desktop.readiness(self.paths)[1])
@@ -121,16 +125,17 @@ class LocalHermesDesktopTests(Sandbox):
         uri = 'data:text/javascript;base64,' + base64.b64encode(plugin.encode()).decode()
         harness = '''
 let observed, disposed, registered;
+const diagnostics = {};
 globalThis.document = {documentElement:{dataset:{hermesTheme:'another-user-theme'}}};
 globalThis.getComputedStyle = () => ({getPropertyValue:key => key==='--theme-background-seed' ? '#111111' : '#dddddd'});
 globalThis.MutationObserver = class {constructor(callback){this.callback=callback;} observe(_root,opts){observed=opts;} disconnect(){disposed=true;}};
 const plugin = (await import(process.argv[1])).default;
 let cleanup;
-plugin.register({register:data=>{registered=data;},onDispose:fn=>{cleanup=fn;}});
+plugin.register({register:data=>{registered=data;},onDispose:fn=>{cleanup=fn;},storage:{set:(key,value)=>{diagnostics[key]=value;}}});
 await new Promise(resolve=>setTimeout(resolve,250));
 cleanup();
 if(registered.area!=='themes' || registered.data.colors.background!=='#111111' || !disposed || observed.attributeFilter[0]!=='data-hermes-theme') process.exit(2);
-if(document.documentElement.dataset.hermesTheme!=='another-user-theme') process.exit(3);
+if(document.documentElement.dataset.hermesTheme!=='another-user-theme' || diagnostics.consumption.selected!==false || !diagnostics.registration.fingerprint) process.exit(3);
 console.log('verified supported contribution registration, observation and disposal');
 '''
         completed = subprocess.run(['node', '--input-type=module', '-e', harness, uri], capture_output=True, text=True, check=True, timeout=5)

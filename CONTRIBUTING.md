@@ -40,6 +40,28 @@ ruff check --select E9,F src tests
 
 When available, also run ShellCheck and QML lint for changed shell or QML files. `tests/run.sh` is the authoritative complete test entry point.
 
+### NixOS development
+
+From inside the task worktree, use its committed `shell.nix` to enter the pinned development environment:
+
+```bash
+nix-shell
+```
+
+Run the checks above from that shell, or run the complete suite directly:
+
+```bash
+nix-shell --run 'tests/run.sh'
+```
+
+The shell provides Python, the project's Python dependencies, Bash, and Git, and sets `PYTHONPATH` to the worktree's `src` directory. It does not require enabling flakes or other experimental Nix features. Use this environment rather than an old virtual environment, global dependency installs, or changes to the host configuration. If it cannot start, report the failure instead of silently using a different environment.
+
+Ruff, ShellCheck, and Qt's `qmllint` are not included in the current shell. Run relevant extra checks when those tools are available and record any skipped checks in the pull request. `tests/run.sh` runs QML lint only when `qmllint` is available.
+
+This shell supports development and automated tests on NixOS; it does not turn the host into an Omarchy installation. Live theme hooks, application reloads, and graphical integration behavior still need validation on a supported Omarchy environment. Arch package builds require an Arch packaging environment with `makepkg`. Do not run the source installer merely to prepare a NixOS development checkout.
+
+Keep documentation and pull-request examples generic. Do not publish private hostnames, usernames, absolute local paths, credentials, or unredacted environment and diagnostic dumps.
+
 ## Submit a pull request
 
 Push the task branch, then open a pull request targeting `main`:

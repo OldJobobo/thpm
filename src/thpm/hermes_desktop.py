@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from .paths import Paths
@@ -47,21 +48,66 @@ def readiness(paths: Paths) -> tuple[bool, str]:
     return True, "local runtime-plugin/theme support verified; desktop selection remains user-owned"
 
 
+def _rgb(value: str) -> tuple[int, ...]:
+    # The palette loader has already validated six-digit hex colors.
+    return tuple(int(value[index:index + 2], 16) for index in (1, 3, 5))
+
+
+def _mix(a: str, b: str, amount: float) -> str:
+    # Match Hermes's sRGB mix / JS Math.round, not Python's ties-to-even round.
+    channels = (math.floor(x + (y - x) * amount + 0.5) for x, y in zip(_rgb(a), _rgb(b)))
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
+def _luminance(value: str, *, relative: bool = False) -> float:
+    channels = [channel / 255 for channel in _rgb(value)]
+    if relative:
+        channels = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return sum(c * weight for c, weight in zip(channels, (0.2126, 0.7152, 0.0722)))
+
+
+def _contrast(a: str, b: str) -> float:
+    la, lb = _luminance(a, relative=True), _luminance(b, relative=True)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def _readable_on(background: str) -> str:
+    return "#ffffff" if _contrast(background, "#ffffff") >= _contrast(background, "#161616") else "#161616"
+
+
+def _ensure_contrast(color: str, background: str) -> str:
+    if _contrast(color, background) >= 4.5:
+        return color
+    towards = "#ffffff" if _luminance(background, relative=True) < 0.5 else "#000000"
+    for step in range(1, 6):
+        best = _mix(color, towards, step / 5)
+        if _contrast(best, background) >= 4.5:
+            return best
+    return best
+
+
 def theme(p: dict[str, str]) -> dict[str, object]:
-    accent = p.get("accent", p["blue"])
+    # Mirror Hermes themes/skin.ts's skinToDesktopTheme with the seeds supplied
+    # by Omarchy's hermes.yaml.tpl. Never use terminal dark_bg/darker_bg as GUI
+    # surfaces: those may be dark even in an authored light palette.
+    background, foreground = p["bg"], p["fg"]
+    dark = _luminance(background) < 0.4
+    sidebar = _mix(background, foreground, 0.02 if dark else 0.012)
+    accent = _ensure_contrast(p.get("accent", p["blue"]), sidebar)
+    border = p["muted"]
     colors = {
-        "background": p["bg"], "foreground": p["fg"],
-        "card": p["dark_bg"], "cardForeground": p["fg"],
-        "muted": p["lighter_bg"], "mutedForeground": p["muted"],
-        "popover": p["dark_bg"], "popoverForeground": p["fg"],
-        "primary": accent, "primaryForeground": p["bg"],
-        "secondary": p["lighter_bg"], "secondaryForeground": p["fg"],
-        "accent": p["selection"], "accentForeground": p["fg"],
-        "border": p["lighter_bg"], "input": p["lighter_bg"],
-        "ring": accent, "midground": accent, "composerRing": accent,
-        "destructive": p["red"], "destructiveForeground": p["bg"],
-        "sidebarBackground": p["darker_bg"], "sidebarBorder": p["lighter_bg"],
-        "userBubble": p["lighter_bg"], "userBubbleBorder": p["selection"],
+        "background": background, "foreground": foreground,
+        "card": _mix(background, foreground, 0.04 if dark else 0.025), "cardForeground": foreground,
+        "muted": _mix(background, foreground, 0.06 if dark else 0.04), "mutedForeground": p["dark_fg"],
+        "popover": _mix(background, foreground, 0.08 if dark else 0.05), "popoverForeground": foreground,
+        "primary": accent, "primaryForeground": _readable_on(accent),
+        "secondary": _mix(accent, background, 0.72 if dark else 0.86), "secondaryForeground": foreground,
+        "accent": _mix(accent, background, 0.82 if dark else 0.88), "accentForeground": foreground,
+        "border": border, "input": p["lighter_bg"],
+        "ring": accent, "midground": accent, "midgroundForeground": _readable_on(accent), "composerRing": accent,
+        "destructive": p["red"], "destructiveForeground": _readable_on(p["red"]),
+        "sidebarBackground": sidebar, "sidebarBorder": border,
+        "userBubble": _mix(background, accent, 0.18 if dark else 0.12), "userBubbleBorder": border,
     }
     terminal = {
         "foreground": p["fg"], "cursor": p.get("cursor", p["fg"]),

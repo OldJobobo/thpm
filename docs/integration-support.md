@@ -101,7 +101,6 @@ The **Real-application evidence** column is the adapter-specific addition to the
 | `cava` | Incomplete | Experimental | disabled | Run `scripts/cava-live-test.sh` with recorded Cava 0.10.6+; additionally capture visual proof of the selected gradient, PID-specific reload, and restoration. |
 | `firefox` | Incomplete | Experimental | disabled | Launch recorded `firefox` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
 | `zen` | Incomplete | Experimental | disabled | Launch recorded `zen-browser` with a disposable profile and userChrome enabled; prove import, rendered chrome, restart expectation, and restoration. |
-| `hermes` | Incomplete | Experimental | disabled | Launch recorded `Hermes` with a disposable config and prove it discovers and renders the generated Omarchy descriptor. |
 | `qutebrowser` | Incomplete | Experimental | disabled | Launch recorded `qutebrowser` with a disposable basedir sourcing the generated config and prove the effective UI/web palette. |
 | `steam` | Incomplete | Experimental | disabled | Semantic generation, isolated installer execution, exact installed palette/import-chain validation, no-op/force, failures, and guarded disable/uninstall restoration have automated coverage. With recorded Steam and steam-adwaita versions, switch dark/light fixtures, manually relaunch only when safe, and prove the real client renders both palettes; verify baseline restoration/user-edit preservation. CSS wiring alone is not visual certification. |
 | `heroic` | Incomplete | Experimental | disabled | Launch recorded `heroic` with a disposable config and prove its custom-theme loader consumes the installed semantic CSS variables. |
@@ -122,7 +121,7 @@ The installed companion checkout at commit `bb35622` passed this test on Omarchy
 
 ## Native ownership records
 
-`native-foot`, `native-tmux`, `native-gnome`, `native-vscode`, `native-obsidian`, and `native-keyboard` describe Omarchy-owned behavior. They are read-only ownership records, not THPM support claims, and are not enabled, disabled, or certified as THPM integrations.
+`native-hermes`, `native-pi`, `native-claude`, `native-t3code`, `native-foot`, `native-tmux`, `native-gnome`, `native-vscode`, `native-obsidian`, and `native-keyboard` describe Omarchy-owned behavior. They are read-only ownership records, not THPM support claims, and are not enabled, disabled, or certified as THPM integrations.
 
 ## Retired integrations
 
@@ -131,6 +130,7 @@ The installed companion checkout at commit `bb35622` passed this test on Omarchy
 | SwayNC | Retired | Guarded restoration or removal of the former managed `colors.css` output. |
 | Windsurf | Retired | Guarded cleanup of the historical local theme extension after the editor's replacement. |
 | Vicinae | Retired | Guarded cleanup of both historical managed theme destinations. |
+| Hermes | Native-owned / THPM writer retired | Remove the obsolete THPM template; guarded restoration or removal of the historical JSON descriptor only. Never modify Omarchy's YAML skin or Hermes skin selection. |
 
 Retired cleanup remains covered by automated tests and is retained indefinitely unless it becomes unsafe.
 

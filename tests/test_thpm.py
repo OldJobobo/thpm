@@ -10077,7 +10077,7 @@ class UpdateTests(Sandbox):
         fake_bin.mkdir()
         fake_curl = fake_bin / "curl"
         fake_curl.write_text(
-            "#!/usr/bin/python3\n"
+            f"#!{sys.executable}\n"
             "import os, shutil, sys\n"
             "output = sys.argv[sys.argv.index('--output') + 1]\n"
             "source = os.environ['CHECKSUM'] if sys.argv[-1].endswith('.sha256') else os.environ['ARCHIVE']\n"

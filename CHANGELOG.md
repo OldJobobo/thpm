@@ -6,6 +6,8 @@
 
 - Fix Steam's stale Omarchy palette by generating semantic CSS before isolated steam-adwaita installation, validating the installed palette/import chain, skipping unchanged hooks, and restorably publishing files without replacing the live Adwaita tree. Preserve manual-only restart reporting, displaced content, and subsequent user edits; Steam remains Experimental pending real-client visual certification.
 
+- Retire THPM's obsolete Hermes JSON writer in favor of Omarchy's native YAML skin integration, preserving guarded legacy cleanup and leaving native skins and selections untouched. Add read-only Hermes, Pi, Claude, and T3 Code ownership records.
+
 - Add an Experimental, opt-in Nautilus palette integration with an XDG-aware hot-reloading Python extension, atomic semantic CSS generation, optional dependency diagnostics, and guarded file restoration.
 - Add a separate Experimental GNOME accent compatibility adapter that maps semantic accents to libadwaita's named palette and restores the prior GSettings value only while THPM still owns it.
 - Select the browser profile of the installation that is actually present when a Firefox or Zen profile root registers several installations, instead of taking whichever `[Install*]` section sorts first and silently theming a profile no installed build opens.

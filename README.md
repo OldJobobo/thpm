@@ -25,6 +25,8 @@ THPM also shows Omarchy-owned integrations as read-only records, so it is clear 
 
 Earlier Omarchy layouts are not supported.
 
+Hermes backend skins are owned by Omarchy: it generates or honors `hermes.yaml` and synchronizes Hermes skins. THPM lists Hermes, Pi, Claude, and T3 Code as read-only native ownership records. Its former Hermes JSON writer is retired; `thpm reconcile` removes the obsolete template and guardedly cleans up old THPM JSON without changing native skins or selections. The separate Experimental `hermes-desktop-local` integration manages only the local desktop palette, not backend skins.
+
 ## Install
 
 Install THPM from the AUR through Omarchy, then complete its user setup:

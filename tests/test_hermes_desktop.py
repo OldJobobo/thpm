@@ -36,6 +36,65 @@ class LocalHermesDesktopTests(Sandbox):
         self.assertEqual(data['colors']['primary'], '#abcdef')
         self.assertEqual(data['terminal']['brightCyan'], COLORS['bright_cyan'])
 
+    def test_light_surfaces_match_native_hermes_skin_conversion(self):
+        palette = dict(COLORS, mode='light', bg='#dcd8d6', fg='#47362b',
+                       accent='#8c4f2a', red='#7a3827', muted='#675b53',
+                       dark_fg='#675b53', lighter_bg='#dcd8d6',
+                       dark_bg='#a5a2a1', darker_bg='#6e6c6b')
+        colors = hermes_desktop.theme(palette)['colors']
+        # Golden values from Hermes themes/skin.ts + themes/color.ts using the
+        # seeds in Omarchy's hermes.yaml.tpl (including accent AA correction).
+        expected = {
+            'background': '#dcd8d6', 'foreground': '#47362b',
+            'sidebarBackground': '#dad6d4', 'sidebarBorder': '#675b53',
+            'card': '#d8d4d2', 'cardForeground': '#47362b',
+            'muted': '#d6d2cf', 'mutedForeground': '#675b53',
+            'popover': '#d5d0cd', 'popoverForeground': '#47362b',
+            'primary': '#703f22', 'primaryForeground': '#ffffff',
+            'secondary': '#cdc3bd', 'secondaryForeground': '#47362b',
+            'accent': '#cfc6c0', 'accentForeground': '#47362b',
+            'border': '#675b53', 'input': '#dcd8d6',
+            'ring': '#703f22', 'midground': '#703f22',
+            'midgroundForeground': '#ffffff', 'composerRing': '#703f22',
+            'destructive': '#7a3827', 'destructiveForeground': '#ffffff',
+            'userBubble': '#cfc6c0', 'userBubbleBorder': '#675b53',
+        }
+        self.assertEqual(colors, expected)
+        for surface in ('sidebarBackground', 'card', 'popover'):
+            self.assertGreaterEqual(hermes_desktop._contrast(colors[surface], colors['foreground']), 4.5)
+        self.assertGreaterEqual(hermes_desktop._contrast(colors['primary'], colors['sidebarBackground']), 4.5)
+        # Mode comes from the real background, not a potentially stale mode flag.
+        self.assertEqual(colors, hermes_desktop.theme(dict(palette, mode='dark'))['colors'])
+        self.assertEqual(colors, hermes_desktop.theme(dict(palette, dark_bg='#000000', darker_bg='#000000'))['colors'])
+
+    def test_dark_surfaces_match_native_hermes_skin_conversion(self):
+        palette = dict(COLORS, accent='#abcdef')
+        colors = hermes_desktop.theme(palette)['colors']
+        expected = {
+            'sidebarBackground': '#151515', 'card': '#191919',
+            'muted': '#1d1d1d', 'popover': '#212121',
+            'primary': '#abcdef', 'primaryForeground': '#161616',
+            'secondary': '#3c464f', 'accent': '#2d3339', 'userBubble': '#2d3339',
+        }
+        for role, value in expected.items():
+            self.assertEqual(colors[role], value, role)
+        self.assertEqual(colors['border'], COLORS['muted'])
+        self.assertEqual(colors['mutedForeground'], COLORS['dark_fg'])
+        self.assertEqual(colors['input'], COLORS['lighter_bg'])
+        self.assertEqual(colors, hermes_desktop.theme(dict(palette, mode='light'))['colors'])
+
+    def test_native_color_rounding_and_contrast_guards(self):
+        self.assertEqual(hermes_desktop._mix('#000000', '#010101', 0.5), '#010101')
+        self.assertEqual(hermes_desktop._readable_on('#4f9e5e'), '#161616')
+        self.assertEqual(hermes_desktop._readable_on('#000000'), '#ffffff')
+        for background in ('#111111', '#dcd8d6', '#ffffff'):
+            accent = hermes_desktop._ensure_contrast(background, background)
+            self.assertGreaterEqual(hermes_desktop._contrast(accent, background), 4.5)
+        # Terminal ANSI / selection values stay authored, not surface-derived.
+        data = hermes_desktop.theme(COLORS)
+        self.assertEqual(data['terminal']['black'], COLORS['dark_bg'])
+        self.assertEqual(data['terminal']['selectionBackground'], COLORS['selection'])
+
     def test_apply_switch_noop_and_no_external_commands(self):
         with patch('thpm.integrations.subprocess.run') as run:
             first = apply('hermes-desktop-local', self.paths)

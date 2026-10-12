@@ -1434,6 +1434,8 @@ def _thunderbird_entrypoint_plan(
     is still untouched, so a failure can never leave the managed stylesheet
     installed against a half-updated set of entrypoints.
     """
+    if chrome.is_symlink():
+        raise RuntimeError("thunderbird: chrome directory is a symlink")
     plan: list[tuple[Path, str, int | None]] = []
     for filename in ("userChrome.css", "userContent.css"):
         target = chrome / filename
@@ -1498,13 +1500,20 @@ def _thunderbird_import(paths: Paths, base: Path) -> tuple[list[str], bool]:
     changed = []
     if css_changed:
         changed.append(str(managed))
-    for target, updated, mode in plan:
-        if target.is_file() and target.read_text() == updated:
-            continue
-        # Preserve the entrypoint's existing permissions so enabling the
-        # integration never silently widens or narrows them.
-        atomic_text(target, updated, mode=mode if mode is not None else 0o644)
-        changed.append(str(target))
+    try:
+        for target, updated, mode in plan:
+            if target.is_file() and target.read_text() == updated:
+                continue
+            # Preserve the entrypoint's existing permissions so enabling the
+            # integration never silently widens or narrows them.
+            atomic_text(target, updated, mode=mode if mode is not None else 0o644)
+            changed.append(str(target))
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        raise ApplyFailure(
+            f"thunderbird: entrypoint update failed: {exc}",
+            changed=changed,
+            restart_required=["Thunderbird"] if changed else [],
+        ) from exc
     return changed, bool(changed)
 
 
@@ -1516,6 +1525,9 @@ def _cleanup_thunderbird(paths: Paths, *, assume_legacy: bool) -> tuple[list[str
     warnings: list[str] = []
     blocks = _thunderbird_import_blocks()
     for chrome in (path for path in base.rglob("chrome") if path.is_dir()):
+        if chrome.is_symlink() or base.resolve() not in chrome.resolve().parents:
+            warnings.append(f"preserved redirected Thunderbird chrome directory: {chrome}")
+            continue
         managed = chrome / f"thpm-{plugin_id}.css"
         item_changed, item_warnings = _cleanup_optional_asset(
             paths,

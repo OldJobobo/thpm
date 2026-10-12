@@ -7728,6 +7728,14 @@ class IntegrationTests(Sandbox):
             Path(__file__).parents[1]
             / "assets/templates/thpm-thunderbird.css.tpl"
         ).read_text()
+        def resolve(match):
+            tokens = match.group(1).split()
+            if tokens[0] == "gradient_start":
+                return CANONICAL_COLORS.get(tokens[1], CANONICAL_COLORS[tokens[2]])
+            return CANONICAL_COLORS[tokens[0]]
+
+        template = re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", resolve, template)
+        self.assertNotIn("{{", template)
         # The same generated stylesheet is imported into userChrome.css and
         # userContent.css, so an unscoped rule would apply to arbitrary mail
         # content. Strip comments, then every remaining rule must sit inside
@@ -7759,15 +7767,87 @@ class IntegrationTests(Sandbox):
         chrome.mkdir()
         real = chrome / "real-userContent.css"
         real.write_text("user css")
-        (chrome / "userContent.css").symlink_to(real)
-        with self.assertRaises(RuntimeError) as caught:
+        for filename in ("userChrome.css", "userContent.css"):
+            with self.subTest(filename=filename):
+                target = chrome / filename
+                target.symlink_to(real)
+                with self.assertRaisesRegex(RuntimeError, "symlink"):
+                    _thunderbird_import(self.paths, base)
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(real.read_text(), "user css")
+                other = "userContent.css" if filename == "userChrome.css" else "userChrome.css"
+                self.assertFalse((chrome / other).exists())
+                self.assertFalse((chrome / "thpm-thunderbird.css").exists())
+                target.unlink()
+
+    def test_thunderbird_refuses_redirected_chrome_directory(self):
+        base, profile = self._thunderbird_profile()
+        external = self.paths.home / "external-css"
+        external.mkdir()
+        (external / "userChrome.css").write_text("user css")
+        (profile / "chrome").symlink_to(external, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "chrome directory is a symlink"):
             _thunderbird_import(self.paths, base)
-        self.assertIn("symlink", str(caught.exception))
-        # The symlink and its target survive, and the run left nothing behind.
-        self.assertTrue((chrome / "userContent.css").is_symlink())
-        self.assertEqual(real.read_text(), "user css")
-        self.assertFalse((chrome / "userChrome.css").exists())
-        self.assertFalse((chrome / "thpm-thunderbird.css").exists())
+        self.assertEqual((external / "userChrome.css").read_text(), "user css")
+        self.assertFalse((external / "thpm-thunderbird.css").exists())
+
+    def test_thunderbird_cleanup_preserves_redirected_chrome_directory(self):
+        base, profile = self._thunderbird_profile()
+        external = self.paths.home / "external-css"
+        external.mkdir()
+        block = '/* THPM Thunderbird hook start */\n@import url("thpm-thunderbird.css");\n/* THPM Thunderbird hook end */\n'
+        (external / "userChrome.css").write_text(block + "user css")
+        (external / "thpm-thunderbird.css").write_text("theme css")
+        (profile / "chrome").symlink_to(external, target_is_directory=True)
+        _changed, warnings = cleanup_managed_outputs(
+            self.paths, "thunderbird", assume_legacy=True
+        )
+        self.assertTrue(any("redirected Thunderbird" in warning for warning in warnings))
+        self.assertEqual((external / "userChrome.css").read_text(), block + "user css")
+        self.assertEqual((external / "thpm-thunderbird.css").read_text(), "theme css")
+
+    def test_thunderbird_partial_write_failure_reports_changes_and_restart(self):
+        from thpm.files import atomic_text as real_atomic_text
+
+        _base, profile = self._thunderbird_profile()
+
+        def fail_content(path, content, **kwargs):
+            if path.name == "userContent.css":
+                raise OSError("simulated write failure")
+            return real_atomic_text(path, content, **kwargs)
+
+        with patch("thpm.integrations.inspect_readiness", return_value=(True, [], [])), patch(
+            "thpm.integrations.atomic_text", side_effect=fail_content
+        ):
+            report = apply_enabled(self.paths, {"thunderbird": True})
+        result = report["results"][0]
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("simulated write failure", result["message"])
+        self.assertEqual(result["restartRequired"], ["Thunderbird"])
+        self.assertIn(str(profile / "chrome/thpm-thunderbird.css"), result["changed"])
+        self.assertIn(str(profile / "chrome/userChrome.css"), result["changed"])
+        self.assertNotIn(str(profile / "chrome/userContent.css"), result["changed"])
+
+    def test_thunderbird_unchanged_apply_reports_no_restart(self):
+        _base, profile = self._thunderbird_profile()
+        apply("thunderbird", self.paths)
+        files = [profile / "chrome" / name for name in (
+            "thpm-thunderbird.css", "userChrome.css", "userContent.css"
+        )]
+        before = [path.stat().st_mtime_ns for path in files]
+        result = apply("thunderbird", self.paths)
+        self.assertEqual(result.status, "unchanged")
+        self.assertEqual(result.changed, [])
+        self.assertEqual(result.restartRequired, [])
+        self.assertEqual([path.stat().st_mtime_ns for path in files], before)
+
+    def test_thunderbird_prefers_authored_css(self):
+        _base, profile = self._thunderbird_profile()
+        (self.paths.current_theme / "thunderbird.css").write_text("/* authored */")
+        apply("thunderbird", self.paths)
+        self.assertEqual(
+            (profile / "chrome/thpm-thunderbird.css").read_text(), "/* authored */"
+        )
 
     def test_thunderbird_import_preserves_entrypoint_permissions(self):
         base, profile = self._thunderbird_profile()

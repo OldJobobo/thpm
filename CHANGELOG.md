@@ -14,6 +14,10 @@
 
 - Find the Firefox and Zen profile roots under `$XDG_CONFIG_HOME` as well as their legacy home-directory locations, so both integrations still work on builds that store a freshly created profile in the XDG location, and restore managed output from either root on cleanup.
 
+- Theme Firefox chrome beyond the toolbox background by setting the lightweight-theme custom properties that Firefox reads without a theme add-on, so the URL bar, panels, sidebar, selected tab, and toolbar button states follow the active palette. The accent resolves through Omarchy's `gradient_start` fallback so palettes without `accent` still render without unresolved placeholders.
+
+- Supply missing Zed warning, error, info, and hint diagnostic foregrounds, backgrounds, and borders in the installed **THPM Current** theme using palette- and appearance-aware defaults. Explicit overrides, including translucent backgrounds, are preserved, the authored source is never rewritten, and a palette change marks the installed output stale.
+
 - Add an Experimental, default-disabled Thunderbird integration that themes the outer chrome window and the `about:3pane`/`about:message` content documents from one generated stylesheet, scoped per document type so neither entrypoint leaks rules into the other, imported into both `userChrome.css` and `userContent.css` with guarded restoration and restart reporting on disable and uninstall. Entrypoints are resolved before any write so a malformed managed block cannot leave a partial install, symlinked entrypoints are refused rather than replaced, and existing permissions are preserved.
 
 ## 1.0.0rc24 - 2026-08-28

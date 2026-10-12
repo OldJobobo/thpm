@@ -75,7 +75,9 @@ from thpm.config import load as load_config
 from thpm.config import save as save_config
 from thpm.integrations import (
     ApplyFailure,
+    _browser_default_profile,
     _browser_import,
+    _browser_profile_root,
     _reload,
     apply,
     apply_enabled,
@@ -616,6 +618,19 @@ class StateTests(Sandbox):
         def substitute(match: re.Match[str]) -> str:
             expression = match.group(1).strip()
             parts = expression.split()
+            if parts and parts[0] == "gradient_start":
+                # Mirrors Omarchy's resolve_theme_ref: the referenced color
+                # wins when the palette defines it, otherwise the fallback
+                # reference does. Either way the token always renders, which
+                # is what lets a template reach an optional semantic color.
+                self.assertEqual(
+                    len(parts), 3, f"unsupported gradient_start form: {expression}"
+                )
+                _, reference, fallback = parts
+                self.assertNotIn(reference, legacy)
+                self.assertNotIn(fallback, legacy)
+                self.assertIn(fallback, CANONICAL_COLORS)
+                return CANONICAL_COLORS.get(reference, CANONICAL_COLORS[fallback])
             self.assertEqual(
                 len(parts), 1, f"test renderer needs explicit coverage for {expression}"
             )
@@ -645,6 +660,90 @@ class StateTests(Sandbox):
         document = json.loads(rendered["thpm-hermes.json.tpl"])
         self.assertEqual(document["schemaVersion"], 1)
         self.assertIn("brightWhite", document["theme"]["darkTerminal"])
+
+    def test_firefox_selected_tab_is_separated_from_the_tab_strip(self):
+        # Firefox's own default paints the selected tab in
+        # --toolbar-background-color, which is the color this template gives
+        # the strip around it, so the tab would dissolve into the strip. It has
+        # to be raised onto its own surface and ringed in the accent, and the
+        # ring is what stays legible on palettes whose surface step is small.
+        # --tab-selected-outline-color is the ungated stand-in for the
+        # --lwt-tab-line-color only a theme add-on can set.
+        template = (
+            Path(__file__).parents[1] / "assets/templates/thpm-firefox.css.tpl"
+        ).read_text()
+        declarations = dict(
+            re.findall(r"^\s*(--[\w-]+):\s*(.+?)\s*!important;$", template, re.M)
+        )
+        self.assertNotEqual(
+            declarations["--tab-background-color-selected"],
+            declarations["--toolbar-background-color"],
+        )
+        self.assertEqual(
+            declarations["--tab-selected-outline-color"], "var(--thpm-accent)"
+        )
+
+    def test_firefox_filled_states_use_semantic_selection_contrast(self):
+        template = (
+            Path(__file__).parents[1] / "assets/templates/thpm-firefox.css.tpl"
+        ).read_text()
+        declarations = dict(
+            re.findall(r"^\s*(--[\w-]+):\s*(.+?);$", template, re.M)
+        )
+        self.assertEqual(
+            declarations["--thpm-selection-bg"],
+            "{{ gradient_start selection_background selection }}",
+        )
+        self.assertEqual(
+            declarations["--thpm-selection-fg"],
+            "{{ gradient_start selection_foreground bright_foreground }}",
+        )
+        self.assertEqual(
+            declarations["--urlbarview-background-color-selected"],
+            "var(--thpm-selection-bg) !important",
+        )
+        self.assertEqual(
+            declarations["--urlbarview-text-color-selected"],
+            "var(--thpm-selection-fg) !important",
+        )
+        self.assertNotIn(
+            "var(--thpm-accent)",
+            declarations["--toolbarbutton-background-color-active"],
+        )
+        self.assertIn(
+            "var(--thpm-fg)",
+            declarations["--toolbarbutton-background-color-active"],
+        )
+
+        def contrast(first: str, second: str) -> float:
+            def luminance(color: str) -> float:
+                channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+                linear = [
+                    channel / 12.92
+                    if channel <= 0.04045
+                    else ((channel + 0.055) / 1.055) ** 2.4
+                    for channel in channels
+                ]
+                return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+            lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+            return (lighter + 0.05) / (darker + 0.05)
+
+        # Optional semantic selection colors win for a dark palette; their
+        # canonical fallbacks remain a paired selection surface for a light one.
+        dark = {
+            "selection_background": "#345678",
+            "selection_foreground": "#ffffff",
+            "selection": "#333333",
+            "bright_foreground": "#ffffff",
+        }
+        light = {"selection": "#d7e3f4", "bright_foreground": "#111827"}
+        for colors in (dark, light):
+            background = colors.get("selection_background", colors["selection"])
+            foreground = colors.get(
+                "selection_foreground", colors["bright_foreground"]
+            )
+            self.assertGreaterEqual(contrast(background, foreground), 4.5)
 
     def test_fish_template_sets_effective_syntax_and_pager_colors(self):
         template = (
@@ -3687,6 +3786,136 @@ class ZedTests(Sandbox):
         self.assertEqual(unchanged.status, "unchanged")
         self.assertEqual(unchanged.changed, [])
 
+    def test_missing_diagnostic_colors_are_filled_without_editing_source(self):
+        for name in ("zed.json", "aether.zed.json"):
+            with self.subTest(source=name):
+                source = self.write_zed(name)
+                before = source.read_bytes()
+                installed = self.paths.config_home / "zed/themes/thpm-current.json"
+                target_before = installed.read_bytes() if installed.exists() else None
+                zed_status(self.paths)
+                self.assertEqual(source.read_bytes(), before)
+                self.assertEqual(installed.read_bytes() if installed.exists() else None, target_before)
+                apply("zed-extra", self.paths)
+                style = json.loads(installed.read_text())["themes"][0]["style"]
+                for severity in ("warning", "error", "info", "hint"):
+                    self.assertEqual(style[f"{severity}.background"], "#123456")
+                    self.assertEqual(style[f"{severity}.border"], style[severity])
+                    self.assertRegex(style[severity], r"^#[0-9a-f]{6}$")
+                self.assertTrue(zed_status(self.paths)["synchronized"])
+                self.assertEqual(apply("zed-extra", self.paths).status, "unchanged")
+                self.assertEqual(source.read_bytes(), before)
+                source.unlink()
+
+    def test_diagnostic_defaults_preserve_explicit_overrides(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        style = data["themes"][0]["style"]
+        style.update({
+            "warning": "#ffbf00",
+            "warning.background": "#2a2518",
+            "warning.border": "#8a6d1d",
+            "error.background": "#123456",
+            "info.background": "#12345690",
+            "hint.background": "#00000000",
+            "syntax": {"keyword": {"color": "#abcdef"}},
+        })
+        source.write_text(json.dumps(data))
+        before = source.read_bytes()
+        apply("zed-extra", self.paths)
+        installed = self.paths.config_home / "zed/themes/thpm-current.json"
+        completed = json.loads(installed.read_text())["themes"][0]["style"]
+        for key, value in style.items():
+            self.assertEqual(completed[key], value)
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_null_and_blank_diagnostic_colors_receive_defaults(self):
+        source = self.write_zed()
+        for value in (None, "", "   "):
+            with self.subTest(color=value):
+                data = json.loads(zed_theme())
+                style = data["themes"][0]["style"]
+                style.update({"warning": value, "warning.background": value, "warning.border": value})
+                source.write_text(json.dumps(data))
+                completed = json.loads(normalized(source)[0])["themes"][0]["style"]
+                self.assertEqual(completed["warning.background"], "#123456")
+                self.assertEqual(completed["warning.border"], completed["warning"])
+                self.assertNotEqual(completed["warning"], value)
+
+    def test_authored_surface_and_terminal_accents_take_precedence(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        style = data["themes"][0]["style"]
+        style["elevated_surface.background"] = "#2a2518"
+        style["terminal.ansi.yellow"] = "#ffbf00"
+        source.write_text(json.dumps(data))
+        completed = json.loads(normalized(source)[0])["themes"][0]["style"]
+        self.assertEqual(completed["warning"], "#ffbf00")
+        self.assertEqual(completed["warning.border"], "#ffbf00")
+        for severity in ("warning", "error", "info", "hint"):
+            self.assertEqual(completed[f"{severity}.background"], "#2a2518")
+
+    def test_diagnostic_defaults_use_canonical_palette_and_detect_changes(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        data["themes"][0]["style"] = {}
+        source.write_text(json.dumps(data))
+        colors = self.paths.current_theme / "colors.toml"
+        canonical = {**COLORS, **CANONICAL_COLORS, "bg": "#ff0000"}
+        colors.write_text("\n".join(f'{key} = "{value}"' for key, value in canonical.items()))
+        with patch("thpm.palette.shutil.which", return_value=None):
+            apply("zed-extra", self.paths)
+            installed = self.paths.config_home / "zed/themes/thpm-current.json"
+            style = json.loads(installed.read_text())["themes"][0]["style"]
+            for severity, accent in (("warning", "yellow"), ("error", "red"), ("info", "blue"), ("hint", "cyan")):
+                self.assertEqual(style[severity], COLORS[accent])
+                self.assertEqual(style[f"{severity}.border"], COLORS[accent])
+                self.assertEqual(style[f"{severity}.background"], COLORS["bg"])
+            self.assertTrue(zed_status(self.paths)["synchronized"])
+            canonical["yellow"] = "#eedd00"
+            colors.write_text("\n".join(f'{key} = "{value}"' for key, value in canonical.items()))
+            self.assertFalse(zed_status(self.paths)["synchronized"])
+            self.assertEqual(apply("zed-extra", self.paths).status, "applied")
+            self.assertEqual(json.loads(installed.read_text())["themes"][0]["style"]["warning"], "#eedd00")
+
+    def test_light_and_dark_defaults_work_without_palette_or_surface(self):
+        for appearance, background in (("dark", "#181818"), ("light", "#fafafa")):
+            with self.subTest(appearance=appearance):
+                source = self.write_zed(appearance=appearance)
+                data = json.loads(source.read_text())
+                data["themes"][0]["style"] = {}
+                source.write_text(json.dumps(data))
+                style = json.loads(normalized(source)[0])["themes"][0]["style"]
+                for severity in ("warning", "error", "info", "hint"):
+                    self.assertEqual(style[f"{severity}.background"], background)
+                    self.assertEqual(style[f"{severity}.border"], style[severity])
+
+    def test_complete_diagnostics_do_not_require_a_valid_palette(self):
+        source = self.write_zed()
+        data = json.loads(source.read_text())
+        style = data["themes"][0]["style"]
+        for severity in ("warning", "error", "info", "hint"):
+            style[severity] = "#abcdef"
+            style[f"{severity}.background"] = "#123456"
+            style[f"{severity}.border"] = "#fedcba"
+        source.write_text(json.dumps(data))
+        (source.parent / "colors.toml").write_text("not valid TOML")
+        self.assertEqual(json.loads(normalized(source)[0])["themes"][0]["style"], style)
+
+    def test_invalid_needed_palette_does_not_replace_installed_theme(self):
+        source = self.write_zed()
+        apply("zed-extra", self.paths)
+        installed = self.paths.config_home / "zed/themes/thpm-current.json"
+        before = installed.read_bytes()
+        (source.parent / "colors.toml").write_text("not valid TOML")
+        with patch("thpm.palette.shutil.which", return_value=None):
+            with self.assertRaises(ZedThemeError):
+                normalized(source)
+            with self.assertRaises(ZedThemeError):
+                apply("zed-extra", self.paths)
+            self.assertIn("diagnostic defaults", " ".join(zed_status(self.paths)["warnings"]))
+        self.assertEqual(installed.read_bytes(), before)
+
     def test_aether_source_is_supported_without_touching_aether_or_omazed(self):
         self.write_zed("aether.zed.json")
         aether = self.paths.config_home / "zed/themes/aether.json"
@@ -3986,6 +4215,8 @@ class ZedTests(Sandbox):
         self.assertEqual(result["omazed"]["command"], "/usr/bin/omazed")
         self.assertTrue(result["omazed"]["outputExists"])
         self.assertIn("select Omazed", " ".join(result["warnings"]))
+        self.assertFalse(any("diagnostic background" in message for message in result["warnings"]))
+        self.assertEqual(fallback.read_text(), "generated")
 
 
 class CavaTests(Sandbox):
@@ -7005,6 +7236,77 @@ class IntegrationTests(Sandbox):
         with self.assertRaisesRegex(ValueError, "escapes"):
             _browser_import(self.paths, "firefox", base)
 
+    def _firefox_root(self, kind):
+        base = (
+            self.paths.home / ".mozilla/firefox"
+            if kind == "legacy"
+            else self.paths.config_home / "mozilla/firefox"
+        )
+        profile = base / "profile.default"
+        profile.mkdir(parents=True)
+        (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        return base
+
+    def test_firefox_uses_legacy_profile_root_when_present(self):
+        legacy = self._firefox_root("legacy")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), legacy)
+
+    def test_firefox_finds_profile_root_under_xdg_config_home(self):
+        # Recent Firefox builds create a fresh profile under
+        # $XDG_CONFIG_HOME/mozilla/firefox, where the legacy path does not
+        # exist at all and the integration previously found nothing.
+        xdg = self._firefox_root("xdg")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), xdg)
+
+    def test_firefox_prefers_legacy_profile_root_over_xdg(self):
+        legacy = self._firefox_root("legacy")
+        self._firefox_root("xdg")
+        self.assertEqual(_browser_profile_root(self.paths, "firefox"), legacy)
+
+    def test_firefox_readiness_accepts_an_xdg_profile_root(self):
+        xdg = self._firefox_root("xdg")
+        _ready, missing, _warnings = inspect_readiness(
+            "firefox", self.paths, which=lambda command: f"/usr/bin/{command}"
+        )
+        self.assertEqual(missing, [])
+        # The legacy root does not exist at all here, so before this change
+        # readiness reported its profiles.ini as the missing prerequisite.
+        self.assertTrue((xdg / "profiles.ini").is_file())
+        self.assertFalse((self.paths.home / ".mozilla/firefox").exists())
+
+    def test_firefox_import_and_cleanup_cover_an_xdg_profile_root(self):
+        generated = self.paths.current_theme / "thpm-firefox.css"
+        generated.parent.mkdir(parents=True, exist_ok=True)
+        generated.write_text("/* generated */\n")
+        xdg = self._firefox_root("xdg")
+        _browser_import(self.paths, "firefox", _browser_profile_root(self.paths, "firefox"))
+        entrypoint = xdg / "profile.default/chrome/userChrome.css"
+        self.assertTrue(entrypoint.is_file())
+        cleanup_managed_outputs(self.paths, "firefox", assume_legacy=True)
+        self.assertFalse(entrypoint.exists())
+
+    def test_zen_finds_profile_root_under_xdg_config_home(self):
+        base = self.paths.config_home / "zen"
+        # Zen profile directories carry spaces and parentheses in practice,
+        # e.g. "k70byiqe.Default (release)".
+        (base / "profile.Default (release)").mkdir(parents=True)
+        (base / "profiles.ini").write_text(
+            "[Install1]\nDefault=profile.Default (release)\n"
+        )
+        self.assertEqual(_browser_profile_root(self.paths, "zen"), base)
+        self.assertEqual(
+            _browser_default_profile(base), "profile.Default (release)"
+        )
+
+    def test_zen_prefers_legacy_profile_root_over_xdg(self):
+        legacy = self.paths.home / ".zen"
+        (legacy / "profile.default").mkdir(parents=True)
+        (legacy / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        xdg = self.paths.config_home / "zen"
+        (xdg / "profile.default").mkdir(parents=True)
+        (xdg / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+        self.assertEqual(_browser_profile_root(self.paths, "zen"), legacy)
+
     def test_discord_cleanup_restores_displaced_theme(self):
         source = self.paths.current_theme / "thpm-vencord.theme.css"
         source.parent.mkdir(parents=True)
@@ -7588,10 +7890,11 @@ class IntegrationTests(Sandbox):
         source.parent.mkdir(parents=True)
         source.write_text(":root { --bg-color: #101820; }\n")
         service = Service(self.paths)
+        assets = Path(__file__).parents[1] / "assets"
 
         with patch("thpm.service._typora_process_running", return_value=True), patch(
             "thpm.integrations._reload", return_value=([], [])
-        ):
+        ), patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
             service.set_enabled("typora", True, refresh=False)
             apply("typora", self.paths)
             disabled = service.set_enabled("typora", False)
@@ -8710,66 +9013,6 @@ class IntegrationTests(Sandbox):
                 plugin_id, automatic_restarts=True
             )
 
-    def test_steam_helper_is_bounded_and_quiet(self):
-        script = self.paths.home / ".local/share/steam-adwaita/install.py"
-        script.parent.mkdir(parents=True)
-        script.touch()
-        with patch("thpm.integrations.shutil.which", return_value=None), patch(
-            "thpm.integrations.subprocess.run"
-        ) as run:
-            run.return_value.returncode = 0
-            result = apply("steam", self.paths)
-        self.assertEqual(result.status, "applied")
-        self.assertEqual(result.restartRequired, [])
-        run.assert_called_once_with(
-            [str(script), "--color-theme", "omarchy"],
-            cwd=script.parent,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=30,
-        )
-
-    def test_steam_restart_notice_depends_on_running_process(self):
-        script = self.paths.home / ".local/share/steam-adwaita/install.py"
-        script.parent.mkdir(parents=True)
-        script.touch()
-        installed = subprocess.CompletedProcess([], 0, "", "")
-
-        for returncode, expected in ((0, ["Steam"]), (1, [])):
-            with self.subTest(returncode=returncode), patch(
-                "thpm.integrations.shutil.which", return_value="/usr/bin/pgrep"
-            ), patch(
-                "thpm.integrations.subprocess.run",
-                side_effect=[
-                    installed,
-                    subprocess.CompletedProcess([], returncode, "", ""),
-                ],
-            ) as run:
-                result = apply("steam", self.paths)
-
-            self.assertEqual(result.restartRequired, expected)
-            self.assertEqual(
-                run.call_args_list,
-                [
-                    call(
-                        [str(script), "--color-theme", "omarchy"],
-                        cwd=script.parent,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                        timeout=30,
-                    ),
-                    call(
-                        ["pgrep", "-x", "steam"],
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                        timeout=2,
-                    ),
-                ],
-            )
-
     def test_gtk_compat_generates_css_from_palette_without_theme_asset(self):
         self.write_palette()
 
@@ -9004,19 +9247,6 @@ class IntegrationTests(Sandbox):
         self.assertEqual(unchanged.status, "unchanged")
         self.assertEqual(unchanged.restartRequired, [])
         self.assertEqual(unchanged.warnings, [])
-
-    def test_steam_missing_helper_skips_and_failure_is_reported(self):
-        skipped = apply("steam", self.paths)
-        self.assertEqual(skipped.status, "skipped")
-        script = self.paths.home / ".local/share/steam-adwaita/install.py"
-        script.parent.mkdir(parents=True)
-        script.touch()
-        with patch("thpm.integrations.subprocess.run") as run:
-            run.return_value.returncode = 2
-            run.return_value.stderr = "installer broke"
-            run.return_value.stdout = ""
-            with self.assertRaisesRegex(RuntimeError, "installer broke"):
-                apply("steam", self.paths)
 
     def test_reload_failure_preserves_files_changed_before_failure(self):
         generated = self.paths.current_theme / "thpm-spicetify.ini"
@@ -9847,7 +10077,7 @@ class UpdateTests(Sandbox):
         fake_bin.mkdir()
         fake_curl = fake_bin / "curl"
         fake_curl.write_text(
-            "#!/usr/bin/python3\n"
+            f"#!{sys.executable}\n"
             "import os, shutil, sys\n"
             "output = sys.argv[sys.argv.index('--output') + 1]\n"
             "source = os.environ['CHECKSUM'] if sys.argv[-1].endswith('.sha256') else os.environ['ARCHIVE']\n"

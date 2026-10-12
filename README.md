@@ -117,7 +117,7 @@ THPM currently covers these application groups:
 | --- | --- |
 | Terminal | Fish, fzf, Superfile, Zellij |
 | Desktop | GTK CSS compatibility, Nautilus palette, Branding extras, Qt6ct, nwg-dock-hyprland |
-| Editors and writing | Local VS Code themes, Typora, Obsidian Terminal, Zed authored themes, Hermes |
+| Editors and writing | Local VS Code themes, Typora, Obsidian Terminal, Zed authored themes, Hermes, Local Hermes Desktop palette |
 | Browsers | Firefox, Zen Browser, Qutebrowser |
 | Messaging | Discord/Vencord, Discord System24 |
 | Media | Spotify/Spicetify, Cava, cliamp |
@@ -147,7 +147,9 @@ After installing AdwSteamGtk, you should:
 
 You do not need to keep AdwSteamGtk running in the background. AdwSteamGtk is currently independent of THPM.
 
-THPM’s Experimental Steam integration does not yet recognize AdwSteamGtk. It requires the standalone installer at `~/.local/share/steam-adwaita/install.py` and otherwise remains **Unavailable**. Run `thpm report steam` to confirm what THPM detected. THPM never terminates Steam because doing so could interrupt a game or download.
+THPM’s Experimental Steam integration does not yet recognize AdwSteamGtk. It requires an initialized supported Steam installation and a standalone steam-adwaita checkout at `~/.local/share/steam-adwaita` whose `install.py` supports `--target`. Missing prerequisites leave the integration unavailable; an incompatible installer fails application. Run `thpm doctor steam` or `thpm report steam` to inspect readiness.
+
+THPM generates the selected Omarchy stylesheet from the active semantic palette, validates the installer's output in isolation, and publishes files with guarded restoration instead of destructively replacing the live Adwaita directory. Ordinary unchanged hooks do nothing; `thpm run` explicitly reapplies. Disable/uninstall restore displaced files while preserving later user edits. THPM never terminates or automatically restarts Steam: finish games/downloads, then fully exit and relaunch manually when a restart is reported. Validated file/import wiring does not certify the running client's rendered colors; see the support register for the outstanding visual gate.
 
 ### Nautilus
 
@@ -167,6 +169,14 @@ thpm enable spotify
 ```
 
 THPM updates the Omarchy color scheme without overwriting an existing Spicetify stylesheet.
+
+### Local Hermes Desktop palette
+
+`thpm enable hermes-desktop-local` offers **Local Omarchy** through Hermes Desktop's local runtime-plugin system on supported Linux builds/default local profiles. Select it explicitly in Desktop Appearance: subsequent local Omarchy changes repaint that theme even while the desktop connects to a remote agent. THPM leaves the connection, backend skins, and other desktop selections alone. The integration is Experimental; some builds require **Reload desktop plugins** or reselection after a cold launch. Disable/uninstall guardedly restore/remove the plugin file, not your desktop theme preference.
+
+### cliamp themes
+
+cliamp already provides contrast-checked built-in themes and a terminal-ANSI default that follows the terminal palette. THPM intervenes only when an active-theme `cliamp.toml` contains the exact line `# thpm:cliamp-use-native`, recording deliberate author intent to replace cliamp's native behavior. It installs the file restorably as `~/.config/cliamp/themes/omarchy.toml` and selects `omarchy` in cliamp's top-level config. When the marker or file disappears—or the integration is disabled or removed—THPM restores both the displaced file and the previous theme selection, preserving later user edits and selections.
 
 ### Cava
 
@@ -193,13 +203,19 @@ Launch the browser once before enabling its integration so a default profile exi
 
 ### Zed authored themes
 
-When the active Omarchy theme supplies `zed.json` or `aether.zed.json`, enable authored-theme synchronization with:
+Omarchy's optional `omazed` package is the generated-color fallback for Zed. THPM does not modify its executable, hook, or `~/.config/zed/themes/omazed.json`. The opt-in `zed-extra` integration installs an authored asset from `zed.json` or, as a compatibility fallback, `aether.zed.json`. Canonical `zed.json` wins when both exist.
+
+THPM validates the authored JSON and normalizes its single dark or light theme to **THPM Current** at `~/.config/zed/themes/thpm-current.json`. Missing warning, error, info, and hint colors receive theme-compatible defaults in that installed copy; explicit theme overrides are preserved and the source asset is never rewritten.
+
+Enable ongoing synchronization with:
 
 ```bash
 thpm enable zed-extra
 ```
 
-Use `thpm zed status` to inspect the selected source and Zed theme state.
+Enabling backs up `settings.json` and safely selects **THPM Current**. `thpm zed setup` performs installation and selection directly but does not persistently enable the integration. Normal theme hooks update only the managed theme file, never Zed settings.
+
+Use `thpm zed status` to inspect the selected source and Zed theme state. If an authored asset disappears, THPM relinquishes its file and reports the Omazed fallback; select **Omazed** in Zed if you want generated colors.
 
 ## Restart behavior
 

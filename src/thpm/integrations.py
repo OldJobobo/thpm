@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from . import hermes_desktop, steam
 from .cava import (
     CavaError,
 )
@@ -110,7 +111,7 @@ RETIRED_MANAGED_OUTPUT_PLUGINS = {"vicinae"}
 # registry membership remains the authority for active integrations.
 MANAGED_OUTPUT_PLUGINS = (
     set(GENERATED)
-    | {"discord", "discord-system24", "nautilus-palette", "gnome-accent-compat"}
+    | {"discord", "discord-system24", "nautilus-palette", "gnome-accent-compat", "steam", "hermes-desktop-local"}
 ) - RETIRED_MANAGED_OUTPUT_PLUGINS
 
 
@@ -155,6 +156,7 @@ def _standard_output_targets(paths: Paths) -> dict[str, Path]:
         "nwg-dock": config / "nwg-dock-hyprland/thpm.css",
         "cava": config / "cava/themes/thpm",
         "hermes": config / "Hermes/omarchy-theme.json",
+        "hermes-desktop-local": hermes_desktop.target(paths),
         "qutebrowser": config / "qutebrowser/thpm_theme.py",
         "heroic": config / "heroic/themes/thpm.css",
     }
@@ -679,6 +681,34 @@ def _browser_import_blocks(plugin_id: str) -> tuple[tuple[str, str], ...]:
             f"/* THPM {legacy_label} hook end */",
         ),
     )
+
+
+def _browser_profile_roots(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
+    """Candidate profile roots for a browser, most preferred first.
+
+    Firefox stores profiles under ~/.mozilla/firefox historically and under
+    $XDG_CONFIG_HOME/mozilla/firefox once XDG base directory support is
+    active, which is where recent builds put a freshly created profile. Zen
+    has the same split between ~/.zen and $XDG_CONFIG_HOME/zen. Both layouts
+    exist in the wild, so both are candidates; the legacy location keeps
+    priority, meaning an installation that works today is unaffected.
+    """
+    if plugin_id == "firefox":
+        return (
+            paths.home / ".mozilla/firefox",
+            paths.config_home / "mozilla/firefox",
+        )
+    return (paths.home / ".zen", paths.config_home / "zen")
+
+
+def _browser_profile_root(paths: Paths, plugin_id: str) -> Path:
+    """The profile root to operate on: the first candidate holding a
+    profiles.ini, else the preferred one so error messages stay stable."""
+    roots = _browser_profile_roots(paths, plugin_id)
+    for root in roots:
+        if (root / "profiles.ini").is_file():
+            return root
+    return roots[0]
 
 
 def _browser_default_profile(base: Path) -> str:
@@ -1212,15 +1242,25 @@ def inspect_readiness(
     ):
         missing.append("supported Discord client theme directory")
     elif plugin_id in {"firefox", "zen"}:
-        base = paths.home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
+        base = _browser_profile_root(paths, plugin_id)
         if not (base / "profiles.ini").is_file():
             missing.append(str(base / "profiles.ini"))
         elif not _browser_default_profile(base):
             missing.append("default browser install profile")
+    elif plugin_id == "hermes-desktop-local":
+        ready, detail = hermes_desktop.readiness(paths)
+        if not ready:
+            missing.append(detail)
+        warnings.append("Select Local Omarchy in Hermes Desktop; remote gateway and desktop selections are never changed by THPM")
     elif plugin_id == "steam":
         installer = paths.home / ".local/share/steam-adwaita/install.py"
         if not installer.is_file():
             missing.append(str(installer))
+        try:
+            if not steam.roots(paths):
+                missing.append("initialized supported Steam installation")
+        except RuntimeError as exc:
+            missing.append(str(exc))
     elif (
         plugin.kind == "apply"
         and plugin_id not in OPTIONAL_ASSET_PLUGINS | {"steam", "zellij"}
@@ -1591,12 +1631,19 @@ def _current_plugin_sources(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
 
 
 def _cleanup_browser(paths: Paths, plugin_id: str, *, assume_legacy: bool) -> tuple[list[str], list[str]]:
-    base = paths.home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
+    # Clean every candidate root, not only the active one: a profile root
+    # that stopped being selected must still give its managed output back.
+    bases = _browser_profile_roots(paths, plugin_id)
     sources = _current_plugin_sources(paths, plugin_id)
     changed: list[str] = []
     warnings: list[str] = []
     blocks = _browser_import_blocks(plugin_id)
-    for chrome in (path for path in base.rglob("chrome") if path.is_dir()):
+    for chrome in (
+        path
+        for base in bases
+        for path in base.rglob("chrome")
+        if path.is_dir()
+    ):
         managed = chrome / f"thpm-{plugin_id}.css"
         item_changed, item_warnings = _cleanup_optional_asset(
             paths,
@@ -1925,6 +1972,8 @@ def cleanup_managed_outputs(
     changed: list[str] = []
     warnings: list[str] = []
     targets = _standard_output_targets(paths)
+    if plugin_id == "steam":
+        return _cleanup_steam(paths)
     if plugin_id == "nautilus-palette":
         item_changed, item_warnings = _cleanup_nautilus_palette(paths)
         changed.extend(item_changed)
@@ -2392,6 +2441,126 @@ def _reload(
     return actions, restart_required
 
 
+def _steam_owned(paths: Paths, target: Path) -> bool:
+    state, _backup = _asset_state_paths(paths, _target_key("steam", target))
+    saved = _read_asset_state(state)
+    return saved is not None and target.is_file() and not target.is_symlink() and (
+        _digest(target.read_bytes()) == saved.get("managedSha256")
+        and (target.stat().st_mode & 0o777) == saved.get("managedMode")
+    )
+
+
+def _cleanup_steam(paths: Paths) -> tuple[list[str], list[str]]:
+    try:
+        targets = steam.read_manifest(paths)
+    except RuntimeError as exc:
+        return [], [str(exc)]
+    changed: list[str] = []
+    warnings: list[str] = []
+    for target in targets:
+        try:
+            item_changed, item_warnings = _cleanup_optional_asset(
+                paths, _target_key("steam", target), target
+            )
+            changed.extend(item_changed)
+            warnings.extend(item_warnings)
+        except (OSError, RuntimeError) as exc:
+            warnings.append(f"could not restore Steam output {target}: {exc}")
+    # Keep the manifest until every recovery record has been consumed. Missing
+    # or corrupt backups must remain retryable through disable/uninstall.
+    if not any(_asset_state_paths(paths, _target_key("steam", p))[0].exists() for p in targets):
+        steam.manifest_path(paths).unlink(missing_ok=True)
+    return changed, warnings
+
+
+def _apply_steam(paths: Paths, *, force: bool) -> ApplyResult:
+    script = paths.home / ".local/share/steam-adwaita/install.py"
+    if not script.is_file():
+        return ApplyResult("steam", "skipped", message="steam-adwaita installer is not installed")
+    roots = steam.roots(paths)
+    if not roots:
+        return ApplyResult("steam", "skipped", message="no initialized supported Steam installation was found")
+    css = steam.render(load_palette(paths.current_theme / "colors.toml"))
+    targets = steam.read_manifest(paths)
+    source = steam.source_path(paths)
+    current = bool(targets) and source in targets and all(_steam_owned(paths, p) for p in targets)
+    if current and source.read_text() == css and not force:
+        try:
+            for root in roots:
+                if root / steam.CSS_PATH not in targets:
+                    raise RuntimeError("new Steam installation")
+                steam.validate(root, css)
+        except RuntimeError:
+            pass
+        else:
+            return _result("steam", [], [])
+    changed: list[str] = []
+    actions: list[str] = []
+
+    def install(staged: Path, target: Path) -> None:
+        if target.parent.resolve() != target.parent:
+            raise RuntimeError(f"steam: refusing redirected output parent: {target}")
+        if target not in targets:
+            targets.append(target)
+            atomic_text(steam.manifest_path(paths), json.dumps([str(p) for p in targets]) + "\n")
+        if _install_optional_asset(paths, _target_key("steam", target), staged, target, preserve_identical=True):
+            changed.append(str(target))
+
+    try:
+        paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="steam-stage-", dir=paths.thpm_state_dir) as temporary:
+            staging = Path(temporary)
+            generated = staging / "omarchy.css"
+            generated.write_text(css)
+            install(generated, source)
+            for index, root in enumerate(roots):
+                stage = staging / str(index)
+                for name in (steam.LIBRARY_PATH, Path("steamui/css/library.original.css")):
+                    original = root / name
+                    if original.is_file():
+                        atomic_copy(original, stage / name)
+                try:
+                    completed = subprocess.run(
+                        [str(script), "--color-theme", "omarchy", "--target", str(stage)],
+                        cwd=script.parent, text=True, capture_output=True, check=False, timeout=30,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError("steam: steam-adwaita timed out") from exc
+                if completed.returncode != 0:
+                    detail = completed.stderr.strip() or completed.stdout.strip() or f"exit {completed.returncode}"
+                    raise RuntimeError(f"steam: steam-adwaita failed: {detail}")
+                actions.append("steam-adwaita --color-theme omarchy (isolated staging target)")
+                steam.validate(stage, css)
+                outputs = sorted(p for p in (stage / "steamui").rglob("*") if p.is_file() or p.is_symlink())
+                if any(p.is_symlink() or p.parent.resolve() != p.parent for p in outputs):
+                    raise RuntimeError("steam: installer produced symlink outputs")
+                # Validate all destinations before publishing any installed file.
+                for output in outputs:
+                    target = root / output.relative_to(stage)
+                    if target.parent.resolve() != target.parent:
+                        raise RuntimeError(f"steam: refusing redirected output parent: {target}")
+                for output in outputs:
+                    install(output, root / output.relative_to(stage))
+                steam.validate(root, css)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ApplyFailure(
+            str(exc), changed=changed, actions=actions,
+            restart_required=["Steam"] if any(p != str(source) for p in changed) else [],
+        ) from exc
+    restarts: list[str] = []
+    if shutil.which("pgrep"):
+        try:
+            running = subprocess.run(["pgrep", "-x", "steam"], text=True, capture_output=True, check=False, timeout=2)
+            if running.returncode != 1:
+                restarts.append("Steam")
+        except (OSError, subprocess.TimeoutExpired):
+            # Failure to inspect a process must not imply the client is closed.
+            restarts.append("Steam")
+    result = _result("steam", changed, actions, restart_required=restarts)
+    result.message = "Steam palette and installed CSS import chain verified; client rendering requires launch/restart"
+    return result
+
+
 def _result(
     plugin_id: str,
     changed: list[str],
@@ -2426,6 +2595,23 @@ def apply(
 ) -> ApplyResult:
     if plugin_id not in BY_ID:
         raise KeyError(plugin_id)
+    if plugin_id == "hermes-desktop-local":
+        ready, detail = hermes_desktop.readiness(paths)
+        if not ready:
+            return ApplyResult(plugin_id, "skipped", message=detail)
+        content = hermes_desktop.render(load_palette(paths.current_theme / "colors.toml"))
+        target = hermes_desktop.target(paths)
+        paths.thpm_state_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="hermes-desktop-", dir=paths.thpm_state_dir) as directory:
+            source = Path(directory) / "plugin.js"
+            source.write_text(content)
+            changed = _install_optional_asset(
+                paths, _standard_output_state_key(plugin_id), source, target,
+                preserve_identical=True,
+            )
+        result = _result(plugin_id, [str(target)] if changed else [], [])
+        result.message = "Local Omarchy desktop theme contribution published; select it in Desktop Appearance to consume it"
+        return result
     if plugin_id == "gtk-css-compat":
         return apply_gtk(paths, force_restart=force_reload)
     if plugin_id == "vscode-local-compat":
@@ -2475,7 +2661,6 @@ def apply(
     warnings: list[str] = []
     restart_required: list[str] = []
     setup_actions: list[str] = []
-    home = paths.home
     targets = _standard_output_targets(paths)
     candidates = {
         "superfile": ("superfile.toml", GENERATED["superfile"]),
@@ -2772,55 +2957,13 @@ def apply(
             ):
                 changed.append(str(target))
     elif plugin_id in {"firefox", "zen"}:
-        base = home / (".mozilla/firefox" if plugin_id == "firefox" else ".zen")
+        base = _browser_profile_root(paths, plugin_id)
         browser_paths, browser_changed = _browser_import(paths, plugin_id, base)
         if browser_changed:
             changed.extend(browser_paths)
             restart_required.append(BY_ID[plugin_id].label)
     elif plugin_id == "steam":
-        script = home / ".local/share/steam-adwaita/install.py"
-        if not script.is_file():
-            return ApplyResult(
-                plugin_id, "skipped", message="steam-adwaita installer is not installed"
-            )
-        try:
-            completed = subprocess.run(
-                [str(script), "--color-theme", "omarchy"],
-                cwd=script.parent,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=30,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("steam: steam-adwaita timed out") from exc
-        if completed.returncode != 0:
-            detail = (
-                completed.stderr.strip()
-                or completed.stdout.strip()
-                or f"exit {completed.returncode}"
-            )
-            raise RuntimeError(f"steam: steam-adwaita failed: {detail}")
-        restart_required: list[str] = []
-        if shutil.which("pgrep"):
-            try:
-                running = subprocess.run(
-                    ["pgrep", "-x", "steam"],
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=2,
-                )
-            except subprocess.TimeoutExpired:
-                running = None
-            if running is not None and running.returncode == 0:
-                restart_required.append("Steam")
-        return _result(
-            plugin_id,
-            [],
-            ["steam-adwaita --color-theme omarchy"],
-            restart_required=restart_required,
-        )
+        return _apply_steam(paths, force=force_reload)
 
     try:
         reload_result = (

@@ -22,6 +22,13 @@ These rules apply to every automated coding agent working in this repository.
 - Keep worktrees under `~/Projects/thpm-worktrees/` unless the caller explicitly chooses another location.
 - Do not reuse a branch for unrelated work.
 
+## Development environment and startup
+
+- The user may start an agent in `~/Projects/thpm` and describe only the task. Agents own worktree creation, environment setup, and verification; do not ask the user to repeat these steps or include them in every prompt.
+- On NixOS, run development commands and tests in the pinned Nix shell. Use the task worktree's `shell.nix` when available: `nix-shell --run '<command>'`.
+- Until `shell.nix` lands on `origin/main`, use `nix-shell ~/Projects/thpm-worktrees/neuromancer-dev-pilot/shell.nix --run '<command>'` from inside the task worktree. Do not reuse the pilot worktree for unrelated tasks.
+- Do not rely on an old `.venv`, install dependencies globally, or modify the host configuration to prepare a task. If the pinned environment is unavailable, report the blocker rather than silently falling back.
+
 ## Verification and pull requests
 
 - Follow the development commands in `README.md` and run the checks relevant to the changed files.

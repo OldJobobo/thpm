@@ -538,13 +538,16 @@ An integration progresses through these stages:
 
 A status for every active integration shall be documented or machine-readable
 before 1.0. Experimental integrations shall be visibly labeled and are exempt from
-supported-certification gates, but they still require safe ownership, disable, and
+the supported bar, but they still require safe ownership, disable, and
 uninstall behavior. They may not be presented as fully supported.
 
-A supported integration must have an automated artifact/lifecycle test, a
-documented real-application validation procedure against recorded application and
-Omarchy versions, and maintainer signoff. A file-copy test alone does not qualify it
-as supported.
+A supported integration must have automated lifecycle tests covering apply, no-op
+reapply, restoration, and user-modification preservation, plus one recorded
+real-application check — date, application version, Omarchy version, THPM version,
+and who checked — in `docs/integration-support.md`. A file-copy test alone does not
+qualify it as supported. An integration that has not yet shipped in a release, or
+that changes something outside THPM's own files that THPM cannot fully restore,
+stays experimental.
 
 Retired cleanup shall remain indefinitely unless retaining it creates a security or
 data-safety issue.
@@ -565,8 +568,8 @@ that can drift.
 
 ### 11.3 Current validation priority
 
-The following classes require real-application validation before 1.0 support is
-considered complete:
+The following classes need a recorded real-application check before they are marked
+Supported:
 
 - reload-based integrations such as Spicetify;
 - application selection integrations such as Zed;
@@ -736,8 +739,8 @@ effects require warning, confirmation, and honest persistence disclosure.
 ### Decision 10: Support the current stable platform
 
 Each THPM release targets the then-current stable Omarchy release. Promotion of an
-integration to supported requires automated lifecycle coverage, real-application
-validation with documented versions, and maintainer signoff. Experimental
+integration to supported requires automated lifecycle coverage and one recorded
+real-application check with documented versions. Experimental
 integrations remain visible but disabled by default.
 
 ## 14. Success metrics and release gates
@@ -747,9 +750,8 @@ integrations remain visible but disabled by default.
 - All automated tests pass on every supported Python version.
 - Every active integration has readiness, apply, no-op, disable, uninstall, and
   user-modification preservation coverage appropriate to its effect class.
-- Every supported integration has a documented end-to-end validation path.
-- Every supported integration records validated application and Omarchy versions
-  and has maintainer signoff.
+- Every supported integration records one real-application check with the
+  application, Omarchy, and THPM versions.
 - Readiness exceptions cannot abort later integrations.
 - Lock contention is covered by cross-process tests.
 - Invalid state and restoration metadata fail closed.

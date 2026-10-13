@@ -48,7 +48,7 @@ jobs:
       - name: Run Python and shell static checks
         run: |
           ruff check --select E9,F src tests scripts/verify-release.py
-          shellcheck install.sh uninstall.sh assets/hooks/90-thpm assets/hooks/90-thpm-ui scripts/install-arch-release.sh scripts/release-assets.sh scripts/update-vencord-base.sh scripts/agent-worktree.sh scripts/setup-dev.sh .githooks/pre-commit .githooks/pre-push
+          shellcheck install.sh uninstall.sh assets/hooks/90-thpm assets/hooks/90-thpm-ui scripts/install-arch-release.sh scripts/release-assets.sh scripts/update-vencord-base.sh scripts/agent-worktree.sh scripts/setup-dev.sh scripts/integration-check.sh .githooks/pre-commit .githooks/pre-push
 
       - name: Build and inspect wheel
         run: |

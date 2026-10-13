@@ -20,6 +20,8 @@
 
 - Add an Experimental, default-disabled Thunderbird integration that themes the outer chrome window and the `about:3pane`/`about:message` content documents from one generated stylesheet, scoped per document type so neither entrypoint leaks rules into the other, imported into both `userChrome.css` and `userContent.css` with guarded restoration and restart reporting on disable and uninstall. Entrypoints are resolved before any write so a malformed managed block cannot leave a partial install, symlinked entrypoints are refused rather than replaced, and existing permissions are preserved.
 
+- Replace the per-integration certification procedure with a lighter support bar: an integration is Supported once it has lifecycle tests and one recorded real-application check. Add `scripts/integration-check.sh` to walk through that check, add lifecycle coverage for Qt6ct, qutebrowser, Heroic, nwg-dock, Discord, and the Firefox and Zen stylesheets, and promote Discord / Vencord and Pi live reload to Supported.
+
 ## 1.0.0rc24 - 2026-08-28
 
 - Promote the opt-in Zellij integration to Supported after exact merged-source lifecycle, parser, restoration, live-transition, visual-evidence, and maintainer-signoff gates passed on Omarchy Quattro.

@@ -94,9 +94,9 @@ thpm ui install
 
 The default local package release is `99`, making it visibly distinct from the published package. Rebuild the published package with `yay -S thpm --rebuild` to roll back.
 
-## Integration certification
+## Integration support
 
-Use the live-test scripts and certification procedure documented in [`docs/integration-support.md`](docs/integration-support.md). `scripts/zellij-live-test.sh` applies the checkout's Zellij adapter in an isolated XDG sandbox, opens a real themed session, switches its colors while running, and verifies restoration. Use `--no-launch` for a non-interactive lifecycle check or `--keep` to retain the restored sandbox.
+An integration becomes Supported once it has lifecycle tests and one recorded real-application check; [`docs/integration-support.md`](docs/integration-support.md) defines the bar. On an Omarchy desktop, `scripts/integration-check.sh <integration-id> <theme-a> <theme-b>` walks through the check and prints the line to record. `scripts/zellij-live-test.sh` applies the checkout's Zellij adapter in an isolated XDG sandbox, opens a real themed session, switches its colors while running, and verifies restoration. Use `--no-launch` for a non-interactive lifecycle check or `--keep` to retain the restored sandbox.
 
 ## Releases
 

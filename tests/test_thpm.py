@@ -490,15 +490,11 @@ class StateTests(Sandbox):
         self.assertFalse(obsolete.exists())
         self.assertIn(str(obsolete), changed)
 
-    def test_experimental_plugins_are_opt_in_by_default(self):
+    def test_every_integration_is_opt_in_by_default(self):
         enabled = load(self.paths)
         self.assertTrue(all(not enabled[plugin.id] for plugin in PLUGINS))
         self.assertTrue(
-            all(
-                plugin.support_status == "experimental"
-                for plugin in PLUGINS
-                if plugin.id not in {"fzf", "zellij"}
-            )
+            all(plugin.support_status in {"experimental", "supported"} for plugin in PLUGINS)
         )
 
     def test_fzf_is_supported_after_complete_live_certification_and_signoff(self):
@@ -508,7 +504,7 @@ class StateTests(Sandbox):
         self.assertEqual(fzf.support_status, "supported")
         self.assertRegex(
             support,
-            r"(?m)^\| `fzf` \| Complete \| Supported \| disabled \|",
+            r"(?m)^\| `fzf` \| Supported \| disabled \|",
         )
         record = Path(__file__).parents[1] / "docs/certifications/fzf-2026-08-28.md"
         evidence = record.parent / "evidence/fzf-2026-08-28"
@@ -556,7 +552,7 @@ class StateTests(Sandbox):
         self.assertEqual(zellij.support_status, "supported")
         self.assertRegex(
             support,
-            r"(?m)^\| `zellij` \| Complete \| Supported \| disabled \|",
+            r"(?m)^\| `zellij` \| Supported \| disabled \|",
         )
         record = root / "docs/certifications/zellij-2026-08-28.md"
         evidence = record.parent / "evidence/zellij-2026-08-28"
@@ -587,29 +583,16 @@ class StateTests(Sandbox):
     def test_support_register_matches_active_integrations_and_defaults(self):
         support = (Path(__file__).parents[1] / "docs/integration-support.md").read_text()
         rows = re.findall(
-            r"^\| `([^`]+)` \| (Incomplete|Complete) "
-            r"\| (Experimental|Supported|Unresolved release blocker) "
-            r"\| (enabled|disabled) \|",
+            r"^\| `([^`]+)` \| (Experimental|Supported) \| (enabled|disabled) \| ([^|]*) \|",
             support,
             flags=re.MULTILINE,
         )
         self.assertEqual([plugin_id for plugin_id, _, _, _ in rows], [p.id for p in PLUGINS])
-        documented = {
-            plugin_id: (audit, disposition, default)
-            for plugin_id, audit, disposition, default in rows
-        }
-        for plugin in PLUGINS:
-            self.assertEqual(
-                documented[plugin.id][2],
-                "enabled" if plugin.default_enabled else "disabled",
-            )
-        for plugin_id, audit, disposition, _default in rows:
-            plugin = next(item for item in PLUGINS if item.id == plugin_id)
-            expected_audit = (
-                "Complete" if plugin.support_status == "supported" else "Incomplete"
-            )
-            self.assertEqual(audit, expected_audit)
-            self.assertEqual(disposition.lower(), plugin.support_status)
+        for plugin, (_plugin_id, status, default, check) in zip(PLUGINS, rows):
+            self.assertEqual(status.lower(), plugin.support_status)
+            self.assertEqual(default, "enabled" if plugin.default_enabled else "disabled")
+            # A Supported row must carry a recorded real-application check.
+            self.assertEqual(check.strip() != "—", plugin.support_status == "supported", plugin.id)
 
     def test_templates_use_canonical_palette_keys_and_render_completely(self):
         templates = Path(__file__).parents[1] / "assets/templates"
@@ -1534,16 +1517,11 @@ class ServiceTests(Sandbox):
         self.assertTrue(active)
         self.assertTrue(native)
         self.assertEqual(
-            [p["id"] for p in active if p["supportStatus"] == "supported"],
-            ["fzf", "zellij"],
+            {p["id"]: p["supportStatus"] for p in active},
+            {plugin.id: plugin.support_status for plugin in PLUGINS},
         )
-        self.assertTrue(
-            all(
-                p["supportStatus"] == "experimental"
-                for p in active
-                if p["id"] not in {"fzf", "zellij"}
-            )
-        )
+        self.assertIn("supported", {p["supportStatus"] for p in active})
+        self.assertIn("experimental", {p["supportStatus"] for p in active})
         self.assertTrue(all(not p["enabled"] for p in active))
         self.assertTrue(all(p["supportStatus"] == "native" for p in native))
         self.assertEqual(payload["menuSurface"], "gui")
@@ -2024,6 +2002,127 @@ class ServiceTests(Sandbox):
         self.assertFalse(uninstalled["cleanupIncomplete"])
         self.assertFalse(target.exists())
         self.assertFalse(source.exists())
+
+    def assert_managed_output_lifecycle(self, plugin_id, source, target, rendered):
+        assets = Path(__file__).parents[1] / "assets"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(rendered)
+        target.write_text("user baseline\n")
+
+        changed = apply(plugin_id, self.paths)
+        metadata = target.stat()
+        unchanged = apply(plugin_id, self.paths)
+
+        self.assertEqual(changed.status, "applied")
+        self.assertIn(str(target), changed.changed)
+        self.assertEqual(target.read_text(), rendered)
+        self.assertEqual(unchanged.status, "unchanged")
+        self.assertEqual(unchanged.restartRequired, [])
+        self.assertEqual(target.stat().st_ino, metadata.st_ino)
+        self.assertEqual(target.stat().st_mtime_ns, metadata.st_mtime_ns)
+
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            disabled = Service(self.paths).set_enabled(plugin_id, False, refresh=False)
+        self.assertTrue(disabled["ok"])
+        self.assertEqual(target.read_text(), "user baseline\n")
+        self.assertFalse(source.exists())
+
+        source.write_text(rendered)
+        apply(plugin_id, self.paths)
+        target.write_text("synthetic user modification\n")
+        with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+            preserved = Service(self.paths).set_enabled(plugin_id, False, refresh=False)
+        self.assertEqual(target.read_text(), "synthetic user modification\n")
+        self.assertIn("preserved user-modified file", str(preserved["warnings"]))
+
+        target.unlink()
+        source.write_text(rendered)
+        apply(plugin_id, self.paths)
+        with patch("thpm.service.ui.remove", return_value={"installed": False}):
+            uninstalled = Service(self.paths).uninstall()
+        self.assertTrue(uninstalled["ok"])
+        self.assertFalse(uninstalled["cleanupIncomplete"])
+        self.assertFalse(target.exists())
+        self.assertFalse(source.exists())
+
+    def test_qt6ct_generated_output_lifecycle_is_safe_and_idempotent(self):
+        self.assert_managed_output_lifecycle(
+            "qt6ct",
+            self.paths.current_theme / "thpm-qt6ct.conf",
+            self.paths.config_home / "qt6ct/colors/thpm.conf",
+            "[ColorScheme]\nactive_colors=#ffd8e6e7, #ff101820\n",
+        )
+
+    def test_qutebrowser_generated_output_lifecycle_is_safe_and_idempotent(self):
+        self.assert_managed_output_lifecycle(
+            "qutebrowser",
+            self.paths.current_theme / "thpm-qutebrowser.py",
+            self.paths.config_home / "qutebrowser/thpm_theme.py",
+            'c.colors.statusbar.normal.bg = "#101820"\n',
+        )
+
+    def test_heroic_generated_output_lifecycle_is_safe_and_idempotent(self):
+        self.assert_managed_output_lifecycle(
+            "heroic",
+            self.paths.current_theme / "thpm-heroic.css",
+            self.paths.config_home / "heroic/themes/thpm.css",
+            "body.thpm { --background: #101820; }\n",
+        )
+
+    def test_nwg_dock_generated_output_lifecycle_is_safe_and_idempotent(self):
+        self.assert_managed_output_lifecycle(
+            "nwg-dock",
+            self.paths.current_theme / "thpm-nwg-dock.css",
+            self.paths.config_home / "nwg-dock-hyprland/thpm.css",
+            "window { background: #101820; }\n",
+        )
+
+    def test_discord_generated_output_lifecycle_is_safe_and_idempotent(self):
+        self.assert_managed_output_lifecycle(
+            "discord",
+            self.paths.current_theme / "thpm-vencord.theme.css",
+            self.paths.config_home / "vesktop/themes/vencord.theme.css",
+            ":root { --thpm-bg: #101820; }\n",
+        )
+
+    def test_discord_system24_generated_output_lifecycle_is_safe_and_idempotent(self):
+        self.assert_managed_output_lifecycle(
+            "discord-system24",
+            self.paths.current_theme / "thpm-vencord-system24.theme.css",
+            self.paths.config_home / "vesktop/themes/vencord.theme.css",
+            '@import url("system24.css");\n',
+        )
+
+    def test_browser_reapply_is_a_noop_and_disable_preserves_edited_stylesheet(self):
+        assets = Path(__file__).parents[1] / "assets"
+        for plugin_id, base_name in (("firefox", ".mozilla/firefox"), ("zen", ".zen")):
+            with self.subTest(plugin_id=plugin_id):
+                base = self.paths.home / base_name
+                profile = base / "profile.default"
+                profile.mkdir(parents=True)
+                (base / "profiles.ini").write_text("[Install1]\nDefault=profile.default\n")
+                source = self.paths.current_theme / f"thpm-{plugin_id}.css"
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("/* generated */\n")
+                managed = profile / f"chrome/thpm-{plugin_id}.css"
+                user_chrome = profile / "chrome/userChrome.css"
+
+                apply(plugin_id, self.paths)
+                metadata = (managed.stat(), user_chrome.stat())
+                unchanged = apply(plugin_id, self.paths)
+
+                self.assertEqual(unchanged.status, "unchanged")
+                self.assertEqual(managed.stat().st_mtime_ns, metadata[0].st_mtime_ns)
+                self.assertEqual(user_chrome.stat().st_mtime_ns, metadata[1].st_mtime_ns)
+
+                managed.write_text("synthetic user modification\n")
+                with patch.dict(os.environ, {"THPM_ASSET_DIR": str(assets)}):
+                    preserved = Service(self.paths).set_enabled(
+                        plugin_id, False, refresh=False
+                    )
+                self.assertEqual(managed.read_text(), "synthetic user modification\n")
+                self.assertIn("preserved user-modified file", str(preserved["warnings"]))
 
     def test_fzf_generated_output_lifecycle_is_safe_and_idempotent(self):
         assets = Path(__file__).parents[1] / "assets"

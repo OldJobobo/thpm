@@ -75,7 +75,7 @@ Disable it and restore its prior managed state:
 thpm disable fzf
 ```
 
-Every integration is disabled by default for new installations. Integrations marked **Experimental** are opt-in and may still need real-application certification. Existing schema-1 state from older releases can preserve previously saved enablement, including values inherited from former defaults; after upgrading, review `thpm status` and disable any integration you did not intentionally choose. `fzf` and `zellij` are currently Supported; see the [integration support register](docs/integration-support.md) for the current evidence and status of every integration.
+Every integration is disabled by default for new installations. Integrations marked **Experimental** have not yet been confirmed against the real application, are new, or change something outside THPM's own files. Existing schema-1 state from older releases can preserve previously saved enablement, including values inherited from former defaults; after upgrading, review `thpm status` and disable any integration you did not intentionally choose. See the [integration support register](docs/integration-support.md) for the current evidence and status of every integration.
 
 ## Using THPM
 
@@ -126,7 +126,7 @@ THPM currently covers these application groups:
 | Games | Steam, Heroic |
 | Compatibility | GNOME accent compatibility, Pi live theme reload |
 
-`fzf` and Zellij are Supported. All other active integrations are Experimental and opt-in. Omarchy-owned integrations appear as read-only records rather than duplicate controls. The [integration support register](docs/integration-support.md) is the authoritative status list.
+Every integration is opt-in. Supported integrations have lifecycle tests and a recorded check against the real application; the rest are Experimental. Omarchy-owned integrations appear as read-only records rather than duplicate controls. The [integration support register](docs/integration-support.md) is the authoritative status list.
 
 ## Application setup
 
@@ -286,7 +286,7 @@ THPM preserves unrelated and user-modified configuration. If a managed file cann
 
 ## Documentation
 
-- [Integration support and certification](docs/integration-support.md)
+- [Integration support](docs/integration-support.md)
 - [Integration behavior and prerequisites](docs/plugins.md)
 - [Architecture](docs/architecture.md)
 - [Visual architecture map](docs/architecture-map.md)

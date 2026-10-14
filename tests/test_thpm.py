@@ -27,6 +27,7 @@ from unittest.mock import Mock, call, patch
 from rich.console import Console
 from textual.widgets import Button, Link
 
+from thpm import cava as cava_module
 from thpm import gnome_accent
 from thpm import integrations as integration_adapters
 from thpm import palette, ui
@@ -4671,6 +4672,69 @@ class CavaTests(Sandbox):
         self.assertEqual(restart_required, [])
         self.assertEqual(warnings, [])
         self.assertIn("PID 321", actions[0])
+
+    def test_process_relative_config_is_unknown_and_never_read(self):
+        proc_root = self.paths.home / "proc"
+        default = self.paths.config_home / "cava/config"
+        default.parent.mkdir(parents=True)
+        default.write_text("[color]\ntheme='thpm'\n")
+        target = self.paths.config_home / "cava/themes/thpm"
+        target.parent.mkdir(parents=True)
+        target.write_text("theme\n")
+        self.write_cava_process(proc_root, 401)
+        relative = ("/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "/proc/thread-self/fd/0", "/dev//stdin")
+        for offset, argument in enumerate(relative, start=402):
+            pid_root = proc_root / str(offset)
+            self.write_cava_process(proc_root, offset)
+            (pid_root / "cmdline").write_bytes(b"cava\0-p\0" + argument.encode() + b"\0")
+        killed: list[tuple[int, int]] = []
+
+        with patch("thpm.cava._read_process_config", wraps=cava_module._read_process_config) as read:
+            processes = discover_cava_processes(self.paths, proc_root)
+            actions, restart_required, warnings = reload_cava_processes(
+                self.paths,
+                proc_root=proc_root,
+                kill=lambda pid, sig: killed.append((pid, sig)),
+            )
+            report = cava_module.diagnose(
+            self.paths, command_path="/usr/bin/cava", version=(0, 10, 7), proc_root=proc_root
+        )
+
+        self.assertEqual([item.config_path for item in processes[1:]], [None] * len(relative))
+        self.assertTrue(all(item.confidence == "unknown" for item in processes[1:]))
+        self.assertEqual({call.args[0] for call in read.call_args_list}, {str(default)})
+        self.assertEqual(killed, [(401, signal.SIGUSR1)])
+        self.assertEqual(restart_required, ["Cava"])
+        self.assertEqual(len(warnings), len(relative))
+        self.assertTrue(all("has an unknown config" in warning for warning in warnings))
+        self.assertIn("cava.processes", {check["id"] for check in report["checks"]})
+
+    def test_non_regular_custom_config_is_not_read_or_signalled(self):
+        proc_root = self.paths.home / "proc"
+        fifo = self.paths.home / "profiles/cava.fifo"
+        fifo.parent.mkdir(parents=True)
+        os.mkfifo(fifo)
+        target = self.paths.config_home / "cava/themes/thpm"
+        target.parent.mkdir(parents=True)
+        target.write_text("theme\n")
+        self.write_cava_process(proc_root, 501, config=fifo)
+        killed: list[tuple[int, int]] = []
+
+        actions, restart_required, warnings = reload_cava_processes(
+            self.paths,
+            proc_root=proc_root,
+            kill=lambda pid, sig: killed.append((pid, sig)),
+        )
+        report = cava_module.diagnose(
+            self.paths, command_path="/usr/bin/cava", version=(0, 10, 7), proc_root=proc_root
+        )
+
+        self.assertEqual(killed, [])
+        self.assertEqual(actions, [])
+        self.assertEqual(restart_required, ["Cava"])
+        self.assertIn("does not use", warnings[0])
+        runtime = next(check for check in report["checks"] if check["id"] == "cava.runtime-selection")
+        self.assertEqual(runtime["status"], "error")
 
     def test_process_discovery_confirms_default_and_absolute_custom_configs(self):
         proc_root = self.paths.home / "proc"

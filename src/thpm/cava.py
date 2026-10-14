@@ -496,6 +496,25 @@ def _proc_start_time(pid_dir: Path) -> str | None:
         return None
 
 
+# These paths name a descriptor of whichever process opens them, so reading one
+# here would read THPM's own stdin or descriptor rather than Cava's config.
+_PROCESS_RELATIVE_CONFIG = re.compile(r"^/(?:dev/(?:stdin|stdout|stderr|fd(?:/.*)?)|proc/(?:self|thread-self)(?:/.*)?)$")
+
+
+def _read_process_config(path: str) -> str:
+    """Read a running Cava's config only when it is a regular file.
+
+    The non-blocking open keeps a FIFO from waiting for a writer; the fstat
+    check then refuses FIFOs, terminals, and other descriptors whose reads can
+    block indefinitely.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise OSError(f"Cava config is not a regular file: {path}")
+        return handle.read().decode("utf-8")
+
+
 def discover_processes(paths: Paths, proc_root: Path = Path("/proc")) -> list[CavaProcess]:
     processes: list[CavaProcess] = []
     try:
@@ -542,6 +561,9 @@ def discover_processes(paths: Paths, proc_root: Path = Path("/proc")) -> list[Ca
         confidence = "confirmed" if environment_read else "inferred"
         if custom is None:
             config_path = config_home / "config"
+        elif _PROCESS_RELATIVE_CONFIG.match(os.path.normpath(custom)):
+            config_path = None
+            confidence = "unknown"
         else:
             candidate = Path(custom)
             if candidate.is_absolute():
@@ -707,7 +729,7 @@ def diagnose(
         if process.confidence != "confirmed" or process.config_path is None or process.config_home is None:
             continue
         try:
-            running_selector = parse_selector(Path(process.config_path).read_text(encoding="utf-8")).value
+            running_selector = parse_selector(_read_process_config(process.config_path)).value
             running_target = Path(process.config_home) / "themes/thpm"
             consumes_target = running_target.resolve() == target_theme.resolve()
         except (OSError, UnicodeError, CavaError):
@@ -746,9 +768,7 @@ def _uses_managed_theme(paths: Paths, process: CavaProcess) -> bool:
     ):
         return False
     try:
-        selected = parse_selector(
-            Path(process.config_path).read_text(encoding="utf-8")
-        ).value
+        selected = parse_selector(_read_process_config(process.config_path)).value
         process_target = Path(process.config_home) / "themes/thpm"
         return bool(
             selected == "thpm"

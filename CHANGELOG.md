@@ -22,6 +22,8 @@
 
 - Replace the per-integration certification procedure with a lighter support bar: an integration is Supported once it has lifecycle tests and one recorded real-application check. Add `scripts/integration-check.sh` to walk through that check, add lifecycle coverage for Qt6ct, qutebrowser, Heroic, nwg-dock, Discord, and the Firefox and Zen stylesheets, and promote Discord / Vencord and Pi live reload to Supported.
 
+- Stop theme changes from hanging in a terminal when a running Cava reads its config from `-p /dev/stdin`. Process-relative config paths (`/dev/stdin`, `/dev/fd/*`, `/proc/self/fd/*`) are treated as unknown and that instance is left for a manual restart, and THPM only reads a running Cava config that is a regular file, in both reload and `thpm doctor cava`.
+
 ## 1.0.0rc24 - 2026-08-28
 
 - Promote the opt-in Zellij integration to Supported after exact merged-source lifecycle, parser, restoration, live-transition, visual-evidence, and maintainer-signoff gates passed on Omarchy Quattro.

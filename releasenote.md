@@ -1,41 +1,41 @@
-## THPM 1.0.0rc24 is now available
+## THPM 1.0.0 is now available
 
-**THPM rc24 completes the Quattro application-theme fallback audit and publishes retained certification for both fzf and Zellij alongside the ownership, restoration, and semantic palette repairs from rc23.**
+**THPM 1.0.0 is the first stable release. It manages theme integrations for applications that Omarchy does not theme itself, keeps each integration opt-in, and puts your own files back when you turn an integration off.**
 
-### Install or upgrade the latest release
+### Install or upgrade
+
+```sh
+omarchy pkg aur add thpm
+thpm install
+```
+
+Or install from the verified release sources:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/OldJobobo/thpm/main/scripts/install-arch-release.sh | bash
 ```
 
-The installer resolves the newest published GitHub release, verifies its source archive and checksum, builds the Arch package with `makepkg`, installs it through pacman, and completes THPM's per-user setup.
+## What’s new since rc24
 
-## What’s new in rc24
+### New Experimental integrations
 
-### Safer semantic application themes
+- **Nautilus** palette, with a hot-reloading extension; it requires `nautilus-python`.
+- **GNOME accent** compatibility, which maps the theme accent to libadwaita's named accents and restores your previous accent.
+- **Thunderbird**, theming both the window chrome and the message views.
+- **Hermes Desktop** local palette, offered as **Local Omarchy** in Desktop Appearance.
 
-GTK receives a complete generated semantic fallback when a theme does not provide authored GTK CSS. Fish and Superfile use corrected target-native color contracts, while fzf remains fully certified after complete automated, lifecycle, restoration, fresh-process, visual, and maintainer-signoff gates on Omarchy Quattro.
+### Fixes and improvements
 
-Typora remains an opt-in Experimental integration with generated screen colors, neutral print output, restorable file ownership, and change-sensitive restart reporting. Zellij is now Supported after exact merged-source parser, no-op, disable, user-edit, uninstall, restoration, restart-reporting, and real Dune/Last Call transition gates passed with retained evidence and maintainer signoff.
+- Firefox and Zen pick the profile of the installation that is actually present, find profiles under `$XDG_CONFIG_HOME`, and theme more of Firefox's chrome: the URL bar, panels, sidebar and tabs.
+- Zed's installed **THPM Current** theme fills in missing diagnostic colors, so warning and error popups stay readable.
+- Steam's Omarchy palette no longer goes stale after a theme change.
+- A theme change no longer hangs in a terminal when a running Cava reads its config from standard input.
+- THPM's old Hermes JSON writer is retired in favor of Omarchy's native Hermes skins.
 
-### Obsidian Terminal recovery fails closed
+### Support status
 
-THPM can restorably disable the Terminal community plugin's profile-level Follow Theme setting so its semantic xterm palette remains effective. Ownership records cover only true-to-false changes and preserve unrelated settings and later user edits.
+Every integration is disabled until you enable it. An integration is **Supported** once it has automated lifecycle tests and a recorded check against the real application. fzf, Zellij, Discord / Vencord, and Pi live reload are Supported. The others are labeled **Experimental** but keep the same guarantees for your files on disable and uninstall. See the [integration support register](https://github.com/OldJobobo/thpm/blob/main/docs/integration-support.md).
 
-Settings and private recovery paths reject traversal, malformed state, arbitrary targets, symlink leaves and ancestors, and unsafe relative candidates. Missing or malformed owned profiles, failed writes, uncertain atomic replacement, and incomplete rollback retain structured recovery state instead of falsely reporting successful cleanup.
+Please report any application that stops following your theme.
 
-### Native ownership stays native
-
-cliamp keeps its contrast-checked built-in or terminal-ANSI theme by default. THPM installs an authored override only when the theme explicitly opts in with `# thpm:cliamp-use-native`, and restores both file and selector state conservatively.
-
-The uncertified SwayNC adapter is retired because its standalone generated file was not consumed by the active stylesheet. Guarded historical cleanup remains available.
-
-### Verification
-
-The exact merged release tree passes 457 automated tests, release metadata validation, Python compilation, Ruff and ShellCheck static checks, wheel content and isolated-install smoke tests, Python 3.11 through 3.14 CI, and clean stable and VCS Arch package builds. Zellij certification PR #56 passed all 7 required checks and merged.
-
-fzf and Zellij are Supported. Other active adapters remain visibly opt-in Experimental until their complete real-application certification records and maintainer signoff are retained.
-
-This remains a release candidate. Please report application-theme ownership, restoration, migration, or visual compatibility issues.
-
-[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0rc24)
+[View the release](https://github.com/OldJobobo/thpm/releases/tag/v1.0.0)

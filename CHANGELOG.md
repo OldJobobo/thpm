@@ -1,27 +1,20 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-10-16
+
+First stable release.
 
 - Add an Experimental local Hermes Desktop palette integration through the supported runtime-plugin theme registry, independent of the connected agent. Preserve explicit desktop selections and native backend skins, guard plugin-file restoration, and distinguish contribution registration from observed CSS consumption.
-
 - Fix Steam's stale Omarchy palette by generating semantic CSS before isolated steam-adwaita installation, validating the installed palette/import chain, skipping unchanged hooks, and restorably publishing files without replacing the live Adwaita tree. Preserve manual-only restart reporting, displaced content, and subsequent user edits; Steam remains Experimental pending real-client visual certification.
-
 - Retire THPM's obsolete Hermes JSON writer in favor of Omarchy's native YAML skin integration, preserving guarded legacy cleanup and leaving native skins and selections untouched. Add read-only Hermes, Pi, Claude, and T3 Code ownership records.
-
 - Add an Experimental, opt-in Nautilus palette integration with an XDG-aware hot-reloading Python extension, atomic semantic CSS generation, optional dependency diagnostics, and guarded file restoration.
 - Add a separate Experimental GNOME accent compatibility adapter that maps semantic accents to libadwaita's named palette and restores the prior GSettings value only while THPM still owns it.
 - Select the browser profile of the installation that is actually present when a Firefox or Zen profile root registers several installations, instead of taking whichever `[Install*]` section sorts first and silently theming a profile no installed build opens.
-
 - Find the Firefox and Zen profile roots under `$XDG_CONFIG_HOME` as well as their legacy home-directory locations, so both integrations still work on builds that store a freshly created profile in the XDG location, and restore managed output from either root on cleanup.
-
 - Theme Firefox chrome beyond the toolbox background by setting the lightweight-theme custom properties that Firefox reads without a theme add-on, so the URL bar, panels, sidebar, selected tab, and toolbar button states follow the active palette. The accent resolves through Omarchy's `gradient_start` fallback so palettes without `accent` still render without unresolved placeholders.
-
 - Supply missing Zed warning, error, info, and hint diagnostic foregrounds, backgrounds, and borders in the installed **THPM Current** theme using palette- and appearance-aware defaults. Explicit overrides, including translucent backgrounds, are preserved, the authored source is never rewritten, and a palette change marks the installed output stale.
-
 - Add an Experimental, default-disabled Thunderbird integration that themes the outer chrome window and the `about:3pane`/`about:message` content documents from one generated stylesheet, scoped per document type so neither entrypoint leaks rules into the other, imported into both `userChrome.css` and `userContent.css` with guarded restoration and restart reporting on disable and uninstall. Entrypoints are resolved before any write so a malformed managed block cannot leave a partial install, symlinked entrypoints are refused rather than replaced, and existing permissions are preserved.
-
 - Replace the per-integration certification procedure with a lighter support bar: an integration is Supported once it has lifecycle tests and one recorded real-application check. Add `scripts/integration-check.sh` to walk through that check, add lifecycle coverage for Qt6ct, qutebrowser, Heroic, nwg-dock, Discord, and the Firefox and Zen stylesheets, and promote Discord / Vencord and Pi live reload to Supported.
-
 - Stop theme changes from hanging in a terminal when a running Cava reads its config from `-p /dev/stdin`. Process-relative config paths (`/dev/stdin`, `/dev/fd/*`, `/proc/self/fd/*`) are treated as unknown and that instance is left for a manual restart, and THPM only reads a running Cava config that is a regular file, in both reload and `thpm doctor cava`.
 
 ## 1.0.0rc24 - 2026-08-28

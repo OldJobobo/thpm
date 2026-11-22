@@ -73,13 +73,13 @@ def artifacts(paths: Paths) -> list[Path]:
     config = paths.config_file
     if config.is_file() and not claims_current_format(config):
         result.append(config)
-    dispatcher = paths.config_home / "omarchy/hooks/theme-set"
+    dispatcher = paths.host_config_dir / "hooks/theme-set"
     if dispatcher.is_file():
         try: content = dispatcher.read_text(errors="ignore")
         except OSError: content = ""
         if "Compatibility shim for older thpm installs" in content or "Omarchy 3.3+ uses colors.toml" in content:
             result.append(dispatcher)
-    old_omarchy_bin = paths.data_home / "omarchy/bin"
+    old_omarchy_bin = paths.host_data_dir / "bin"
     result.extend(path for name in LEGACY_BINARIES if (path := old_omarchy_bin / name).is_file())
     return result
 

@@ -1,8 +1,8 @@
 # THPM
 
-**Theme Hook Plugin Manager for Omarchy 4**
+**Theme Hook Plugin Manager for Omarchy 4 and Omakub**
 
-THPM keeps applications outside Omarchy’s native theme coverage synchronized with your active Omarchy theme. Choose the integrations you want, switch themes normally, and THPM applies each supported color surface from one graphical control panel, terminal UI, or CLI.
+THPM keeps applications outside the host’s native theme coverage synchronized with your active theme. Choose the integrations you want, switch themes normally, and THPM applies each supported color surface from one graphical control panel, terminal UI, or CLI.
 
 ## What THPM gives you
 
@@ -17,13 +17,15 @@ THPM also shows Omarchy-owned integrations as read-only records, so it is clear 
 
 ## Requirements
 
-- Omarchy 4.x
+- Omarchy 4.x, or Omakub (Omabuntu) on Ubuntu with its theme-hook system
 - Python 3.11 or newer
 - Textual 8.2.8 or newer within the supported 8.x series (installed automatically by source installs; packaged as `python-textual` on Arch)
 - Optional: Omarchy Shell for the graphical control panel and menu entry
 - Optional: `nautilus` and `nautilus-python` for the default-disabled Nautilus palette integration
 
 Earlier Omarchy layouts are not supported.
+
+On Omakub, THPM uses the `omakub` command centre and the `~/.config/omakub` hook, theme, and themed-file layout. The graphical control panel depends on Omarchy Shell, so it is skipped on Omakub; use `thpm tui` or the CLI instead. Host detection is automatic. Set `THPM_HOST=omarchy` or `THPM_HOST=omakub` to override it on systems that provide both command centres.
 
 Hermes backend skins are owned by Omarchy: it generates or honors `hermes.yaml` and synchronizes Hermes skins. THPM lists Hermes, Pi, Claude, and T3 Code as read-only native ownership records. Its former Hermes JSON writer is retired; `thpm reconcile` removes the obsolete template and guardedly cleans up old THPM JSON without changing native skins or selections. The separate Experimental `hermes-desktop-local` integration manages only the local desktop palette, not backend skins.
 
@@ -44,6 +46,18 @@ thpm tui
 ```
 
 Use `thpm install --no-ui` if you only want the terminal UI and CLI. Add the graphical control panel later with `thpm ui install`.
+
+### Ubuntu / Omakub
+
+The source installer works on Ubuntu with Omakub installed:
+
+```bash
+./install.sh
+```
+
+THPM installs its theme hook into `~/.config/omakub/hooks/theme-set.d/` and reads the active palette from `~/.config/omakub/current/theme/colors.toml`. Switching themes with `omakub theme set` applies the enabled integrations. The `thpm tui` interface and all CLI commands are available; `thpm ui open` falls back to the terminal interface because Omakub has no Omarchy Shell plugin system.
+
+You do not need to create `omarchy-*` copies of Omakub scripts.
 
 ### Install from a source checkout
 

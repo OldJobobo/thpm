@@ -122,11 +122,11 @@ def _optional_asset_targets(
     config = paths.config_home
     targets = {
         "branding": (
-            ("branding-about", "about.txt", config / "omarchy/branding/about.txt"),
+            ("branding-about", "about.txt", paths.host_config_dir / "branding/about.txt"),
             (
                 "branding-screensaver",
                 "screensaver.txt",
-                config / "omarchy/branding/screensaver.txt",
+                paths.host_config_dir / "branding/screensaver.txt",
             ),
         ),
         "typora": (("typora", "typora.css", config / "Typora/themes/omarchy.css"),),
@@ -212,7 +212,7 @@ def _matches_installed_theme_asset(paths: Paths, target: Path, asset_name: str) 
     if not target.is_file() or target.is_symlink():
         return False
     try:
-        root = paths.config_home / "omarchy/themes"
+        root = paths.themes_dir
         return _matches_sources(target, tuple(root.glob(f"*/{asset_name}")))
     except OSError:
         return False
@@ -1836,7 +1836,7 @@ def _current_plugin_sources(paths: Paths, plugin_id: str) -> tuple[Path, ...]:
             *([GENERATED[source_plugin]] if source_plugin in GENERATED else []),
         )
     ]
-    installed = paths.config_home / "omarchy/themes"
+    installed = paths.themes_dir
     return tuple(paths.current_theme / name for name in names) + tuple(
         candidate
         for name in names
@@ -2588,10 +2588,10 @@ def _matches_normalized_zellij_source(paths: Paths, target: Path) -> bool:
     if not target.is_file() or target.is_symlink():
         return False
     sources = (paths.current_theme / "zellij.kdl",) + tuple(
-        (paths.config_home / "omarchy/themes").glob("*/zellij.kdl")
+        paths.themes_dir.glob("*/zellij.kdl")
     )
     palettes = (paths.current_theme / "colors.toml",) + tuple(
-        (paths.config_home / "omarchy/themes").glob("*/colors.toml")
+        paths.themes_dir.glob("*/colors.toml")
     )
     try:
         target_data = target.read_text()

@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .host import OMAKUB, OMARCHY, host
+
 
 def _expand(value: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
@@ -17,6 +19,7 @@ class Paths:
     state_home: Path
     runtime_dir: Path
     cache_root: Path | None = None
+    host: str = OMARCHY
 
     @classmethod
     def discover(cls) -> "Paths":
@@ -28,7 +31,30 @@ class Paths:
             state_home=_expand(os.environ.get("XDG_STATE_HOME", "~/.local/state")),
             runtime_dir=_expand(os.environ.get("XDG_RUNTIME_DIR", "/tmp")),
             cache_root=_expand(os.environ.get("XDG_CACHE_HOME") or "~/.cache"),
+            host=host(),
         )
+
+    @property
+    def host_config_dir(self) -> Path:
+        """Root of the host's config tree (``~/.config/omarchy`` or ``omakub``)."""
+        return self.config_home / ("omakub" if self.host == OMAKUB else "omarchy")
+
+    @property
+    def host_state_dir(self) -> Path:
+        """Root of the active-theme state (state/omarchy/current or config/omakub/current)."""
+        if self.host == OMAKUB:
+            return self.config_home / "omakub/current"
+        return self.state_home / "omarchy/current"
+
+    @property
+    def host_data_dir(self) -> Path:
+        """Root of the host's data tree (``~/.local/share/omarchy`` or ``omakub``)."""
+        return self.data_home / ("omakub" if self.host == OMAKUB else "omarchy")
+
+    @property
+    def themes_dir(self) -> Path:
+        """Directory containing installed host themes."""
+        return self.host_config_dir / "themes"
 
     @property
     def thpm_config_dir(self) -> Path:
@@ -112,19 +138,19 @@ class Paths:
 
     @property
     def current_theme(self) -> Path:
-        return self.state_home / "omarchy/current/theme"
+        return self.host_state_dir / "theme"
 
     @property
     def current_theme_name(self) -> Path:
-        return self.state_home / "omarchy/current/theme.name"
+        return self.host_state_dir / "theme.name"
 
     @property
     def current_background(self) -> Path:
-        return self.state_home / "omarchy/current/background"
+        return self.host_state_dir / "background"
 
     @property
     def hook_dir(self) -> Path:
-        return self.config_home / "omarchy/hooks/theme-set.d"
+        return self.host_config_dir / "hooks/theme-set.d"
 
     @property
     def hook_file(self) -> Path:
@@ -132,16 +158,16 @@ class Paths:
 
     @property
     def post_update_hook_file(self) -> Path:
-        return self.config_home / "omarchy/hooks/post-update.d/90-thpm-ui"
+        return self.host_config_dir / "hooks/post-update.d/90-thpm-ui"
 
     @property
     def themed_dir(self) -> Path:
-        return self.config_home / "omarchy/themed"
+        return self.host_config_dir / "themed"
 
     @property
     def shell_plugin_dir(self) -> Path:
-        return self.config_home / "omarchy/plugins/io.github.oldjobobo.thpm"
+        return self.host_config_dir / "plugins/io.github.oldjobobo.thpm"
 
     @property
     def menu_extension(self) -> Path:
-        return self.config_home / "omarchy/extensions/omarchy-menu.jsonc"
+        return self.host_config_dir / "extensions/omarchy-menu.jsonc"

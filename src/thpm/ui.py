@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .files import atomic_text, remove_managed_block
+from .host import OMAKUB, command, gui_supported
 from .omarchy import run, shell_running
 from .paths import Paths
 from .resources import asset
@@ -21,6 +22,14 @@ START = "// thpm-menu-start"
 END = "// thpm-menu-end"
 PLUGIN_ID = "io.github.oldjobobo.thpm"
 SURFACES = ("gui", "tui")
+UNAVAILABLE_REASON = "Omarchy Shell control panel is not available on Omakub"
+
+
+def _fallback_launcher() -> str:
+    """Host-specific floating-terminal launcher used to open the TUI."""
+    if command() == OMAKUB:
+        return "omakub-launch-terminal-with-presentation"
+    return "omarchy-launch-floating-terminal-with-presentation"
 ENTRIES = {
     "gui": '  "style.theme-hooks": {"icon":"󰏘","label":"Theme Hook Plugins","keywords":"thpm plugins integrations gui qml","action":"thpm ui open"},',
     "tui": '  "style.theme-hooks": {"icon":"󰆍","label":"Theme Hook Plugins","keywords":"thpm plugins integrations terminal tui","action":"omarchy-launch-floating-terminal-with-presentation \'thpm tui\'"},',
@@ -306,7 +315,7 @@ def _ui_lock(paths: Paths) -> Iterator[None]:
 
 
 def _launch_fallback() -> bool:
-    launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
+    launcher = shutil.which(_fallback_launcher())
     if not launcher:
         return False
     try:
@@ -322,6 +331,8 @@ def _launch_fallback() -> bool:
 
 
 def surface(paths: Paths, requested: str | None = None) -> dict[str, object]:
+    if not gui_supported():
+        return {"surface": "tui", "changed": False, "reason": UNAVAILABLE_REASON}
     with _ui_lock(paths):
         return _surface_locked(paths, requested)
 
@@ -371,6 +382,8 @@ def _surface_locked(
 
 
 def install(paths: Paths) -> dict[str, object]:
+    if not gui_supported():
+        return {"installed": False, "skipped": True, "reason": UNAVAILABLE_REASON}
     with _ui_lock(paths):
         return _install_locked(paths)
 
@@ -403,6 +416,16 @@ def _install_locked(paths: Paths) -> dict[str, object]:
 
 
 def open_manager(paths: Paths, *, fallback: bool = True) -> dict[str, object]:
+    if not gui_supported():
+        if fallback and _launch_fallback():
+            return {
+                "opened": True,
+                "surface": "recovery-tui",
+                "synchronized": False,
+                "degraded": True,
+                "graphicalError": UNAVAILABLE_REASON,
+            }
+        raise RuntimeError(UNAVAILABLE_REASON)
     try:
         with _ui_lock(paths):
             if not shell_running():
@@ -445,6 +468,8 @@ def open_manager(paths: Paths, *, fallback: bool = True) -> dict[str, object]:
 
 
 def sync(paths: Paths) -> dict[str, object]:
+    if not gui_supported():
+        return {"installed": False, "skipped": True, "reason": UNAVAILABLE_REASON}
     requested = paths.shell_plugin_dir.exists() or (
         paths.menu_extension.exists() and START in paths.menu_extension.read_text()
     )
@@ -454,6 +479,8 @@ def sync(paths: Paths) -> dict[str, object]:
 
 
 def remove(paths: Paths) -> dict[str, object]:
+    if not gui_supported():
+        return {"installed": False, "skipped": True, "reason": UNAVAILABLE_REASON}
     with _ui_lock(paths):
         return _remove_locked(paths)
 
@@ -472,6 +499,13 @@ def _remove_locked(paths: Paths) -> dict[str, object]:
 
 
 def status(paths: Paths) -> dict[str, object]:
+    if not gui_supported():
+        return {
+            "installed": False, "current": False, "discovered": False,
+            "enabled": False, "loaded": False, "open": False,
+            "menuEntry": False, "menuCurrent": False, "menuSurface": "tui",
+            "shellRunning": False, "available": False, "reason": UNAVAILABLE_REASON,
+        }
     running = shell_running()
     state = _plugin_state() if running else None
     health = _panel_health() if running and state is not None else "unknown"

@@ -65,6 +65,7 @@ from .integrations import (
     cleanup_zellij,
 )
 from .integrations import apply as apply_integration
+from .host import gui_supported, host
 from .migrate import archive as archive_legacy
 from .migrate import artifacts as legacy_artifacts
 from .migrate import inspect as inspect_legacy
@@ -275,6 +276,10 @@ def envelope(operation: str, ok: bool = True, **fields: object) -> dict[str, obj
     return {"schemaVersion": SCHEMA_VERSION, "ok": ok, "operation": operation, "busy": False, "summary": fields.pop("summary", ""), **fields}
 
 
+def _host_label() -> str:
+    return "Omakub" if host() == "omakub" else "Omarchy 4"
+
+
 def _preferences(paths: Paths) -> tuple[Preferences, str | None]:
     try:
         return load_config(paths), None
@@ -424,9 +429,10 @@ class Service:
 
     def ui_surface(self, requested: str | None = None) -> dict[str, object]:
         result = ui.surface(self.paths, requested)
+        summary = str(result["reason"]) if "reason" in result else f"{host().capitalize()} menu opens the {str(result['surface']).upper()}"
         return envelope(
             "ui-surface",
-            summary=f"Omarchy menu opens the {str(result['surface']).upper()}",
+            summary=summary,
             result=result,
             errors=[],
         )
@@ -1021,7 +1027,7 @@ class Service:
         errors: list[dict[str, str]] = []
         warnings: list[dict[str, str]] = []
         caps = capabilities()
-        if not caps.available: errors.append({"message": "Omarchy 4 capabilities missing: " + ", ".join(caps.missing)})
+        if not caps.available: errors.append({"message": f"{_host_label()} capabilities missing: " + ", ".join(caps.missing)})
         active_palette: dict[str, str] = {}
         try: active_palette = load_palette(self.paths.current_theme / "colors.toml")
         except (OSError, ValueError) as exc: errors.append({"message": str(exc)})
@@ -1255,11 +1261,12 @@ class Service:
             capabilities={"routes": sorted(caps.routes), "missing": list(caps.missing)}, errors=errors)
 
     def install(self, with_ui: bool = True) -> dict[str, object]:
-        self._set_total(5 if with_ui else 4)
-        self._step("Checking Omarchy capabilities")
+        graphical = with_ui and gui_supported()
+        self._set_total(5 if graphical else 4)
+        self._step(f"Checking {_host_label()} capabilities")
         check = self.install_check()
         if not check["ok"]:
-            return envelope("install", False, summary="Omarchy 4 is required", errors=check["errors"])
+            return envelope("install", False, summary=f"{_host_label()} is required", errors=check["errors"])
         self._step("Inspecting existing installation")
         migrated, legacy_files = inspect_legacy(self.paths)
         compat_required = needs_compat(self.paths, legacy_files)
@@ -1297,7 +1304,9 @@ class Service:
                     atomic_copy(asset("compat", "theme-env.sh"), self.paths.legacy_compat_file, 0o644)
                     changed.append(str(self.paths.legacy_compat_file))
             ui_result: dict[str, object] = {"installed": False, "skipped": True}
-            if with_ui:
+            if not gui_supported():
+                ui_result["reason"] = "graphical control panel is not available on Omakub"
+            elif with_ui:
                 self._step("Installing control panel")
                 ui_result = ui.install(self.paths)
             self._step("Refreshing active theme")

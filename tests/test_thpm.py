@@ -154,6 +154,8 @@ class Sandbox(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
+        self.host_env = patch.dict(os.environ, {"THPM_HOST": "omarchy"})
+        self.host_env.start()
         self.paths = Paths(root, root / "config", root / "data", root / "state", root / "run")
         self.host_omarchy_guard = patch(
             "thpm.service.run",
@@ -175,6 +177,7 @@ class Sandbox(unittest.TestCase):
     def tearDown(self):
         self.host_ui_omarchy_guard.stop()
         self.host_omarchy_guard.stop()
+        self.host_env.stop()
         self.temp.cleanup()
 
     def write_palette(self):
@@ -194,6 +197,36 @@ class PathsTests(Sandbox):
 
         self.assertEqual(discovered.cache_root, self.paths.home / ".cache")
         self.assertTrue(discovered.cache_root.is_absolute())
+
+    def test_omakub_layout_maps_config_and_current_theme(self):
+        paths = Paths(
+            self.paths.home,
+            self.paths.config_home,
+            self.paths.data_home,
+            self.paths.state_home,
+            self.paths.runtime_dir,
+            host="omakub",
+        )
+        omakub = self.paths.config_home / "omakub"
+        self.assertEqual(paths.host_config_dir, omakub)
+        self.assertEqual(paths.host_state_dir, omakub / "current")
+        self.assertEqual(paths.host_data_dir, self.paths.data_home / "omakub")
+        self.assertEqual(paths.current_theme, omakub / "current/theme")
+        self.assertEqual(paths.current_theme_name, omakub / "current/theme.name")
+        self.assertEqual(paths.current_background, omakub / "current/background")
+        self.assertEqual(paths.hook_dir, omakub / "hooks/theme-set.d")
+        self.assertEqual(paths.hook_file, omakub / "hooks/theme-set.d/90-thpm")
+        self.assertEqual(
+            paths.post_update_hook_file,
+            omakub / "hooks/post-update.d/90-thpm-ui",
+        )
+        self.assertEqual(paths.themed_dir, omakub / "themed")
+        self.assertEqual(paths.themes_dir, omakub / "themes")
+
+    def test_omarchy_layout_remains_the_default(self):
+        self.assertEqual(self.paths.current_theme, self.paths.state_home / "omarchy/current/theme")
+        self.assertEqual(self.paths.hook_dir, self.paths.config_home / "omarchy/hooks/theme-set.d")
+        self.assertEqual(self.paths.themes_dir, self.paths.config_home / "omarchy/themes")
 
 
 class PaletteTests(Sandbox):
@@ -2695,6 +2728,121 @@ class ServiceTests(Sandbox):
             result = capabilities()
         self.assertTrue(result.available)
         self.assertEqual(result.missing, ())
+
+    def test_capabilities_accepts_omakub_routes(self):
+        routes = [
+            "omakub hook",
+            "omakub hook install",
+            "omakub refresh theme",
+            "omakub menu",
+        ]
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps({"commands": [{"route": route} for route in routes]}),
+            "",
+        )
+        with patch.dict(os.environ, {"THPM_HOST": "omakub"}), patch(
+            "thpm.omarchy.shutil.which", return_value="/usr/bin/omakub"
+        ), patch("thpm.omarchy.run", return_value=completed):
+            result = capabilities()
+        self.assertTrue(result.available)
+        self.assertEqual(result.missing, ())
+
+    def test_capabilities_reports_missing_omakub_routes(self):
+        completed = subprocess.CompletedProcess(
+            [], 0, json.dumps({"commands": [{"route": "omakub hook"}]}), ""
+        )
+        with patch.dict(os.environ, {"THPM_HOST": "omakub"}), patch(
+            "thpm.omarchy.shutil.which", return_value="/usr/bin/omakub"
+        ), patch("thpm.omarchy.run", return_value=completed):
+            result = capabilities()
+        self.assertFalse(result.available)
+        self.assertEqual(
+            result.missing,
+            ("omakub hook install", "omakub menu", "omakub refresh theme"),
+        )
+
+    def test_run_translates_theme_refresh_for_omakub(self):
+        with patch.dict(os.environ, {"THPM_HOST": "omakub"}), patch(
+            "thpm.omarchy.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ) as runner:
+            run_omarchy("theme", "refresh", check=False)
+        self.assertEqual(runner.call_args.args[0], ["omakub", "refresh", "theme"])
+
+    def test_run_uses_omarchy_routes_by_default(self):
+        with patch(
+            "thpm.omarchy.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ) as runner:
+            run_omarchy("theme", "refresh", check=False)
+        self.assertEqual(runner.call_args.args[0], ["omarchy", "theme", "refresh"])
+
+    def test_shell_running_is_false_on_omakub(self):
+        with patch.dict(os.environ, {"THPM_HOST": "omakub"}), patch(
+            "thpm.omarchy.run", side_effect=AssertionError("no shell route on Omakub")
+        ):
+            self.assertFalse(shell_running())
+
+    def test_ui_install_is_skipped_on_omakub(self):
+        with patch.dict(os.environ, {"THPM_HOST": "omakub"}):
+            result = ui.install(self.paths)
+        self.assertFalse(result["installed"])
+        self.assertTrue(result["skipped"])
+        self.assertIn("Omakub", result["reason"])
+
+    def test_install_check_passes_for_omakub_host(self):
+        assets = Path(__file__).parents[1] / "assets"
+        paths = Paths(
+            self.paths.home,
+            self.paths.config_home,
+            self.paths.data_home,
+            self.paths.state_home,
+            self.paths.runtime_dir,
+            host="omakub",
+        )
+        with patch.dict(
+            os.environ, {"THPM_HOST": "omakub", "THPM_ASSET_DIR": str(assets)}
+        ), patch("thpm.service.capabilities") as caps:
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            result = Service(paths).install_check()
+        self.assertTrue(result["ok"], result["errors"])
+
+    def test_install_on_omakub_installs_hook_and_skips_shell_panel(self):
+        assets = Path(__file__).parents[1] / "assets"
+        paths = Paths(
+            self.paths.home,
+            self.paths.config_home,
+            self.paths.data_home,
+            self.paths.state_home,
+            self.paths.runtime_dir,
+            host="omakub",
+        )
+        refreshed = subprocess.CompletedProcess([], 0, "", "")
+        with patch.dict(
+            os.environ, {"THPM_HOST": "omakub", "THPM_ASSET_DIR": str(assets)}
+        ), patch("thpm.service.capabilities") as caps, patch(
+            "thpm.service.ui.install"
+        ) as install_ui, patch("thpm.service.run", return_value=refreshed) as run:
+            caps.return_value.available = True
+            caps.return_value.routes = set()
+            caps.return_value.missing = ()
+            payload = Service(paths).install()
+        self.assertTrue(payload["ok"], payload["errors"])
+        self.assertFalse(payload["ui"]["installed"])
+        self.assertIn("Omakub", str(payload["ui"]["reason"]))
+        install_ui.assert_not_called()
+        run.assert_called_once_with("theme", "refresh", check=False, timeout=180)
+        self.assertEqual(
+            paths.hook_file.read_bytes(), (assets / "hooks/90-thpm").read_bytes()
+        )
+        self.assertEqual(
+            paths.post_update_hook_file.read_bytes(),
+            (assets / "hooks/90-thpm-ui").read_bytes(),
+        )
 
     def test_shell_running_is_false_when_omarchy_is_missing(self):
         with patch("thpm.omarchy.run", side_effect=FileNotFoundError("omarchy")):

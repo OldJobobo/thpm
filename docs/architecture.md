@@ -2,6 +2,8 @@
 
 > New to the codebase? Start with the [visual architecture map](architecture-map.md), then use this document as the detailed contract.
 
+Host layouts: `thpm.host` detects Omarchy 4 or Omakub (Omabuntu), chooses the `omarchy`/`omakub` command binary, and decides whether Omarchy Shell exists. `thpm.paths.Paths` resolves theme, hook, themed, branding, and theme-installation paths against the detected layout. On Omakub the Omarchy route `theme refresh` is translated to `refresh theme`, and the graphical control panel is skipped because Omakub has no plugin/shell command. `THPM_HOST=omarchy|omakub` overrides detection.
+
 THPM has five deliberately narrow layers:
 
 1. `thpm` owns registry state, capability checks, locking, migration, and JSON responses.

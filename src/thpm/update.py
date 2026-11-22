@@ -23,6 +23,7 @@ from typing import Literal
 
 from . import __version__
 from .files import atomic_text
+from .host import OMAKUB, command as host_command
 from .paths import Paths
 from .templates import owned_names as owned_template_names
 
@@ -458,7 +459,12 @@ def _source_runtime() -> Path:
 
 
 def _handoff_package_update(paths: Paths) -> dict[str, object]:
-    launcher = shutil.which("omarchy-launch-floating-terminal-with-presentation")
+    launcher_name = (
+        "omakub-launch-terminal-with-presentation"
+        if host_command() == OMAKUB
+        else "omarchy-launch-floating-terminal-with-presentation"
+    )
+    launcher = shutil.which(launcher_name)
     if launcher is None:
         return {
             "status": "requires-interactive",

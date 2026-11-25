@@ -12,7 +12,40 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-REQUIRED_ROUTES = {"omarchy hook", "omarchy hook install", "omarchy theme refresh", "omarchy shell", "omarchy plugin", "omarchy menu"}
+from .host import OMAKUB, OMARCHY, command, gui_supported, host
+
+OMARCHY_ROUTES = frozenset(
+    {
+        "omarchy hook",
+        "omarchy hook install",
+        "omarchy theme refresh",
+        "omarchy shell",
+        "omarchy plugin",
+        "omarchy menu",
+    }
+)
+# Omakub has the same hook/theme/menu surface but no Omarchy Shell or plugin
+# registry. Those routes are not required there; the graphical control panel
+# is skipped instead (see thpm.ui and thpm.host.gui_supported).
+OMAKUB_ROUTES = frozenset(
+    {
+        "omakub hook",
+        "omakub hook install",
+        "omakub refresh theme",
+        "omakub menu",
+    }
+)
+REQUIRED_ROUTES = OMARCHY_ROUTES
+REQUIRED_ROUTES_BY_HOST = {OMARCHY: OMARCHY_ROUTES, OMAKUB: OMAKUB_ROUTES}
+
+
+def _host_args(args: tuple[str, ...]) -> tuple[str, ...]:
+    """Translate THPM's Omarchy route names into the detected host's routes."""
+    if host() != OMAKUB:
+        return args
+    if args[:2] == ("theme", "refresh"):
+        return ("refresh", "theme", *args[2:])
+    return args
 
 
 @dataclass(frozen=True)
@@ -93,10 +126,10 @@ def run(
     event_path: Path | None = None,
     event_handler: Callable[[dict[str, Any]], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    command = ["omarchy", *args]
+    invocation = [command(), *_host_args(args)]
     if event_path is None or event_handler is None:
         return subprocess.run(
-            command,
+            invocation,
             text=True,
             capture_output=True,
             check=check,
@@ -111,7 +144,7 @@ def run(
         mode="w+", encoding="utf-8"
     ) as stderr_file:
         process = subprocess.Popen(
-            command,
+            invocation,
             text=True,
             stdout=stdout_file,
             stderr=stderr_file,
@@ -124,7 +157,7 @@ def run(
                     event_path, offset, pending, event_handler
                 )
                 if time.monotonic() - started >= timeout:
-                    raise subprocess.TimeoutExpired(command, timeout)
+                    raise subprocess.TimeoutExpired(invocation, timeout)
                 time.sleep(0.05)
             offset, pending = _read_events(
                 event_path, offset, pending, event_handler, final=True
@@ -137,12 +170,12 @@ def run(
         stderr = stderr_file.read()
 
     completed = subprocess.CompletedProcess(
-        command, process.returncode, stdout, stderr
+        invocation, process.returncode, stdout, stderr
     )
     if check and completed.returncode != 0:
         raise subprocess.CalledProcessError(
             completed.returncode,
-            command,
+            invocation,
             output=stdout,
             stderr=stderr,
         )
@@ -150,32 +183,36 @@ def run(
 
 
 def capabilities() -> Capabilities:
-    if not shutil.which("omarchy"):
-        return Capabilities(False, frozenset(), tuple(sorted(REQUIRED_ROUTES)))
+    current_host = host()
+    required = REQUIRED_ROUTES_BY_HOST[current_host]
+    if not shutil.which(command()):
+        return Capabilities(False, frozenset(), tuple(sorted(required)))
     try:
         payload = json.loads(run("commands", "--json").stdout)
         routes = frozenset(
             item["route"] for item in payload.get("commands", []) if "route" in item
         )
     except (OSError, ValueError, subprocess.SubprocessError):
-        return Capabilities(False, frozenset(), tuple(sorted(REQUIRED_ROUTES)))
+        return Capabilities(False, frozenset(), tuple(sorted(required)))
 
-    # Omarchy's command inventory may omit a command-group route while listing
-    # its actionable children (for example, `omarchy plugin add` without an
+    # A command inventory may omit a command-group route while listing its
+    # actionable children (for example, `omarchy plugin add` without an
     # `omarchy plugin` record). A group is available when either representation
     # is present.
     missing = tuple(
         sorted(
-            required
-            for required in REQUIRED_ROUTES
-            if required not in routes
-            and not any(route.startswith(required + " ") for route in routes)
+            required_route
+            for required_route in required
+            if required_route not in routes
+            and not any(route.startswith(required_route + " ") for route in routes)
         )
     )
     return Capabilities(not missing, routes, missing)
 
 
 def shell_running() -> bool:
+    if not gui_supported():
+        return False
     try:
         return run("shell", "shell", "ping", check=False, timeout=3).returncode == 0
     except (OSError, subprocess.SubprocessError):

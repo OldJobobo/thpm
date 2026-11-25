@@ -1,29 +1,40 @@
 # THPM
 
-**Theme Hook Plugin Manager for Omarchy 4**
+**Theme Hook Plugin Manager for Omarchy 4 and Omakub**
 
-THPM keeps applications outside Omarchy’s native theme coverage synchronized with your active Omarchy theme. Choose the integrations you want, switch themes normally, and THPM applies each supported color surface from one graphical control panel, terminal UI, or CLI.
+THPM keeps applications outside the host’s native theme coverage synchronized with your active theme. Choose the integrations you want, switch themes normally, and THPM applies each supported color surface from the graphical control panel on Omarchy, or from its terminal UI or CLI on either host.
 
 ## What THPM gives you
 
 - **One control center** for browsing, enabling, disabling, and checking theme integrations.
-- **Automatic theme synchronization** through Omarchy’s normal theme-change hook.
-- **Graphical and terminal interfaces** backed by the same state and safety rules.
+- **Automatic theme synchronization** through Omarchy’s or Omakub’s normal theme-change hook.
+- **Graphical and terminal interfaces** backed by the same state and safety rules, with the terminal UI available everywhere.
 - **Safe cleanup** that restores displaced files or previous selections when restoration data is available.
 - **Honest outcomes** for applied, unchanged, skipped, unavailable, and failed integrations.
 - **Private support reports** that users can send to the maintainer without exposing configuration contents or raw environments.
 
-THPM also shows Omarchy-owned integrations as read-only records, so it is clear which application owns each theme surface.
+THPM also shows native host-owned integrations as read-only records, so it is clear which application owns each theme surface.
 
 ## Requirements
 
-- Omarchy 4.x
+- Omarchy 4.x, or Omakub (Omabuntu) on Ubuntu with its theme-hook system
 - Python 3.11 or newer
 - Textual 8.2.8 or newer within the supported 8.x series (installed automatically by source installs; packaged as `python-textual` on Arch)
 - Optional: Omarchy Shell for the graphical control panel and menu entry
 - Optional: `nautilus` and `nautilus-python` for the default-disabled Nautilus palette integration
 
 Earlier Omarchy layouts are not supported.
+
+### Host support
+
+THPM detects the host command centre at runtime. Omarchy 4 is the default; Omakub is selected when the `omakub` command is available on `PATH`.
+
+| Host | Command centre | Theme hook directory | Graphical panel |
+| --- | --- | --- | --- |
+| Omarchy 4 | `omarchy` | `~/.config/omarchy/hooks/theme-set.d/` | Omarchy Shell or `thpm ui open` |
+| Omakub | `omakub` | `~/.config/omakub/hooks/theme-set.d/` | Not available; use `thpm tui` or the CLI |
+
+On Omakub, THPM reads the active palette from `~/.config/omakub/current/theme/` and writes themed files under `~/.config/omakub/themed/`. Set `THPM_HOST=omarchy` or `THPM_HOST=omakub` to override detection when both command centres are installed.
 
 Hermes backend skins are owned by Omarchy: it generates or honors `hermes.yaml` and synchronizes Hermes skins. THPM lists Hermes, Pi, Claude, and T3 Code as read-only native ownership records. Its former Hermes JSON writer is retired; `thpm reconcile` removes the obsolete template and guardedly cleans up old THPM JSON without changing native skins or selections. The separate Experimental `hermes-desktop-local` integration manages only the local desktop palette, not backend skins.
 
@@ -45,13 +56,31 @@ thpm tui
 
 Use `thpm install --no-ui` if you only want the terminal UI and CLI. Add the graphical control panel later with `thpm ui install`.
 
+### Ubuntu / Omakub
+
+Install Omakub first so the `omakub` command and its theme-hook layout are present. Run the source installer from a checkout:
+
+```bash
+./install.sh
+```
+
+THPM installs its theme hook into `~/.config/omakub/hooks/theme-set.d/` and reads the active palette from `~/.config/omakub/current/theme/colors.toml`. Switching themes with `omakub theme set` applies the enabled integrations. The `thpm tui` interface and all CLI commands are available; `thpm ui open` falls back to the terminal interface because Omakub has no Omarchy Shell plugin system.
+
+You do not need to create `omarchy-*` copies of Omakub scripts. Verify the installation with:
+
+```bash
+thpm install --check
+thpm doctor
+thpm status
+```
+
 ### Install from a source checkout
 
 ```bash
 ./install.sh
 ```
 
-This creates a private user installation. Use either the AUR package or the source installation, not both.
+This creates a private user installation. Use either the AUR package or the source installation, not both. The same source installer is used on Omakub; see [Ubuntu / Omakub](#ubuntu--omakub) for host-specific paths and verification.
 
 ## Quick start
 
@@ -81,9 +110,11 @@ Every integration is disabled by default for new installations. Integrations mar
 
 | Interface | Open it | Best for |
 | --- | --- | --- |
-| Graphical control panel | Omarchy Menu or `thpm ui open` | Everyday integration management |
+| Graphical control panel | Omarchy Menu or `thpm ui open` (Omarchy 4 only) | Everyday integration management |
 | Terminal UI | `thpm tui` | Full-screen terminal management |
 | CLI | `thpm status`, `thpm enable ID` | Shell workflows and automation |
+
+On Omakub, use the terminal UI or CLI. `thpm ui open` launches the terminal UI instead of a graphical panel.
 
 The graphical control panel and terminal UI share four sections:
 
@@ -246,6 +277,13 @@ thpm report steam
 ```
 
 Reports are written to `~/.local/state/thpm/reports/`. Send the generated JSON file to the THPM maintainer.
+
+On Omakub, missing capability errors usually mean the `omakub` command is not on `PATH`; THPM does not rely on `omarchy-*` compatibility shims. If both command centres are installed and THPM detects the wrong one, set the host explicitly:
+
+```bash
+THPM_HOST=omakub thpm doctor
+THPM_HOST=omarchy thpm doctor
+```
 
 Support reports include THPM and runtime versions, the active theme, integration readiness, Doctor results, and recent bounded operation outcomes. They omit file contents, raw process environments, host identity, unrelated arguments, and unbounded command output. Home paths and secret-like values are redacted.
 

@@ -13,6 +13,7 @@ from html import escape
 from pathlib import Path
 
 from .files import atomic_copy, atomic_text, remove_managed_block
+from .host import OMAKUB, host
 from .models import ApplyResult
 from .palette import load as load_palette
 from .paths import Paths
@@ -530,7 +531,8 @@ def validate_vscode_source(paths: Paths) -> tuple[str, str, Path, dict[str, obje
 
 def _editor_commands(*, respect_toggles: bool = True) -> list[str]:
     commands: list[str] = []
-    toggle_command = shutil.which("omarchy-toggle-enabled") if respect_toggles else None
+    toggle_binary = "omakub-toggle-enabled" if host() == OMAKUB else "omarchy-toggle-enabled"
+    toggle_command = shutil.which(toggle_binary) if respect_toggles else None
     for command, toggle in EDITORS:
         if not shutil.which(command):
             continue
